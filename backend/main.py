@@ -865,6 +865,16 @@ async def get_file_content(file_id: str):
                             else:
                                 bullets.append(t.lstrip("•-*✓ "))
                                 
+                # Determine slide background color
+                bg_color_hex = "#ffffff"
+                accent_color_hex = "#ea580c"
+                try:
+                    if slide.background and slide.background.fill and slide.background.fill.fore_color:
+                        c = slide.background.fill.fore_color.rgb
+                        bg_color_hex = f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}"
+                except Exception:
+                    pass
+
                 layout_type = "title" if s_idx == 0 else ("table" if table_data else "content")
                 slides_out.append({
                     "id": s_idx + 1,
@@ -876,6 +886,8 @@ async def get_file_content(file_id: str):
                     "kpis": [],
                     "timeline": [],
                     "notes": notes,
+                    "bgColor": bg_color_hex,
+                    "accentColor": accent_color_hex,
                 })
                 
             return {"file_id": file_id, "filename": filename, "file_type": "pptx", "slides": slides_out}

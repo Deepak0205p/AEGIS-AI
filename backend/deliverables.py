@@ -588,26 +588,29 @@ def build_xlsx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
     return file_id, filename, out_path
 
 
-def _apply_dark_theme(slide, is_title_slide: bool = False):
-    """Applies professional dark theme background and accent to a slide."""
+from backend.ppt_styles import resolve_ppt_style, hex_to_rgb
+
+
+def _apply_theme_to_slide(slide, style: Dict[str, Any], is_title_slide: bool = False):
+    """Applies dynamic theme background and font styling to a slide based on selected style."""
     background = slide.background
     fill = background.fill
     fill.solid()
-    if is_title_slide:
-        fill.fore_color.rgb = PPTRGBColor(15, 20, 40)  # Deep navy for title
-    else:
-        fill.fore_color.rgb = PPTRGBColor(26, 26, 46)  # Dark indigo for content
+    
+    bg_tuple = style["bg_title_rgb"] if is_title_slide else style["bg_content_rgb"]
+    fill.fore_color.rgb = PPTRGBColor(*bg_tuple)
 
 
-def _set_text_white(text_frame):
-    """Sets all text in a text frame to white/light color."""
+def _set_text_themed(text_frame, color_tuple, font_name: str = "Calibri"):
+    """Sets text color and font family in a text frame."""
     for p in text_frame.paragraphs:
         for run in p.runs:
-            run.font.color.rgb = PPTRGBColor(224, 224, 224)
+            run.font.name = font_name
+            run.font.color.rgb = PPTRGBColor(*color_tuple)
 
 
-def _add_slide_footer(slide, prs_title: str, slide_num: int):
-    """Adds a professional footer with slide number and title to a slide."""
+def _add_slide_footer(slide, prs_title: str, slide_num: int, style: Dict[str, Any]):
+    """Adds a professional footer with slide number and title."""
     footer_tb = slide.shapes.add_textbox(
         PPTInches(0.5), PPTInches(6.85), PPTInches(9.0), PPTInches(0.35)
     )
@@ -616,20 +619,21 @@ def _add_slide_footer(slide, prs_title: str, slide_num: int):
     p = tf.paragraphs[0]
     p.text = f"{prs_title}  |  Slide {slide_num}  |  Sovereign AI Platform"
     p.font.size = PPTPt(8)
-    p.font.color.rgb = PPTRGBColor(140, 140, 160)
+    footer_color = style.get("footer_text_rgb", (140, 140, 160))
+    p.font.color.rgb = PPTRGBColor(*footer_color)
     p.alignment = PP_ALIGN.CENTER
 
 
-def _add_accent_bar(slide, top_inches: float = 1.3, color_rgb=None):
+def _add_accent_bar(slide, top_inches: float = 1.3, color_tuple=None):
     """Adds a thin colored accent bar across the slide."""
-    if color_rgb is None:
-        color_rgb = PPTRGBColor(31, 78, 120)  # Industrial blue
+    if color_tuple is None:
+        color_tuple = (31, 78, 120)
     bar = slide.shapes.add_shape(
         1,  # MSO_SHAPE.RECTANGLE
         PPTInches(0.8), PPTInches(top_inches), PPTInches(8.4), PPTInches(0.04)
     )
     bar.fill.solid()
-    bar.fill.fore_color.rgb = color_rgb
+    bar.fill.fore_color.rgb = PPTRGBColor(*color_tuple)
     bar.line.fill.background()  # No border
 
 
@@ -642,10 +646,24 @@ def _inject_speaker_notes(slide, notes_text: str):
 
 
 def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
-    """Builds a professional, dark-themed PowerPoint (.pptx) presentation with
-    speaker notes, slide numbers, accent bars, and auto-conclusion slide."""
+    """Builds a professional PowerPoint (.pptx) presentation dynamically styled using
+    either an AI-chosen style preset or custom generated theme with speaker notes,
+    slide numbers, custom accent bars, themed tables, and auto-conclusion slide."""
     title = plan.get("title", "Engineering Briefing")
     filename = sanitize_filename(plan.get("filename", f"{title.lower().replace(' ', '_')}.pptx"), ".pptx")
+    
+    # ── Resolve Presentation Style ──
+    raw_style = plan.get("style") or plan.get("theme") or "executive_dark"
+    style = resolve_ppt_style(raw_style)
+    
+    title_font_name = style.get("font_title", "Calibri")
+    body_font_name = style.get("font_body", "Calibri")
+    title_color = style.get("title_text_rgb", (255, 255, 255))
+    body_color = style.get("body_text_rgb", (224, 224, 224))
+    accent_bar_color = style.get("accent_bar_rgb", (31, 78, 120))
+    table_hdr_bg = style.get("table_header_bg", (31, 78, 120))
+    table_row1_bg = style.get("table_row_alt1", (38, 38, 58))
+    table_row2_bg = style.get("table_row_alt2", (30, 30, 50))
     
     chat_dir = GENERATED_DIR / chat_id
     chat_dir.mkdir(parents=True, exist_ok=True)
@@ -660,16 +678,18 @@ def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
     # ── 1. Title Slide ──────────────────────────────────────────────────────
     title_slide_layout = prs.slide_layouts[0]
     slide = prs.slides.add_slide(title_slide_layout)
-    _apply_dark_theme(slide, is_title_slide=True)
+    _apply_theme_to_slide(slide, style, is_title_slide=True)
     slide.shapes.title.text = title
     for run in slide.shapes.title.text_frame.paragraphs[0].runs:
-        run.font.color.rgb = PPTRGBColor(255, 255, 255)
+        run.font.name = title_font_name
+        run.font.color.rgb = PPTRGBColor(*title_color)
         run.font.size = PPTPt(36)
     if len(slide.placeholders) > 1:
-        slide.placeholders[1].text = "Sovereign Air-Gapped Industrial AI Platform\nStrict Technical Report"
-        _set_text_white(slide.placeholders[1].text_frame)
+        subtitle_text = plan.get("subtitle") or "Sovereign Air-Gapped Industrial AI Platform\nExecutive Technical Briefing"
+        slide.placeholders[1].text = subtitle_text
+        _set_text_themed(slide.placeholders[1].text_frame, body_color, body_font_name)
     slide_counter += 1
-    _add_slide_footer(slide, title, slide_counter)
+    _add_slide_footer(slide, title, slide_counter, style)
     _inject_speaker_notes(slide, plan.get("title_notes", f"Presentation: {title}"))
         
     # ── 2. Content Slides from Blocks ────────────────────────────────────
@@ -694,16 +714,17 @@ def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
         if b_type == "heading" or current_slide is None:
             current_slide = prs.slides.add_slide(content_layout)
             slide_counter += 1
-            _apply_dark_theme(current_slide)
+            _apply_theme_to_slide(current_slide, style, is_title_slide=False)
             
             heading_text = text if b_type == "heading" else title
             current_slide.shapes.title.text = heading_text
             for run in current_slide.shapes.title.text_frame.paragraphs[0].runs:
-                run.font.color.rgb = PPTRGBColor(255, 255, 255)
+                run.font.name = title_font_name
+                run.font.color.rgb = PPTRGBColor(*title_color)
                 run.font.size = PPTPt(28)
             
-            _add_accent_bar(current_slide, top_inches=1.25)
-            _add_slide_footer(current_slide, title, slide_counter)
+            _add_accent_bar(current_slide, top_inches=1.25, color_tuple=accent_bar_color)
+            _add_slide_footer(current_slide, title, slide_counter, style)
             
             current_text_frame = current_slide.placeholders[1].text_frame
             current_text_frame.word_wrap = True
@@ -718,8 +739,9 @@ def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
             if text and current_text_frame:
                 p = current_text_frame.add_paragraph() if current_text_frame.text else current_text_frame.paragraphs[0]
                 p.text = text
+                p.font.name = body_font_name
                 p.font.size = PPTPt(16)
-                p.font.color.rgb = PPTRGBColor(210, 210, 220)
+                p.font.color.rgb = PPTRGBColor(*body_color)
                 if notes and current_slide:
                     _inject_speaker_notes(current_slide, notes)
                 
@@ -730,8 +752,9 @@ def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
                 if current_text_frame:
                     p = current_text_frame.add_paragraph() if current_text_frame.text else current_text_frame.paragraphs[0]
                     p.text = f"• {item}"
+                    p.font.name = body_font_name
                     p.font.size = PPTPt(15)
-                    p.font.color.rgb = PPTRGBColor(200, 200, 215)
+                    p.font.color.rgb = PPTRGBColor(*body_color)
             if notes and current_slide:
                 _inject_speaker_notes(current_slide, notes)
                     
@@ -740,17 +763,18 @@ def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
             blank_layout = prs.slide_layouts[6]
             table_slide = prs.slides.add_slide(blank_layout)
             slide_counter += 1
-            _apply_dark_theme(table_slide)
+            _apply_theme_to_slide(table_slide, style, is_title_slide=False)
             
             # Slide heading
             tb = table_slide.shapes.add_textbox(PPTInches(0.8), PPTInches(0.4), PPTInches(8.4), PPTInches(0.7))
             tb.text_frame.text = b.get("title") or "Tabular Data Summary"
+            tb.text_frame.paragraphs[0].font.name = title_font_name
             tb.text_frame.paragraphs[0].font.size = PPTPt(22)
             tb.text_frame.paragraphs[0].font.bold = True
-            tb.text_frame.paragraphs[0].font.color.rgb = PPTRGBColor(255, 255, 255)
+            tb.text_frame.paragraphs[0].font.color.rgb = PPTRGBColor(*title_color)
             
-            _add_accent_bar(table_slide, top_inches=1.1)
-            _add_slide_footer(table_slide, title, slide_counter)
+            _add_accent_bar(table_slide, top_inches=1.1, color_tuple=accent_bar_color)
+            _add_slide_footer(table_slide, title, slide_counter, style)
             
             rows_cnt = len(rows)
             cols_cnt = len(rows[0])
@@ -765,17 +789,19 @@ def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
                     cell.text = str(c_val)
                     if r_i == 0:
                         cell.fill.solid()
-                        cell.fill.fore_color.rgb = PPTRGBColor(31, 78, 120)
+                        cell.fill.fore_color.rgb = PPTRGBColor(*table_hdr_bg)
                         for p in cell.text_frame.paragraphs:
+                            p.font.name = title_font_name
                             p.font.bold = True
                             p.font.color.rgb = PPTRGBColor(255, 255, 255)
                             p.font.size = PPTPt(12)
                     else:
                         cell.fill.solid()
-                        alt_color = PPTRGBColor(38, 38, 58) if r_i % 2 == 1 else PPTRGBColor(30, 30, 50)
-                        cell.fill.fore_color.rgb = alt_color
+                        alt_color = table_row1_bg if r_i % 2 == 1 else table_row2_bg
+                        cell.fill.fore_color.rgb = PPTRGBColor(*alt_color)
                         for p in cell.text_frame.paragraphs:
-                            p.font.color.rgb = PPTRGBColor(200, 200, 215)
+                            p.font.name = body_font_name
+                            p.font.color.rgb = PPTRGBColor(*body_color)
                             p.font.size = PPTPt(11)
             if notes:
                 _inject_speaker_notes(table_slide, notes)
@@ -784,17 +810,18 @@ def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
             blank_layout = prs.slide_layouts[6]
             chart_slide = prs.slides.add_slide(blank_layout)
             slide_counter += 1
-            _apply_dark_theme(chart_slide)
+            _apply_theme_to_slide(chart_slide, style, is_title_slide=False)
             
             # Slide heading
             tb = chart_slide.shapes.add_textbox(PPTInches(0.8), PPTInches(0.4), PPTInches(8.4), PPTInches(0.7))
             tb.text_frame.text = b.get("title") or text or "Graphical Visualization"
+            tb.text_frame.paragraphs[0].font.name = title_font_name
             tb.text_frame.paragraphs[0].font.size = PPTPt(22)
             tb.text_frame.paragraphs[0].font.bold = True
-            tb.text_frame.paragraphs[0].font.color.rgb = PPTRGBColor(255, 255, 255)
+            tb.text_frame.paragraphs[0].font.color.rgb = PPTRGBColor(*title_color)
             
-            _add_accent_bar(chart_slide, top_inches=1.1)
-            _add_slide_footer(chart_slide, title, slide_counter)
+            _add_accent_bar(chart_slide, top_inches=1.1, color_tuple=accent_bar_color)
+            _add_slide_footer(chart_slide, title, slide_counter, style)
             
             chart_img = chat_dir / f"temp_ppt_chart_{idx}_{uuid.uuid4().hex[:6]}.png"
             if generate_chart_image(b, chart_img):
@@ -808,15 +835,16 @@ def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
     if not has_conclusion and all_bullet_points:
         conclusion_slide = prs.slides.add_slide(content_layout)
         slide_counter += 1
-        _apply_dark_theme(conclusion_slide)
+        _apply_theme_to_slide(conclusion_slide, style, is_title_slide=False)
         
         conclusion_slide.shapes.title.text = "Key Takeaways"
         for run in conclusion_slide.shapes.title.text_frame.paragraphs[0].runs:
-            run.font.color.rgb = PPTRGBColor(255, 255, 255)
+            run.font.name = title_font_name
+            run.font.color.rgb = PPTRGBColor(*title_color)
             run.font.size = PPTPt(28)
         
-        _add_accent_bar(conclusion_slide, top_inches=1.25, color_rgb=PPTRGBColor(0, 180, 120))
-        _add_slide_footer(conclusion_slide, title, slide_counter)
+        _add_accent_bar(conclusion_slide, top_inches=1.25, color_tuple=accent_bar_color)
+        _add_slide_footer(conclusion_slide, title, slide_counter, style)
         
         tf = conclusion_slide.placeholders[1].text_frame
         tf.word_wrap = True
@@ -825,13 +853,14 @@ def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
         for i, item in enumerate(takeaways):
             p = tf.paragraphs[0] if i == 0 and not tf.text else tf.add_paragraph()
             p.text = f"✓ {item}"
+            p.font.name = body_font_name
             p.font.size = PPTPt(14)
-            p.font.color.rgb = PPTRGBColor(180, 230, 200)
+            p.font.color.rgb = PPTRGBColor(*body_color)
         
         _inject_speaker_notes(conclusion_slide, "Summary of key takeaways from this presentation.")
 
     prs.save(str(out_path))
-    logger.info(f"[DELIVERABLE] PPTX created: {out_path} ({slide_counter} slides)")
+    logger.info(f"[DELIVERABLE] PPTX created: {out_path} ({slide_counter} slides, style={style.get('id', 'custom')})")
     return file_id, filename, out_path
 
 
