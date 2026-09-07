@@ -25,6 +25,7 @@ export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -32,11 +33,41 @@ export default function LoginPage() {
     }
   }, [isAuthenticated, router]);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('reveal_admin_username');
+      if (saved) {
+        setUsername(saved);
+        setRememberMe(true);
+      }
+    }
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password.trim()) return;
-    const success = await loginWithStandard(username.trim(), password.trim());
+    const cleanUser = username.trim();
+    const cleanPass = password.trim();
+    if (!cleanUser || !cleanPass) return;
+
+    const success = await loginWithStandard(cleanUser, cleanPass);
     if (success) {
+      if (typeof window !== 'undefined') {
+        if (rememberMe) {
+          localStorage.setItem('reveal_admin_username', cleanUser);
+        } else {
+          localStorage.removeItem('reveal_admin_username');
+        }
+
+        if ('PasswordCredential' in window && navigator.credentials) {
+          try {
+            const cred = new (window as any).PasswordCredential({
+              id: cleanUser,
+              password: cleanPass,
+            });
+            await navigator.credentials.store(cred);
+          } catch (credErr) {}
+        }
+      }
       router.push('/');
     }
   };
@@ -122,17 +153,22 @@ export default function LoginPage() {
           </AnimatePresence>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} method="POST" action="#" autoComplete="on" className="space-y-4">
             
             {/* Username Input */}
             <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold tracking-wide uppercase text-slate-400 flex items-center gap-1.5">
+              <label htmlFor="username" className="text-[11px] font-semibold tracking-wide uppercase text-slate-400 flex items-center gap-1.5">
                 <User className="w-3.5 h-3.5 text-cyan-400/80" />
                 <span>Admin ID</span>
               </label>
               <div className="relative group">
                 <input
+                  id="username"
+                  name="username"
                   type="text"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  spellCheck={false}
                   value={username}
                   onChange={(e) => {
                     setUsername(e.target.value);
@@ -148,13 +184,16 @@ export default function LoginPage() {
 
             {/* Password Input */}
             <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold tracking-wide uppercase text-slate-400 flex items-center gap-1.5">
+              <label htmlFor="password" className="text-[11px] font-semibold tracking-wide uppercase text-slate-400 flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5 text-cyan-400/80" />
                 <span>Password</span>
               </label>
               <div className="relative group">
                 <input
+                  id="password"
+                  name="password"
                   type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => {
                     setPassword(e.target.value);
@@ -175,11 +214,26 @@ export default function LoginPage() {
               </div>
             </div>
 
+            {/* Remember Me Option */}
+            <div className="flex items-center justify-between pt-1">
+              <label htmlFor="rememberMe" className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-400 hover:text-slate-200 transition-colors font-mono">
+                <input
+                  id="rememberMe"
+                  name="rememberMe"
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="w-4 h-4 rounded border-white/20 bg-white/[0.05] text-cyan-500 focus:ring-cyan-400/30 cursor-pointer accent-cyan-500"
+                />
+                <span>Remember on this browser</span>
+              </label>
+            </div>
+
             {/* Submit Action Button */}
             <button
               type="submit"
               disabled={isLoading || !username.trim() || !password.trim()}
-              className="w-full mt-3 py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 active:scale-[0.99] text-white font-semibold text-xs tracking-wide uppercase flex items-center justify-center gap-2 shadow-lg shadow-cyan-950/40 border border-cyan-400/30 transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 active:scale-[0.99] text-white font-semibold text-xs tracking-wide uppercase flex items-center justify-center gap-2 shadow-lg shadow-cyan-950/40 border border-cyan-400/30 transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             >
               {isLoading ? (
                 <>

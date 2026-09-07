@@ -35,36 +35,96 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       token: null,
       isAuthenticated: false,
-      isLoading: false,
+      isLoading: true,
       lastActive: null,
       initialize: () => {
-        const state = get();
-        if (state.lastActive && Date.now() - state.lastActive > IDLE_TIMEOUT_MS) {
-          // Invalidate expired session
-          set({ user: null, token: null, isAuthenticated: false, isLoading: false, lastActive: null });
-        } else {
-          set({ isLoading: false, lastActive: Date.now() });
+        if (typeof window === 'undefined') return;
+        try {
+          const token = localStorage.getItem('mrpl_auth_token');
+          const userStr = localStorage.getItem('mrpl_user');
+          const lastActiveStr = localStorage.getItem('mrpl_auth_last_active');
+          const lastActive = lastActiveStr ? parseInt(lastActiveStr, 10) : null;
+
+          if (token && userStr) {
+            if (lastActive && Date.now() - lastActive > IDLE_TIMEOUT_MS) {
+              // Invalidate expired session
+              get().logout();
+              return;
+            }
+            const user = JSON.parse(userStr);
+            set({
+              user,
+              token,
+              isAuthenticated: true,
+              isLoading: false,
+              lastActive: Date.now()
+            });
+            localStorage.setItem('mrpl_auth_last_active', String(Date.now()));
+            return;
+          }
+        } catch (e) {
+          console.error('Failed to restore auth session from browser storage:', e);
         }
+        set({ user: null, token: null, isAuthenticated: false, isLoading: false, lastActive: null });
       },
-      login: (user, token) => set({
-        user,
-        token,
-        isAuthenticated: true,
-        isLoading: false,
-        lastActive: Date.now()
-      }),
-      logout: () => set({
-        user: null,
-        token: null,
-        isAuthenticated: false,
-        isLoading: false,
-        lastActive: null
-      }),
-      setUser: (user) => set({ user, isAuthenticated: !!user, lastActive: Date.now() }),
+      login: (user, token) => {
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('mrpl_auth_token', token);
+            localStorage.setItem('mrpl_user', JSON.stringify(user));
+            localStorage.setItem('mrpl_auth_last_active', String(Date.now()));
+            // Set cookie for browser session persistence
+            document.cookie = `mrpl_auth_token=${encodeURIComponent(token)}; path=/; max-age=86400; SameSite=Lax`;
+          } catch (e) {
+            console.error('Failed to save auth to browser storage:', e);
+          }
+        }
+        set({
+          user,
+          token,
+          isAuthenticated: true,
+          isLoading: false,
+          lastActive: Date.now()
+        });
+      },
+      logout: () => {
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.removeItem('mrpl_auth_token');
+            localStorage.removeItem('mrpl_user');
+            localStorage.removeItem('mrpl_auth_last_active');
+            document.cookie = 'mrpl_auth_token=; path=/; max-age=0; SameSite=Lax';
+          } catch (e) {
+            console.error('Failed to clear browser storage:', e);
+          }
+        }
+        set({
+          user: null,
+          token: null,
+          isAuthenticated: false,
+          isLoading: false,
+          lastActive: null
+        });
+      },
+      setUser: (user) => {
+        if (typeof window !== 'undefined' && user) {
+          try {
+            localStorage.setItem('mrpl_user', JSON.stringify(user));
+            localStorage.setItem('mrpl_auth_last_active', String(Date.now()));
+          } catch (e) {}
+        }
+        set({ user, isAuthenticated: !!user, lastActive: Date.now() });
+      },
       touchSession: () => {
         const state = get();
         if (state.isAuthenticated) {
-          set({ lastActive: Date.now() });
+          const now = Date.now();
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem('mrpl_auth_last_active', String(now));
+            } catch (e) {}
+          }
+          set({ lastActive: now });
         }
       }
     }),

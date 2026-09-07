@@ -12,11 +12,19 @@ echo   MULTI-SERVICE SYSTEM LAUNCHER
 echo ========================================================================
 echo.
 
+if exist "C:\Program Files\nodejs" set "PATH=C:\Program Files\nodejs;%PATH%"
+
 where npm.cmd >nul 2>nul
 if %errorlevel% neq 0 (
     set "NPM_CMD=npm"
 ) else (
     set "NPM_CMD=npm.cmd"
+)
+
+if exist "%REPO_ROOT%\.venv\Scripts\python.exe" (
+    set "PY_CMD=%REPO_ROOT%\.venv\Scripts\python.exe"
+) else (
+    set "PY_CMD=python"
 )
 
 echo Starting services in separate windows...
@@ -25,7 +33,7 @@ echo.
 :: 1. User Backend Gateway (Port 8000)
 echo [1/3] Starting Python Backend Gateway (Port 8000)...
 start "REVEAL 2.0: Python Backend Gateway (:8000)" cmd /k ^
-"title REVEAL Backend (:8000) && cd /d "%REPO_ROOT%" && set PYTHONPATH=%REPO_ROOT% && python -m uvicorn apps.user_backend.main:app --host 0.0.0.0 --port 8000 --reload"
+"title REVEAL Backend (:8000) && cd /d "%REPO_ROOT%" && set PYTHONPATH=%REPO_ROOT% && "%PY_CMD%" -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload"
 
 timeout /t 2 /nobreak >nul
 

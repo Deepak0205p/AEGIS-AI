@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useThemeStore } from '@/store/useThemeStore';
@@ -23,20 +23,43 @@ import {
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login } = useAuthStore();
+  const { login, isAuthenticated, isLoading: isAuthLoading, initialize: initAuth } = useAuthStore();
   const { theme, toggleTheme } = useThemeStore();
   const isDark = theme === 'dark';
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    initAuth();
+  }, [initAuth]);
+
+  useEffect(() => {
+    if (!isAuthLoading && isAuthenticated) {
+      router.replace('/');
+    }
+  }, [isAuthLoading, isAuthenticated, router]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedUser = localStorage.getItem('reveal_saved_username');
+      if (savedUser) {
+        setUsername(savedUser);
+        setRememberMe(true);
+      }
+    }
+  }, []);
+
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!username.trim() || !password.trim()) {
+    const cleanUser = username.trim();
+    const cleanPass = password.trim();
+    if (!cleanUser || !cleanPass) {
       setError('Please enter both your Username and Password.');
       return;
     }
@@ -47,8 +70,8 @@ export default function LoginPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username: username.trim(),
-          password: password.trim(),
+          username: cleanUser,
+          password: cleanPass,
         }),
       });
       if (!res.ok) {
@@ -56,6 +79,30 @@ export default function LoginPage() {
         throw new Error(data.detail || 'Invalid username or password.');
       }
       const data = await res.json();
+
+      // Save username if rememberMe is enabled
+      if (typeof window !== 'undefined') {
+        if (rememberMe) {
+          localStorage.setItem('reveal_saved_username', cleanUser);
+        } else {
+          localStorage.removeItem('reveal_saved_username');
+        }
+
+        // Trigger Browser Credential Manager / Password Store (Chrome, Edge, Firefox)
+        if ('PasswordCredential' in window && navigator.credentials) {
+          try {
+            const cred = new (window as any).PasswordCredential({
+              id: cleanUser,
+              password: cleanPass,
+              name: data.user?.full_name || cleanUser,
+            });
+            await navigator.credentials.store(cred);
+          } catch (credErr) {
+            // Non-critical, ignore if user cancels or browser policies reject
+          }
+        }
+      }
+
       login(data.user, data.token);
       router.replace('/');
     } catch (err: any) {
@@ -128,16 +175,21 @@ export default function LoginPage() {
           )}
 
           {/* Form */}
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={handleLogin} method="POST" action="#" autoComplete="on" className="space-y-4">
             
             {/* Username Input */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-700 dark:text-[#c4c7c5]">
+              <label htmlFor="username" className="block text-xs font-semibold text-slate-700 dark:text-[#c4c7c5]">
                 Username / Operator ID
               </label>
               <div className="relative">
                 <input
+                  id="username"
+                  name="username"
                   type="text"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  spellCheck={false}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="e.g. operator or admin"
@@ -151,12 +203,15 @@ export default function LoginPage() {
 
             {/* Password Input */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-700 dark:text-[#c4c7c5]">
+              <label htmlFor="password" className="block text-xs font-semibold text-slate-700 dark:text-[#c4c7c5]">
                 Account Password
               </label>
               <div className="relative">
                 <input
+                  id="password"
+                  name="password"
                   type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
@@ -174,11 +229,26 @@ export default function LoginPage() {
               </div>
             </div>
 
+            {/* Remember Me / Device Save Option */}
+            <div className="flex items-center justify-between pt-1">
+              <label htmlFor="rememberMe" className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-600 dark:text-[#a8abb3] hover:text-slate-900 dark:hover:text-white transition-colors">
+                <input
+                  id="rememberMe"
+                  name="rememberMe"
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="w-4 h-4 rounded-md border-slate-300 dark:border-white/20 bg-slate-100 dark:bg-[#15161c] text-blue-600 focus:ring-blue-500 cursor-pointer accent-blue-600"
+                />
+                <span>Remember me on this browser</span>
+              </label>
+            </div>
+
             {/* Submit CTA */}
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[#0070f3] hover:bg-[#0060df] active:scale-[0.98] disabled:opacity-50 text-white font-bold text-sm transition-all shadow-md shadow-blue-500/20 cursor-pointer mt-4"
+              className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[#0070f3] hover:bg-[#0060df] active:scale-[0.98] disabled:opacity-50 text-white font-bold text-sm transition-all shadow-md shadow-blue-500/20 cursor-pointer mt-2"
             >
               {isLoading ? (
                 <>

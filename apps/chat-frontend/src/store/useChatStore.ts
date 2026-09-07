@@ -64,6 +64,32 @@ interface ChatState {
   regenerateMessage: (aiMsgIndex: number, role?: string) => void;
 }
 
+function normalizeDbMessage(msg: any): ChatMessage {
+  let traceSteps = msg.trace_steps;
+  if (!traceSteps && msg.trace_steps_json) {
+    try {
+      traceSteps = typeof msg.trace_steps_json === 'string' ? JSON.parse(msg.trace_steps_json) : msg.trace_steps_json;
+    } catch { traceSteps = []; }
+  }
+  let deliverableIds = msg.deliverable_ids;
+  if (!deliverableIds && msg.deliverables_json) {
+    try {
+      deliverableIds = typeof msg.deliverables_json === 'string' ? JSON.parse(msg.deliverables_json) : msg.deliverables_json;
+    } catch { deliverableIds = []; }
+  }
+  return {
+    id: msg.id,
+    role: msg.role,
+    content: msg.content,
+    timestamp: msg.created_at ? new Date(msg.created_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (msg.timestamp || ''),
+    model_id: msg.model_id,
+    routed_by: msg.routed_by,
+    confidence: msg.confidence,
+    trace_steps: traceSteps || [],
+    deliverable_ids: deliverableIds || [],
+  };
+}
+
 function getApiBase(): string {
   if (typeof window !== 'undefined') {
     const host = window.location.hostname;
@@ -95,7 +121,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           id: s.id,
           title: s.title || 'New Chat',
           timestamp: s.updated_at || s.created_at || 'Today',
-          messages: s.messages || []
+          messages: (s.messages || []).map(normalizeDbMessage)
         }));
 
         set({ sessions: mysqlSessions });
@@ -127,7 +153,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           id: sess.id,
           title: sess.title || 'New Chat',
           timestamp: sess.updated_at || sess.created_at || 'Today',
-          messages: sess.messages || []
+          messages: (sess.messages || []).map(normalizeDbMessage)
         };
 
         set((state) => {
@@ -248,9 +274,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const sessionExists = state.sessions.some(s => s.id === state.activeSessionId);
       
       let updatedSessions: ConversationSession[];
+      let targetSessionId = state.activeSessionId;
       if (sessionExists) {
         updatedSessions = state.sessions.map((s) => {
-          if (s.id === state.activeSessionId) {
+          if (s.id === targetSessionId) {
             const autoTitle = s.messages.length === 0 && message.role === 'user'
               ? message.content.slice(0, 28) + (message.content.length > 28 ? '...' : '')
               : s.title;
@@ -262,15 +289,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const autoTitle = message.role === 'user'
           ? message.content.slice(0, 28) + (message.content.length > 28 ? '...' : '')
           : 'Conversation';
+        const newSessId = targetSessionId || Array.from(crypto.getRandomValues(new Uint8Array(8))).map(b => b.toString(16).padStart(2, '0')).join('');
+        targetSessionId = newSessId;
         const newSess: ConversationSession = {
-          id: state.activeSessionId || Array.from(crypto.getRandomValues(new Uint8Array(8))).map(b => b.toString(16).padStart(2, '0')).join(''),
+          id: newSessId,
           title: autoTitle,
           timestamp: 'Today',
           messages: newMsgs
         };
         updatedSessions = [newSess, ...state.sessions];
       }
-      return { messages: newMsgs, sessions: updatedSessions };
+      return { messages: newMsgs, sessions: updatedSessions, activeSessionId: targetSessionId };
     });
   },
   setCurrentInput: (inputOrUpdater) =>
@@ -348,16 +377,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
           newMsgs = [...state.messages, agentMsg];
         }
 
-        const updatedSessions = state.sessions.map((s) => {
+        let updatedSessions = state.sessions.map((s) => {
           if (s.id === state.activeSessionId) {
             return { ...s, messages: newMsgs };
           }
           return s;
         });
 
+        // Fallback: If no session matched activeSessionId, update the first session or create one
+        if (state.sessions.length > 0 && !state.sessions.some((s) => s.id === state.activeSessionId)) {
+          updatedSessions = state.sessions.map((s, idx) => {
+            if (idx === 0) return { ...s, messages: newMsgs };
+            return s;
+          });
+        }
+
         return {
           messages: newMsgs,
           sessions: updatedSessions,
+          activeSessionId: state.activeSessionId || (updatedSessions[0]?.id ?? ''),
           isStreaming: false,
           regeneratingMsgId: null,
           activeTraceSteps: [],

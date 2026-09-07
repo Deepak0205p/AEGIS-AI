@@ -1,160 +1,127 @@
-﻿version: "1.0.0"
+version: "1.0.0"
+facility: "Mangalore Refinery and Petrochemicals Limited (MRPL)"
+airgap_mode: true
+
 vram_budget_total_mb: 6144
 vram_budget_safe_threshold_mb: 6000
-default_primary_model_id: "qwen3-4b"
-default_secondary_model_id: "qwen2.5-coder-3b"
+os_overhead_mb: 400
+kv_cache_headroom_mb: 600
+
+default_primary_model_id: "deepseek-v4-pro-qwen3.5-4b"
+default_secondary_model_id: "deepseek-v4-pro-coder"
+default_embedding_model_id: "deepseek-v4-pro-qwen3.5-4b"
 
 models:
-  - id: "qwen3-4b"
-    name: "Reasoning Engine"
-    display_name: "Reasoning Engine"
-    ollama_tag: "qwen3:4b-q4_k_m"
-    gguf_file: "models/gguf/qwen3-4b-q4_k_m.gguf"
-    quantization: "GGUF Q4_K_M"
-    vram_mb: 2600
+  # ============================================================================
+  # 1. GENERAL CONVERSATIONAL & COMPLIANCE
+  # ============================================================================
+  - id: "deepseek-v4-pro-qwen3.5-4b"
+    name: "DeepSeek-V4-Pro-Qwen3.5-4B"
+    display_name: "DeepSeek-V4-Pro Qwen-3.5 4B (Air-Gapped Sovereign)"
+    ollama_tag: "deepseek-v4-pro:4b"
+    vllm_model_name: "deepseek-v4-pro-qwen3.5-4b"
+    gguf_file: "models/gguf/DeepSeek-V4-Pro-Qwen3.5-4B-MTP-Q3_K_L.gguf"
+    sha256_checksum: "8cb8a6768db6b8b50892b8c2bf5abeeab7f95302318965ef1a50615d60524173"
+    quantization: "GGUF Q3_K_L"
+    vram_mb: 2480
     context_length: 8192
-    domain: "reasoning"
+    domain: "general"
+    tier: "primary"
     is_primary: true
-    keep_alive: "5m"
+    prompt_template: "chatml"
+    keep_alive: "-1"
     status: "active"
-    description: "Primary reasoning, planning, multi-step ReAct orchestration & SOP synthesis"
+    description: "Primary unified sovereign model for general conversational dialogue, interactive assistance, and compliance"
     temperature: 0.2
     top_p: 0.9
     backend: "laptop_gpu"
-    tier: "primary"
     regex_patterns:
-      - '(?i)\b(draft|prepare|generate|write)\s+(an?\s+)?(approval note|executive summary|mopng memo|turnaround plan|sop compliance|memorandum)\b'
-      - '(?i)\b(evaluate|analyze|assess|synthesize)\b.*?\b(policy|safety standard|refinery sop|clause|deviation|root cause)\b'
-      - '(?i)\b(sop-mrpl|refinery manual|clause\s+\d+|emergency decoking|mandatory shutdown)\b'
-      - '(?i)\b(furnace f-101|furnace tube|tube skin|thermocouple reading|corrosion rate|thinning)\b'
+      - '(?i)\b(hello|hi|hey|hlo|helo|yo|namaste|greetings|good morning|good afternoon|good evening|who are you|what can you do|what capabilities)\b'
+      - '(?i)\b(explain in (plain|simple) (terms|english)|summarize our conversation|format this bullet list)\b'
     keywords:
-      - "sop"
-      - "compliance"
-      - "approval"
-      - "memo"
-      - "executive"
-      - "clause"
-      - "policy"
-      - "safety"
-      - "turnaround"
-      - "furnace"
-      - "temperature"
-      - "thinning"
-      - "assessment"
-      - "synthesis"
-      - "management"
+      - "hello"
+      - "hi"
+      - "hey"
+      - "hlo"
+      - "greetings"
+      - "help"
+      - "assistant"
+      - "general"
+      - "chat"
 
-  - id: "qwen2.5-coder-3b"
-    name: "Code Engine"
-    display_name: "Code Engine"
-    ollama_tag: "qwen2.5-coder:3b-q4_k_m"
-    gguf_file: "models/gguf/qwen2.5-coder-3b-q4_k_m.gguf"
-    quantization: "GGUF Q4_K_M"
-    vram_mb: 1900
+  # ============================================================================
+  # 2. CODING & HYDRAULIC SCRIPTING
+  # ============================================================================
+  - id: "deepseek-v4-pro-coder"
+    name: "DeepSeek-V4-Pro Code Engine"
+    display_name: "DeepSeek-V4-Pro Qwen-3.5 4B (Code Engine)"
+    ollama_tag: "deepseek-v4-pro:4b"
+    vllm_model_name: "deepseek-v4-pro-qwen3.5-4b"
+    gguf_file: "models/gguf/DeepSeek-V4-Pro-Qwen3.5-4B-MTP-Q3_K_L.gguf"
+    sha256_checksum: "8cb8a6768db6b8b50892b8c2bf5abeeab7f95302318965ef1a50615d60524173"
+    quantization: "GGUF Q3_K_L"
+    vram_mb: 2480
     context_length: 8192
     domain: "coding"
+    tier: "primary"
     is_primary: false
-    keep_alive: "5m"
+    prompt_template: "chatml"
+    keep_alive: "-1"
     status: "active"
-    description: "Specialized code generation, Python script synthesis, and hydraulic calculations"
+    description: "High-precision code generation, Python script synthesis, debugging, and hydraulic calculations"
     temperature: 0.1
     top_p: 0.95
     backend: "laptop_gpu"
-    tier: "primary"
     regex_patterns:
       - '(?i)\b(def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+\s+import|return\s+\w+|lambda\s+)\b'
       - '(?i)\b(traceback|syntaxerror|typeerror|indexerror|keyerror|zerodivisionerror|exception)\b'
       - '(?i)\b(write|create|generate|fix|debug|run|execute|test)\s+(a\s+)?(python|script|code|program|function|algorithm)\b'
       - '(?i)\b(calculate|compute)\b.*?\b(hydraulic|pump|efficiency|head|flow rate|reynolds|power in|density|bhp|viscosity)\b'
       - '(?i)\b(pandas|dataframe|numpy|matplotlib|scipy|sympy|docker sandbox)\b'
-      - '(?i)\b(crude charge pump|p-101a|hydraulic calculation)\b'
     keywords:
       - "python"
+      - "code"
       - "script"
       - "function"
       - "calculate"
       - "algorithm"
-      - "traceback"
-      - "syntax"
-      - "formula"
-      - "math"
-      - "variables"
-      - "numpy"
-      - "pandas"
-      - "data"
-      - "compute"
-      - "code"
-      - "efficiency"
+      - "debug"
 
-  - id: "qwen2-vl-2b"
-    name: "Vision Engine"
-    display_name: "Vision Engine"
-    ollama_tag: "qwen2-vl:2b-q4_k_m"
-    gguf_file: "models/gguf/qwen2-vl-2b-q4_k_m.gguf"
-    quantization: "GGUF Q4_K_M"
-    vram_mb: 1900
-    context_length: 4096
-    domain: "vision"
+  # ============================================================================
+  # 3. REASONING & ORCHESTRATOR
+  # ============================================================================
+  - id: "deepseek-v4-pro-orchestrator"
+    name: "DeepSeek-V4-Pro Reasoning & Orchestrator"
+    display_name: "DeepSeek-V4-Pro Qwen-3.5 4B (Orchestrator & ReAct)"
+    ollama_tag: "deepseek-v4-pro:4b"
+    vllm_model_name: "deepseek-v4-pro-qwen3.5-4b"
+    gguf_file: "models/gguf/DeepSeek-V4-Pro-Qwen3.5-4B-MTP-Q3_K_L.gguf"
+    sha256_checksum: "8cb8a6768db6b8b50892b8c2bf5abeeab7f95302318965ef1a50615d60524173"
+    quantization: "GGUF Q3_K_L"
+    vram_mb: 2480
+    context_length: 8192
+    domain: "reasoning"
+    tier: "primary"
     is_primary: false
-    keep_alive: "5m"
-    status: "standby"
-    description: "Multimodal vision model for P&ID schematics and engineering drawings"
+    prompt_template: "chatml"
+    keep_alive: "-1"
+    status: "active"
+    description: "ReAct Agent loop orchestration, planning, multi-step tool dispatch, and industrial SOP reasoning"
     temperature: 0.2
     top_p: 0.9
     backend: "laptop_gpu"
-    tier: "primary"
     regex_patterns:
-      - '(?i)\b(ocr|scanned|diagram|schematic|p&id|piping and instrumentation|drawing|photo|inspection log sheet)\b'
-      - '(?i)\b(read the attached|extract text from|identify valves in|transmitters in|read gauge|extract equipment tags)\b'
-      - '(?i)\b(paddleocr|tesseract|isa 5\.1|valve tag|pump tag|transmitter tag)\b'
-      - '(?i)\b(handwritten|handwriting|operator notes|field notes|log sheet|maintenance log)\b'
-      - '(?i)\b(dwg-cdu|pid drawing)\b'
+      - '(?i)\b(draft|prepare|generate|write)\s+(an?\s+)?(approval note|executive summary|mopng memo|turnaround plan|sop compliance|memorandum)\b'
+      - '(?i)\b(evaluate|analyze|assess|synthesize)\b.*?\b(policy|safety standard|refinery sop|clause|deviation|root cause)\b'
+      - '(?i)\b(sop-mrpl|refinery manual|clause\s+\d+|emergency decoking|mandatory shutdown)\b'
+      - '(?i)\b(hazop|root cause analysis|thermodynamic equation|entropy balance)\b'
     keywords:
-      - "ocr"
-      - "drawing"
-      - "pid"
-      - "diagram"
-      - "schematic"
-      - "scan"
-      - "extract"
-      - "tags"
-      - "valves"
-      - "transmitters"
-      - "gauges"
-      - "inspection"
-      - "multimodal"
-      - "image"
-      - "handwritten"
-      - "notes"
-      - "field"
-
-  - id: "llama-3.2-3b"
-    name: "General Engine"
-    display_name: "General Engine"
-    ollama_tag: "llama3.2:3b-q4_k_m"
-    gguf_file: "models/gguf/llama3.2-3b-q4_k_m.gguf"
-    quantization: "GGUF Q4_K_M"
-    vram_mb: 1900
-    context_length: 4096
-    domain: "general"
-    is_primary: false
-    keep_alive: "5m"
-    status: "standby"
-    description: "General assistant, conversational dialogue, and general fallback"
-    temperature: 0.7
-    top_p: 0.9
-    backend: "laptop_gpu"
-    tier: "primary"
-    regex_patterns:
-      - '(?i)\b(hello|hi|hey|greetings|good morning|who are you|what can you do|what capabilities)\b'
-      - '(?i)\b(explain in (plain|simple) (terms|english)|summarize our conversation|format this bullet list)\b'
-    keywords:
-      - "hello"
-      - "greetings"
-      - "help"
-      - "assistant"
-      - "simple"
-      - "general"
-      - "conversation"
-      - "summarize"
-      - "english"
+      - "sop"
+      - "compliance"
+      - "approval"
+      - "memo"
+      - "executive"
+      - "plan"
+      - "orchestrate"
+      - "safety"
+      - "reasoning"

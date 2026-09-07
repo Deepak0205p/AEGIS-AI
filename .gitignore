@@ -57,3 +57,8 @@ data/
 docs/
 *.gguf
 models/gguf/*.gguf
+test_output.txt
+chat_greeting_response.png
+sdih 26117.pdf
+sandbox_jobs/
+generated/

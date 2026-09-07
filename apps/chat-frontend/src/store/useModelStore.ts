@@ -27,6 +27,8 @@ export interface SwapEvent {
 }
 
 export interface VRAMTelemetry {
+  gpu_available?: boolean;
+  gpu_name?: string;
   total_mb: number;
   used_mb: number;
   free_mb: number;
@@ -35,6 +37,11 @@ export interface VRAMTelemetry {
   primary_model_mb: number;
   secondary_model_mb: number;
   kv_cache_mb: number;
+  temperature_celsius?: number;
+  system_ram_total_mb?: number;
+  system_ram_used_mb?: number;
+  system_ram_free_mb?: number;
+  system_ram_percent?: number;
 }
 
 interface ModelState {

@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+WORKDIR /task
+
+# Setup offline wheels or fallback installation for building sandbox image
+RUN mkdir -p /wheels
+COPY wheels* /wheels/
+
+RUN if [ -d "/wheels" ] && [ "$(ls -A /wheels/*.whl 2>/dev/null)" ]; then \
+        pip install --no-cache-dir --no-index --find-links=/wheels pandas numpy openpyxl; \
+    else \
+        pip install --no-cache-dir pandas numpy openpyxl; \
+    fi
+
+# Create unprivileged sandbox user (UID 1000)
+RUN useradd -m -u 1000 -s /bin/bash sandboxuser && \
+    chown -R sandboxuser:sandboxuser /task
+
+USER 1000:1000
+
+CMD ["python", "/task/main.py"]

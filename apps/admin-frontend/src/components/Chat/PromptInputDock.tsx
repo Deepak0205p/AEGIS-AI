@@ -87,21 +87,31 @@ export function PromptInputDock() {
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowRoleSelector(false)} />
                 <div className="absolute bottom-full left-0 mb-2 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
-                  {MODEL_ROLES.map((role) => (
-                    <button
-                      key={role.id}
-                      onClick={() => {
-                        setActiveModelRole(role.id);
-                        setShowRoleSelector(false);
-                      }}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-gray-50 transition-colors ${
-                        activeModelRole === role.id ? 'bg-gray-100 font-semibold' : ''
-                      }`}
-                    >
-                      <span className={role.color}>{role.icon}</span>
-                      <span>{role.label}</span>
-                    </button>
-                  ))}
+                  {MODEL_ROLES.map((role) => {
+                    const isDisabled = role.id === 'vision' || role.id === 'ocr';
+                    return (
+                      <button
+                        key={role.id}
+                        disabled={isDisabled}
+                        title={isDisabled ? "Coming soon" : undefined}
+                        onClick={() => {
+                          if (isDisabled) return;
+                          setActiveModelRole(role.id);
+                          setShowRoleSelector(false);
+                        }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${
+                          isDisabled
+                            ? 'opacity-40 cursor-not-allowed grayscale'
+                            : activeModelRole === role.id
+                            ? 'bg-gray-100 font-semibold cursor-pointer'
+                            : 'hover:bg-gray-50 cursor-pointer'
+                        }`}
+                      >
+                        <span className={role.color}>{role.icon}</span>
+                        <span>{role.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </>
             )}

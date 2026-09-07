@@ -49,6 +49,10 @@ export interface VRAMTelemetry {
   max_concurrent_active_models?: number;
   loaded_models?: string[];
   temperature_celsius?: number;
+  system_ram_total_mb?: number;
+  system_ram_used_mb?: number;
+  system_ram_free_mb?: number;
+  system_ram_percent?: number;
 }
 
 interface ModelState {
@@ -82,29 +86,33 @@ let visibilityHandler: (() => void) | null = null;
 
 export const useModelStore = create<ModelState>((set, get) => ({
   models: [],
-  activeModel: 'qwen3-4b',
-  activePrimaryId: 'qwen3-4b',
-  activeSecondaryId: 'qwen2.5-coder-3b',
+  activeModel: 'deepseek-v4-pro-qwen3.5-4b',
+  activePrimaryId: 'deepseek-v4-pro-qwen3.5-4b',
+  activeSecondaryId: null,
   backendType: 'OLLaMA',
   vram: {
     gpu_available: false,
-    gpu_name: 'Intel(R) UHD Graphics + Host Unified RAM',
-    total_mb: 8029,
-    used_mb: 6144,
-    free_mb: 1885,
-    usage_percent: 76.5,
-    os_overhead_mb: 512,
-    primary_model_mb: 2600,
-    secondary_model_mb: 1900,
+    gpu_name: 'Detecting hardware...',
+    total_mb: 0,
+    used_mb: 0,
+    free_mb: 0,
+    usage_percent: 0,
+    os_overhead_mb: 0,
+    primary_model_mb: 0,
+    secondary_model_mb: 0,
     kv_cache_mb: 0,
     active_profile: 'edge_laptop_6gb',
     max_concurrent_active_models: 2,
-    loaded_models: ['qwen3-4b', 'qwen2.5-coder-3b'],
-    temperature_celsius: 48.0,
+    loaded_models: [],
+    temperature_celsius: 0,
+    system_ram_total_mb: 0,
+    system_ram_used_mb: 0,
+    system_ram_free_mb: 0,
+    system_ram_percent: 0,
   },
-  gpuUtilizationPct: 42.0,
-  gpuTemperatureC: 48.0,
-  loadedModels: ['qwen3-4b', 'qwen2.5-coder-3b'],
+  gpuUtilizationPct: 0,
+  gpuTemperatureC: 0,
+  loadedModels: [],
   swapHistory: [],
   isSwapping: false,
   isPolling: false,

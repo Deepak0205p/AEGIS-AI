@@ -111,16 +111,16 @@ export function VRAMSummaryCard() {
         </div>
 
         <div className="space-y-0.5 p-2 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/60">
-          <p className="text-[10px] text-cyan-400 uppercase">Primary Model (Qwen-3 4B)</p>
+          <p className="text-[10px] text-cyan-400 uppercase">Primary Model (DeepSeek 4B)</p>
           <p className="text-cyan-600 dark:text-cyan-300 font-bold tabular-nums">
-            {vram.primary_model_mb || 2600} MB
+            {vram.primary_model_mb || 2480} MB
           </p>
         </div>
 
         <div className="space-y-0.5 p-2 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/60">
-          <p className="text-[10px] text-emerald-400 uppercase">Active Secondary Model</p>
+          <p className="text-[10px] text-emerald-400 uppercase">Active Code / ReAct Model</p>
           <p className="text-emerald-600 dark:text-emerald-300 font-bold tabular-nums">
-            {vram.secondary_model_mb || 1900} MB
+            {vram.secondary_model_mb || 2480} MB
           </p>
         </div>
 
@@ -131,6 +131,39 @@ export function VRAMSummaryCard() {
           </p>
         </div>
       </div>
+
+      {/* Host System RAM Section (Distinct from GPU VRAM) */}
+      {vram.system_ram_total_mb ? (
+        <div className="pt-3 border-t border-gray-100 dark:border-gray-800 space-y-2 font-mono">
+          <div className="flex items-baseline justify-between">
+            <div className="flex items-baseline space-x-2">
+              <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                Host System RAM:
+              </span>
+              <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 tabular-nums">
+                {(vram.system_ram_used_mb || 0).toLocaleString()} MB
+              </span>
+              <span className="text-xs text-gray-500">
+                / {(vram.system_ram_total_mb || 0).toLocaleString()} MB Physical DDR
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-gray-900 dark:text-gray-200 tabular-nums">
+                {Math.round(vram.system_ram_percent || 0)}% Used
+              </span>
+              <span className="text-[10px] text-gray-400">
+                (Free: {(vram.system_ram_free_mb || 0).toLocaleString()} MB)
+              </span>
+            </div>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+            <div
+              className="h-full bg-blue-600 rounded-full transition-all"
+              style={{ width: `${Math.min(100, Math.round(vram.system_ram_percent || 0))}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -19,7 +19,7 @@ interface OverviewDeckProps {
 
 export function OverviewDeck({ onNavigate }: OverviewDeckProps) {
   const { metrics } = useSovereigntyStore();
-  const { models, vram, fetchVRAM, fetchModels } = useModelStore();
+  const { models, vram, startPolling, stopPolling, fetchModels } = useModelStore();
   const [ragStats, setRagStats] = useState({ documents: 0, chunks: 0, collections: 0 });
   const [sandboxInfo, setSandboxInfo] = useState({
     runtime: 'python:3.11',
@@ -31,8 +31,8 @@ export function OverviewDeck({ onNavigate }: OverviewDeckProps) {
   });
 
   useEffect(() => {
-    // Fetch live hardware device metrics
-    fetchVRAM();
+    // Start real-time hardware telemetry polling (GPU VRAM & System RAM live)
+    startPolling();
     fetchModels();
 
     // Fetch live RAG stats
@@ -63,12 +63,20 @@ export function OverviewDeck({ onNavigate }: OverviewDeckProps) {
         }
       })
       .catch(() => {});
-  }, [fetchVRAM, fetchModels]);
+
+    return () => {
+      stopPolling();
+    };
+  }, [startPolling, stopPolling, fetchModels]);
 
   const activeModels = models.filter(m => m.status === 'active');
   const usedVramGb = (vram.used_mb / 1024).toFixed(2);
   const totalVramGb = (vram.total_mb / 1024).toFixed(2);
   const vramPercent = Math.min(100, Math.round((vram.used_mb / (vram.total_mb || 6144)) * 100));
+
+  const systemRamUsedGb = ((vram.system_ram_used_mb || 0) / 1024).toFixed(2);
+  const systemRamTotalGb = ((vram.system_ram_total_mb || 0) / 1024).toFixed(2);
+  const systemRamPercent = Math.min(100, Math.round(vram.system_ram_percent || ((vram.system_ram_used_mb || 0) / (vram.system_ram_total_mb || 1) * 100)));
 
   return (
     <div className="space-y-4">
@@ -90,34 +98,65 @@ export function OverviewDeck({ onNavigate }: OverviewDeckProps) {
         </div>
       </div>
 
-      {/* 4 Telemetry Gauges Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-        {/* Metric 1: VRAM Ceiling */}
+      {/* Hardware Telemetry & Services Grid */}
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${vram.gpu_available ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-3`}>
+        {/* Metric 1: Dedicated GPU VRAM (Only if dedicated GPU is available) */}
+        {vram.gpu_available && (
+          <div 
+            onClick={() => onNavigate('models')}
+            className="rounded-md bg-gray-50 border border-gray-200 p-4 hover:border-gray-300 transition-all cursor-pointer group"
+          >
+            <div className="flex items-center justify-between text-xs text-gray-500">
+              <span className="font-mono text-cyan-600 font-semibold">GPU</span>
+              <HardDrive className="w-4 h-4 text-cyan-600 group-hover:text-cyan-700 transition-colors" />
+            </div>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-xl font-bold font-mono text-gray-900">{usedVramGb} GB</span>
+              <span className="text-xs font-mono text-gray-500">/ {totalVramGb} GB</span>
+            </div>
+            <div className="mt-2 w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+              <div 
+                className={`h-full rounded-full transition-all ${
+                  vramPercent > 85 ? 'bg-amber-500' : 'bg-cyan-600'
+                }`}
+                style={{ width: `${vramPercent}%` }}
+              />
+            </div>
+            <div className="mt-2 flex justify-between text-[11px] text-gray-500">
+              <span className="truncate max-w-[150px]" title={vram.gpu_name}>
+                {vram.gpu_name || 'NVIDIA GPU'}
+              </span>
+              <span className="font-mono shrink-0">{vramPercent}% used</span>
+            </div>
+          </div>
+        )}
+
+        {/* Metric 2: Host System RAM */}
         <div 
           onClick={() => onNavigate('models')}
           className="rounded-md bg-gray-50 border border-gray-200 p-4 hover:border-gray-300 transition-all cursor-pointer group"
         >
           <div className="flex items-center justify-between text-xs text-gray-500">
-            <span className="font-mono">{vram.gpu_available ? 'Dedicated GPU VRAM' : 'Host Unified RAM'}</span>
-            <HardDrive className="w-4 h-4 text-gray-500 group-hover:text-blue-600 transition-colors" />
+            <span className="font-mono text-blue-600 font-semibold">RAM</span>
+            <Cpu className="w-4 h-4 text-blue-600 group-hover:text-blue-700 transition-colors" />
           </div>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-xl font-bold font-mono text-gray-900">{usedVramGb} GB</span>
-            <span className="text-xs font-mono text-gray-500">/ {totalVramGb} GB Max</span>
+            <span className="text-xl font-bold font-mono text-gray-900">{systemRamUsedGb} GB</span>
+            <span className="text-xs font-mono text-gray-500">/ {systemRamTotalGb} GB</span>
           </div>
           <div className="mt-2 w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
             <div 
               className={`h-full rounded-full transition-all ${
-                vramPercent > 85 ? 'bg-amber-500' : 'bg-blue-600'
+                systemRamPercent > 85 ? 'bg-amber-500' : 'bg-blue-600'
               }`}
-              style={{ width: `${vramPercent}%` }}
+              style={{ width: `${systemRamPercent}%` }}
             />
           </div>
           <div className="mt-2 flex justify-between text-[11px] text-gray-500">
-            <span className="truncate max-w-[170px]" title={vram.gpu_name}>
-              {vram.gpu_available ? `${activeModels.length} Active Model in GPU` : (vram.gpu_name ? vram.gpu_name.split('+')[0].trim() : 'Host CPU Mode')}
+            <span className="truncate max-w-[150px]">
+              {vram.gpu_available ? 'System Memory' : 'Host CPU & System Memory'}
             </span>
-            <span className="font-mono shrink-0">{vramPercent}% used</span>
+            <span className="font-mono shrink-0">{systemRamPercent}% used</span>
           </div>
         </div>
 

@@ -15,6 +15,7 @@ class WebSocketClientManager {
   private auditWs: WebSocket | null = null;
   private auditReconnectTimer: NodeJS.Timeout | null = null;
   private isFallbackMode: boolean = false;
+  private wsGeneration: number = 0;
 
   public getWsHost(): string {
     if (typeof window !== 'undefined') {
@@ -110,6 +111,7 @@ class WebSocketClientManager {
 
     const chatStore = useChatStore.getState();
     chatStore.setStreaming(true);
+    chatStore.clearTrace();
     const activeSessionId = session_id || chatStore.activeSessionId;
 
     // Capture up to 3 prior messages for conversational memory context (excluding current prompt if already added)
@@ -128,6 +130,7 @@ class WebSocketClientManager {
     );
 
     let wsConnected = false;
+    const currentGen = ++this.wsGeneration;
 
     try {
       if (this.chatWs) {
@@ -171,7 +174,9 @@ class WebSocketClientManager {
       };
 
       this.chatWs.onclose = () => {
-        chatStore.setStreaming(false);
+        if (currentGen === this.wsGeneration) {
+          chatStore.setStreaming(false);
+        }
       };
     } catch (err) {
       chatStore.setStreaming(false);

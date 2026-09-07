@@ -62,10 +62,24 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true });
     const savedToken = localStorage.getItem('reveal_auth_token');
     const savedMethod = localStorage.getItem('reveal_auth_method') as any;
+    const savedUserStr = localStorage.getItem('reveal_user');
 
     if (!savedToken) {
       set({ token: null, user: null, isAuthenticated: false, isLoading: false, authMethod: null });
       return;
+    }
+
+    // Immediately restore cached user to eliminate loading delays / flicker
+    if (savedUserStr) {
+      try {
+        const cachedUser = JSON.parse(savedUserStr);
+        set({
+          token: savedToken,
+          user: cachedUser,
+          isAuthenticated: true,
+          authMethod: savedMethod || 'LOCAL',
+        });
+      } catch (e) {}
     }
 
     try {
@@ -77,6 +91,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       if (res.ok) {
         const userData: AuthUser = await res.json();
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('reveal_user', JSON.stringify(userData));
+        }
         set({
           token: savedToken,
           user: userData,
@@ -89,11 +106,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         // Token invalid or expired
         localStorage.removeItem('reveal_auth_token');
         localStorage.removeItem('reveal_auth_method');
+        localStorage.removeItem('reveal_user');
         set({ token: null, user: null, isAuthenticated: false, isLoading: false, authMethod: null });
       }
     } catch (err) {
       console.warn('Backend offline or auth check failed during initialization:', err);
-      // If offline, check if token exists to allow air-gapped cached state if valid
+      // If offline, preserve cached user and token in air-gapped sovereign mode
       set({ isLoading: false });
     }
   },
@@ -214,6 +232,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (typeof window !== 'undefined') {
         localStorage.setItem('reveal_auth_token', token);
         localStorage.setItem('reveal_auth_method', 'LOCAL');
+        if (user) {
+          localStorage.setItem('reveal_user', JSON.stringify(user));
+        }
+        document.cookie = `reveal_auth_token=${encodeURIComponent(token)}; path=/; max-age=86400; SameSite=Lax`;
       }
 
       set({
@@ -274,6 +296,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (typeof window !== 'undefined') {
       localStorage.removeItem('reveal_auth_token');
       localStorage.removeItem('reveal_auth_method');
+      localStorage.removeItem('reveal_user');
+      document.cookie = 'reveal_auth_token=; path=/; max-age=0; SameSite=Lax';
     }
 
     set({
