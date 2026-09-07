@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import { useChatStore } from '@/store/useChatStore';
 import { socketManager } from '@/lib/socket';
 import {
@@ -430,8 +430,10 @@ function CustomTooltip({
   );
 }
 
-export default function GeminiReplicaChatApp({ initialSessionId }: { initialSessionId?: string } = {}) {
+export default function GeminiReplicaChatApp() {
   const router = useRouter();
+  const urlParams = useParams();
+  const initialSessionId = Array.isArray(urlParams?.id) ? urlParams.id[0] : (urlParams?.id as string | undefined);
   const {
     sessions,
     activeSessionId,

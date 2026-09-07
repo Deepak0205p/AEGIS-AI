@@ -190,11 +190,10 @@ export function RagObservatory() {
 
     await new Promise((r) => setTimeout(r, 450));
 
-    // Simulated local semantic search against sovereign vector base
+    // Local semantic search filter over documents
     const query = searchQuery.toLowerCase();
-    const matches = [
-      
-    ].filter(
+    const mockOrLoadedMatches: Array<{ id: string; document: string; clause: string; similarityScore: number; content: string }> = [];
+    const matches = mockOrLoadedMatches.filter(
       (m) =>
         m.content.toLowerCase().includes(query) ||
         m.document.toLowerCase().includes(query) ||

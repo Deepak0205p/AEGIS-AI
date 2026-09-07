@@ -1,3 +1,8 @@
 'use client';
 
-export { default } from '../page';
+import GeminiReplicaChatApp from '../page';
+
+export default function ChatPage() {
+  return <GeminiReplicaChatApp />;
+}
+
