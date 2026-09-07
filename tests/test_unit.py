@@ -103,6 +103,32 @@ def test_route_message():
     route, trigger = route_message("make a report")
     assert route == "docs", f"Expected docs, got {route}"
 
+    # Attachment routing (Phase 1)
+    route, trigger = route_message("Analyze this script", attachments=["script.py"])
+    assert route == "code", f"Expected code for .py attachment, got {route}"
+
+    route, trigger = route_message("Check financial totals", attachments=["monthly_sales.xlsx"])
+    assert route == "excel", f"Expected excel for .xlsx attachment, got {route}"
+
+    route, trigger = route_message("Review slide deck", attachments=["presentation.pptx"])
+    assert route == "ppt", f"Expected ppt for .pptx attachment, got {route}"
+
+    # Phase 2: Natural Language & Multi-signal tests
+    route, _ = route_message("calculate statistical mean of column 3 and plot pump vibration")
+    assert route == "code", f"Expected code for plot/calculate, got {route}"
+
+    route, _ = route_message("Create a 5 slides presentation on plant fire safety")
+    assert route == "ppt", f"Expected ppt for 5 slides presentation, got {route}"
+
+    route, _ = route_message("Generate a monthly budget spreadsheet with vlookup formulas")
+    assert route == "excel", f"Expected excel for budget spreadsheet, got {route}"
+
+    route, _ = route_message("Draft an official memo regarding annual maintenance shutdown")
+    assert route == "docs", f"Expected docs for official memo, got {route}"
+
+    route, _ = route_message("Write an email with doc in the title")
+    assert route == "chat", f"Expected chat for email despite doc mention, got {route}"
+
     # Default chat
     route, trigger = route_message("hi there")
     assert route == "chat", f"Expected chat, got {route}"
@@ -110,6 +136,12 @@ def test_route_message():
     # Manual override
     route, trigger = route_message("do something", mode_override="code")
     assert route == "code", f"Expected code override, got {route}"
+
+    route, trigger = route_message("inspect this diagram", mode_override="vision")
+    assert route == "vision", f"Expected vision override, got {route}"
+
+    route, trigger = route_message("extract text from image", mode_override="ocr")
+    assert route == "ocr", f"Expected ocr override, got {route}"
 
     print("  PASS: route_message")
 

@@ -1,82 +1,108 @@
 """
 Database and Conversation History Manager for Air-Gapped Local AI.
-Implements SQLite persistence, 10-message windowing, cached summaries for older turns,
-and context trimming to respect NUM_CTX limits.
+Implements XAMPP MySQL (MariaDB) persistence, 10-message windowing,
+cached summaries for older turns, and context trimming to respect NUM_CTX limits.
 """
 
-import sqlite3
 import json
 import os
+import pymysql
+import pymysql.cursors
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
-from backend.config import DB_PATH, NUM_CTX, logger
+from backend.config import (
+    MYSQL_HOST,
+    MYSQL_PORT,
+    MYSQL_USER,
+    MYSQL_PASSWORD,
+    MYSQL_DB,
+    NUM_CTX,
+    logger,
+)
 
 
-def get_db_connection() -> sqlite3.Connection:
-    """Returns a connection to the SQLite database with row factory."""
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+def get_db_connection() -> pymysql.Connection:
+    """Returns a connection to the XAMPP MySQL database with DictCursor."""
+    return pymysql.connect(
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database=MYSQL_DB,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True
+    )
 
 
 def init_db():
-    """Initializes SQLite schema if not exists."""
+    """Initializes XAMPP MySQL database schema and migrates existing SQLite data if present."""
+    # 1. Ensure database exists
+    root_conn = pymysql.connect(
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        charset="utf8mb4",
+        autocommit=True
+    )
+    with root_conn.cursor() as cur:
+        cur.execute(f"CREATE DATABASE IF NOT EXISTS `{MYSQL_DB}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
+    root_conn.close()
+
+    # 2. Initialize schema tables
     conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # 1. Messages table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            mode TEXT NOT NULL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_id ON messages (chat_id)")
-    
-    # 2. Chat summary cache
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS chat_summaries (
-            chat_id TEXT PRIMARY KEY,
-            summary TEXT NOT NULL,
-            last_msg_id INTEGER NOT NULL,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # 3. Generated files registry
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS files (
-            file_id TEXT PRIMARY KEY,
-            chat_id TEXT NOT NULL,
-            filename TEXT NOT NULL,
-            file_type TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_chat_id ON files (chat_id)")
-    
-    conn.commit()
+    with conn.cursor() as cursor:
+        # Messages table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chat_id VARCHAR(128) NOT NULL,
+                role VARCHAR(32) NOT NULL,
+                content LONGTEXT NOT NULL,
+                mode VARCHAR(32) NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_chat_id (chat_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+
+        # Chat summary cache table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_summaries (
+                chat_id VARCHAR(128) PRIMARY KEY,
+                summary TEXT NOT NULL,
+                last_msg_id INT NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+
+        # Generated deliverable files registry
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS files (
+                file_id VARCHAR(64) PRIMARY KEY,
+                chat_id VARCHAR(128) NOT NULL,
+                filename VARCHAR(255) NOT NULL,
+                file_type VARCHAR(32) NOT NULL,
+                file_path TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_files_chat_id (chat_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
     conn.close()
-    logger.info(f"Database initialized at {DB_PATH}")
+    logger.info(f"XAMPP MySQL database '{MYSQL_DB}' initialized on {MYSQL_HOST}:{MYSQL_PORT}")
 
 
 def save_message(chat_id: str, role: str, content: str, mode: str = "chat") -> int:
-    """Persists a message to SQLite."""
+    """Persists a message to XAMPP MySQL."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO messages (chat_id, role, content, mode) VALUES (?, ?, ?, ?)",
-        (chat_id, role, content, mode)
-    )
-    msg_id = cursor.lastrowid
-    conn.commit()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO messages (chat_id, role, content, mode) VALUES (%s, %s, %s, %s)",
+            (chat_id, role, content, mode)
+        )
+        msg_id = cursor.lastrowid
     conn.close()
     return msg_id
 
@@ -84,12 +110,12 @@ def save_message(chat_id: str, role: str, content: str, mode: str = "chat") -> i
 def get_chat_history(chat_id: str) -> List[Dict[str, Any]]:
     """Returns all messages for a given chat_id ordered by id."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, chat_id, role, content, mode, timestamp FROM messages WHERE chat_id = ? ORDER BY id ASC",
-        (chat_id,)
-    )
-    rows = cursor.fetchall()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT id, chat_id, role, content, mode, timestamp FROM messages WHERE chat_id = %s ORDER BY id ASC",
+            (chat_id,)
+        )
+        rows = cursor.fetchall()
     conn.close()
     return [
         {
@@ -107,9 +133,9 @@ def get_chat_history(chat_id: str) -> List[Dict[str, Any]]:
 def get_cached_summary(chat_id: str) -> Optional[Tuple[str, int]]:
     """Returns (summary, last_msg_id) if cached."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT summary, last_msg_id FROM chat_summaries WHERE chat_id = ?", (chat_id,))
-    row = cursor.fetchone()
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT summary, last_msg_id FROM chat_summaries WHERE chat_id = %s", (chat_id,))
+        row = cursor.fetchone()
     conn.close()
     if row:
         return row["summary"], row["last_msg_id"]
@@ -117,49 +143,47 @@ def get_cached_summary(chat_id: str) -> Optional[Tuple[str, int]]:
 
 
 def save_cached_summary(chat_id: str, summary: str, last_msg_id: int):
-    """Caches conversation summary."""
+    """Caches conversation summary in XAMPP MySQL."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO chat_summaries (chat_id, summary, last_msg_id, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(chat_id) DO UPDATE SET
-            summary=excluded.summary,
-            last_msg_id=excluded.last_msg_id,
-            updated_at=CURRENT_TIMESTAMP
-        """,
-        (chat_id, summary, last_msg_id)
-    )
-    conn.commit()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO chat_summaries (chat_id, summary, last_msg_id, updated_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON DUPLICATE KEY UPDATE
+                summary=VALUES(summary),
+                last_msg_id=VALUES(last_msg_id),
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (chat_id, summary, last_msg_id)
+        )
     conn.close()
 
 
 def save_file_record(file_id: str, chat_id: str, filename: str, file_type: str, file_path: str):
-    """Registers a generated deliverable file in the database."""
+    """Registers a generated deliverable file in XAMPP MySQL."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO files (file_id, chat_id, filename, file_type, file_path)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(file_id) DO UPDATE SET
-            filename=excluded.filename,
-            file_type=excluded.file_type,
-            file_path=excluded.file_path
-        """,
-        (file_id, chat_id, filename, file_type, str(file_path))
-    )
-    conn.commit()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO files (file_id, chat_id, filename, file_type, file_path)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                filename=VALUES(filename),
+                file_type=VALUES(file_type),
+                file_path=VALUES(file_path)
+            """,
+            (file_id, chat_id, filename, file_type, str(file_path))
+        )
     conn.close()
 
 
 def get_file_record(file_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieves file metadata by file_id."""
+    """Retrieves file metadata by file_id from XAMPP MySQL."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT file_id, chat_id, filename, file_type, file_path, created_at FROM files WHERE file_id = ?", (file_id,))
-    row = cursor.fetchone()
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT file_id, chat_id, filename, file_type, file_path, created_at FROM files WHERE file_id = %s", (file_id,))
+        row = cursor.fetchone()
     conn.close()
     if row:
         return dict(row)
@@ -169,6 +193,47 @@ def get_file_record(file_id: str) -> Optional[Dict[str, Any]]:
 def estimate_tokens(text: str) -> int:
     """Rough estimate of token count (avg 3.5 chars per token for code/english)."""
     return max(1, int(len(text) / 3.5))
+
+
+def list_all_chat_sessions() -> List[Dict[str, Any]]:
+    """Returns list of distinct chat sessions from XAMPP MySQL."""
+    conn = get_db_connection()
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            SELECT 
+                chat_id as id,
+                UNIX_TIMESTAMP(MIN(timestamp)) as created_at,
+                COALESCE(
+                    MAX(CASE WHEN role = 'user' THEN SUBSTRING(content, 1, 50) END),
+                    'Chat'
+                ) as title,
+                COUNT(*) as count
+            FROM messages
+            GROUP BY chat_id
+            ORDER BY MAX(timestamp) DESC
+        """)
+        rows = cursor.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r["id"],
+            "title": (r["title"] or "Chat")[:50],
+            "created_at": int(r["created_at"] or datetime.now().timestamp()),
+            "count": int(r["count"])
+        }
+        for r in rows
+    ]
+
+
+def delete_chat_session_data(chat_id: str) -> bool:
+    """Deletes all messages, summaries, and file metadata for a chat session from XAMPP MySQL."""
+    conn = get_db_connection()
+    with conn.cursor() as cursor:
+        cursor.execute("DELETE FROM messages WHERE chat_id = %s", (chat_id,))
+        cursor.execute("DELETE FROM chat_summaries WHERE chat_id = %s", (chat_id,))
+        cursor.execute("DELETE FROM files WHERE chat_id = %s", (chat_id,))
+    conn.close()
+    return True
 
 
 async def build_context_messages(

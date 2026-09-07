@@ -31,6 +31,7 @@ if str(BASE_DIR) not in sys.path:
 
 from backend.config import (
     MODEL_NAME,
+    VISION_MODEL_NAME,
     OLLAMA_HOST,
     NUM_CTX,
     LOGS_DIR,
@@ -47,6 +48,7 @@ from backend.db import (
 from backend.ollama_client import check_ollama_health, filter_thinking
 from backend.router import (
     route_message,
+    route_message_async,
     get_thinking_decision_with_reason,
     get_rag_decision_with_reason,
     is_follow_up_query,
@@ -59,6 +61,7 @@ from backend.code_mode import handle_code_mode
 from backend.docs_mode import handle_document_mode
 from backend.excel_mode import handle_excel_mode
 from backend.ppt_mode import handle_ppt_mode
+from backend.vision_mode import handle_vision_mode
 
 
 @asynccontextmanager
@@ -68,15 +71,12 @@ async def lifespan(app: FastAPI):
     # Initialize SQLite Database
     init_db()
     
-    # Verify Ollama connectivity and model presence — FAIL LOUDLY if broken
+    # Verify Ollama connectivity and model presence
     try:
         health_info = await check_ollama_health()
         logger.info(f"Ollama connected successfully. Serving model: {health_info['model']}")
     except Exception as e:
-        logger.critical(f"FATAL STARTUP CHECK FAILURE: {e}")
-        print(f"\n{'='*70}\nFATAL STARTUP FAILURE:\n{e}\n{'='*70}\n", file=sys.stderr)
-        import uvicorn
-        raise SystemExit(1) from e
+        logger.warning(f"Ollama health check warning: {e}. Backend running in degraded/offline-ollama mode.")
         
     yield
     logger.info("Shutting down Air-Gapped Backend.")
@@ -120,6 +120,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., description="User prompt text")
     mode: Optional[str] = Field("auto", description="Execution mode: auto | chat | code | docs | excel | ppt")
     chat_id: Optional[str] = Field(None, description="Unique conversation session ID")
+    attachments: Optional[List[str]] = Field(default=None, description="List of uploaded filenames or file paths")
 
 
 # --- API Endpoints ---
@@ -151,7 +152,16 @@ async def get_health():
         )
 
 
-async def generate_chat_events(user_msg: str, requested_mode: str, chat_id: str):
+# In-memory tracking of the last execution route per chat session
+SESSION_LAST_ROUTE: Dict[str, str] = {}
+
+
+async def generate_chat_events(
+    user_msg: str,
+    requested_mode: str,
+    chat_id: str,
+    attachments: Optional[List[str]] = None
+):
     """
     Core execution pipeline shared across POST /api/chat and WS /api/chat/stream.
     Yields structured event dicts:
@@ -160,7 +170,15 @@ async def generate_chat_events(user_msg: str, requested_mode: str, chat_id: str)
     3. {"token": "..."} repeatedly
     4. {"done": True, ...}
     """
-    route, trigger_keyword = route_message(user_msg, requested_mode)
+    last_route = SESSION_LAST_ROUTE.get(chat_id)
+    route, trigger_keyword = await route_message_async(
+        user_msg,
+        requested_mode,
+        attachments=attachments,
+        last_route=last_route,
+        allow_multi=False
+    )
+    SESSION_LAST_ROUTE[chat_id] = route
 
     # --- DEPARTMENT DETECTION ---
     department, dept_trigger = detect_department(user_msg)
@@ -257,6 +275,14 @@ async def generate_chat_events(user_msg: str, requested_mode: str, chat_id: str)
             handler = handle_excel_mode(chat_id, user_msg)
         elif route == "ppt":
             handler = handle_ppt_mode(chat_id, user_msg)
+        elif route in ("vision", "ocr"):
+            handler = handle_vision_mode(
+                chat_id,
+                user_msg,
+                attachments=attachments,
+                is_ocr=(route == "ocr"),
+                think=think_decision
+            )
         else:
             handler = handle_chat_mode(
                 chat_id,
@@ -286,6 +312,7 @@ async def generate_chat_events(user_msg: str, requested_mode: str, chat_id: str)
                 # Use the handler's filtered content (thinking already stripped)
                 handler_content = event.get("content", "")
                 accumulated_text = handler_content if handler_content else filter_thinking("".join(full_tokens))
+                effective_model = VISION_MODEL_NAME if route in ("vision", "ocr") else MODEL_NAME
                 yield {
                     "done": True,
                     "generated_file": gen_file,
@@ -294,7 +321,7 @@ async def generate_chat_events(user_msg: str, requested_mode: str, chat_id: str)
                     "event": "final_answer",
                     "content": accumulated_text,
                     "deliverable_ids": [gen_file] if gen_file else [],
-                    "model_id": MODEL_NAME,
+                    "model_id": effective_model,
                     "routed_by": route,
                     "thinking": think_decision,
                     "rag": rag_status,
@@ -346,9 +373,10 @@ async def chat_endpoint(request_body: ChatRequest):
         
     chat_id = request_body.chat_id or f"chat_{uuid.uuid4().hex[:10]}"
     requested_mode = request_body.mode or "auto"
+    attachments = request_body.attachments
 
     async def sse_event_generator():
-        async for event in generate_chat_events(user_msg, requested_mode, chat_id):
+        async for event in generate_chat_events(user_msg, requested_mode, chat_id, attachments=attachments):
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
@@ -388,9 +416,10 @@ async def websocket_chat_stream(websocket: WebSocket):
 
             chat_id = data.get("chat_id") or data.get("session_id") or f"chat_{uuid.uuid4().hex[:10]}"
             requested_mode = data.get("mode") or data.get("role") or "auto"
+            attachments = data.get("attachments") or data.get("files")
 
             logger.info(f"[WS STREAM] chat_id={chat_id} mode={requested_mode} prompt={user_msg[:60]!r}")
-            async for event in generate_chat_events(user_msg, requested_mode, chat_id):
+            async for event in generate_chat_events(user_msg, requested_mode, chat_id, attachments=attachments):
                 await websocket.send_json(event)
     except WebSocketDisconnect:
         logger.info("[WS] Client disconnected from /api/chat/stream")
@@ -441,8 +470,10 @@ async def websocket_audit_stream(websocket: WebSocket):
 
 @app.get("/api/chat/sessions")
 async def list_chat_sessions(username: Optional[str] = None):
-    """Lists saved conversation sessions for the chat frontend UI."""
-    return {"status": "SUCCESS", "sessions": []}
+    """Lists saved conversation sessions from XAMPP MySQL."""
+    from backend.db import list_all_chat_sessions
+    sessions = list_all_chat_sessions()
+    return {"status": "SUCCESS", "sessions": sessions}
 
 
 @app.post("/api/chat/sessions")
@@ -462,13 +493,18 @@ async def create_chat_session(payload: Optional[Dict[str, Any]] = None):
 
 @app.get("/api/chat/sessions/{session_id}")
 async def get_chat_session(session_id: str):
-    """Returns conversation messages for the given session ID."""
+    """Returns conversation messages for the given session ID from XAMPP MySQL."""
     history = get_chat_history(session_id)
+    first_title = "Chat"
+    for m in history:
+        if m.get("role") == "user":
+            first_title = m.get("content", "Chat")[:40]
+            break
     return {
         "status": "SUCCESS",
         "session": {
             "id": session_id,
-            "title": "Chat",
+            "title": first_title,
             "created_at": int(time.time()),
             "messages": history
         }
@@ -477,6 +513,9 @@ async def get_chat_session(session_id: str):
 
 @app.delete("/api/chat/sessions/{session_id}")
 async def delete_chat_session(session_id: str):
+    """Deletes conversation session and associated data from XAMPP MySQL."""
+    from backend.db import delete_chat_session_data
+    delete_chat_session_data(session_id)
     return {"status": "SUCCESS", "deleted": session_id}
 
 
@@ -658,6 +697,31 @@ async def get_history(chat_id: str):
     }
 
 
+@app.get("/api/files/list")
+async def list_files(chat_id: Optional[str] = None):
+    """Lists generated deliverable files from XAMPP MySQL."""
+    conn = get_db_connection()
+    with conn.cursor() as cursor:
+        if chat_id:
+            cursor.execute("SELECT * FROM files WHERE chat_id = %s ORDER BY created_at DESC", (chat_id,))
+        else:
+            cursor.execute("SELECT * FROM files ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+    conn.close()
+    
+    items = []
+    for r in rows:
+        items.append({
+            "file_id": r["file_id"],
+            "chat_id": r["chat_id"],
+            "filename": r["filename"],
+            "file_type": r["file_type"],
+            "created_at": str(r["created_at"]),
+            "download_url": f"/api/files/{r['file_id']}"
+        })
+    return {"files": items}
+
+
 @app.get("/api/files/{file_id}")
 @app.get("/api/files/download/{file_id}")
 async def download_file(file_id: str):
@@ -692,19 +756,6 @@ async def download_file(file_id: str):
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
-
-
-@app.get("/api/files/list")
-async def list_files(chat_id: Optional[str] = None):
-    """Lists generated deliverable files."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    if chat_id:
-        cursor.execute("SELECT * FROM files WHERE chat_id = ? ORDER BY created_at DESC", (chat_id,))
-    else:
-        cursor.execute("SELECT * FROM files ORDER BY created_at DESC")
-    rows = cursor.fetchall()
-    conn.close()
     
     items = []
     for r in rows:
@@ -721,10 +772,14 @@ async def list_files(chat_id: Optional[str] = None):
 
 @app.get("/api/models")
 async def get_models():
-    """Returns the active sovereign model."""
+    """Returns the active sovereign models (text + vision)."""
     return {
         "active_model": MODEL_NAME,
-        "models": [{"id": MODEL_NAME, "name": MODEL_NAME, "domain": "universal"}]
+        "vision_model": VISION_MODEL_NAME,
+        "models": [
+            {"id": MODEL_NAME, "name": MODEL_NAME, "domain": "text_reasoning"},
+            {"id": VISION_MODEL_NAME, "name": VISION_MODEL_NAME, "domain": "vision_multimodal"}
+        ]
     }
 
 

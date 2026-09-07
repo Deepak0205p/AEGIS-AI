@@ -6,9 +6,9 @@ Generates code, runs in sandbox, retries on failure (up to 2 times), and display
 
 import re
 from typing import AsyncGenerator, Dict, Any, List, Optional
-from backend.config import logger
+from backend.config import logger, GENERATED_DIR
 from backend.ollama_client import call_ollama, filter_thinking
-from backend.db import build_context_messages, save_message
+from backend.db import build_context_messages, save_message, save_file_record
 from backend.sandbox import execute_python_sandbox
 
 CODE_SYSTEM_PROMPT = """ANTI-HALLUCINATION RULES:
@@ -124,7 +124,14 @@ async def handle_code_mode(
                 error_diagnostic = f"Execution of your script failed with exit code {sandbox_result['exit_code']}.\n"
                 if sandbox_result['exit_code'] == 124:
                     error_diagnostic += "CAUSE: Infinite loop or execution timed out (>20s). Ensure loop counter increments unconditionally at the end of the loop, and 2 is recognized as prime.\n"
-                error_diagnostic += f"Stderr Output:\n{sandbox_result['stderr']}\n\nStdout Output:\n{sandbox_result['stdout']}\n\nFix this error. Return only the corrected full script in a ```python ... ``` block."
+                
+                # Extract specific error type for targeted diagnosis
+                stderr_text = sandbox_result['stderr']
+                error_type_match = re.search(r'(\w+Error):', stderr_text)
+                if error_type_match:
+                    error_diagnostic += f"Error Type: {error_type_match.group(1)}\n"
+                
+                error_diagnostic += f"Stderr Output:\n{stderr_text}\n\nStdout Output:\n{sandbox_result['stdout']}\n\nFix this error. Return only the corrected full script in a ```python ... ``` block."
                 
                 fix_messages = messages + [
                     {"role": "assistant", "content": f"```python\n{extracted_code}\n```"},
@@ -160,12 +167,42 @@ async def handle_code_mode(
     # Stream sandbox output verbatim
     yield {"token": f"\n\n**Sandbox Output (Verified):**\n```\n{run_output_formatted}\n```\n"}
     
+    # ── Handle Generated Files ──
+    generated_files = sandbox_result.get("generated_files", []) if sandbox_result else []
+    generated_file_url = None
+    if generated_files:
+        import shutil
+        chat_gen_dir = GENERATED_DIR / chat_id
+        chat_gen_dir.mkdir(parents=True, exist_ok=True)
+        
+        file_links = []
+        for gf in generated_files:
+            try:
+                src_path = gf["path"]
+                import uuid as _uuid
+                file_id = _uuid.uuid4().hex[:12]
+                dest_path = chat_gen_dir / f"{file_id}_{gf['name']}"
+                shutil.copy2(src_path, str(dest_path))
+                save_file_record(file_id, chat_id, gf["name"], gf["extension"].lstrip("."), str(dest_path))
+                download_url = f"/api/files/{file_id}"
+                if not generated_file_url:
+                    generated_file_url = download_url
+                size_kb = round(gf["size_bytes"] / 1024, 1)
+                file_links.append(f"📁 [{gf['name']}]({download_url}) ({size_kb} KB)")
+            except Exception as e:
+                logger.warning(f"[CODE_MODE] Failed to register generated file {gf['name']}: {e}")
+        
+        if file_links:
+            files_msg = "\n\n**Generated Files:**\n" + "\n".join(file_links)
+            yield {"token": files_msg}
+            run_output_formatted += files_msg
+    
     full_stored_content = f"```python\n{extracted_code}\n```\n\n**Sandbox Output:**\n```\n{run_output_formatted}\n```"
     save_message(chat_id, "assistant", full_stored_content, mode="code")
     
     yield {
         "done": True,
-        "generated_file": None,
+        "generated_file": generated_file_url,
         "run_output": run_output_formatted,
         "code": extracted_code,
         "status": status_str,

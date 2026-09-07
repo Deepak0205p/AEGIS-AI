@@ -10,47 +10,85 @@ from backend.ollama_client import call_ollama
 from backend.db import build_context_messages, save_message
 from backend.deliverables import create_deliverable_file
 
-DOC_PLANNER_SYSTEM_PROMPT = """ANTI-HALLUCINATION RULES:
-- Answer ONLY from: (a) the user's messages, (b) conversation history, (c) actual tool/sandbox output. Nothing else.
-- NEVER invent: numbers, dates, names, standards/clause numbers, quotes, file contents, or "results" of anything we did not actually run.
-- If information needed for an answer is missing, ASK one specific question instead of guessing. "I'm not sure, I need X" is always acceptable.
-- Never claim to have run, searched, or verified anything that was not actually executed.
-- Short and honest beats long and confident-but-wrong.
+DOC_PLANNER_SYSTEM_PROMPT = """You are an expert document architect and technical writer for an industrial enterprise platform.
+Your task is to create a complete, comprehensive, and highly professional document plan in JSON format based on the user's request.
 
-DOCUMENT PLANNER DIRECTIVE:
-You are a document planner. Using ONLY information present in this conversation, output JSON:
+DOCUMENT SCHEMA:
 {
-  "title": "<document title>",
-  "filename": "<safe filename with appropriate extension>",
+  "title": "<Professional Document Title>",
+  "filename": "<safe_descriptive_filename.docx>",
   "blocks": [
     {
-      "type": "heading|paragraph|bullets|table|chart",
-      "text": "<content or heading text, or 'NEEDS_INPUT' if missing from conversation>",
-      "level": 1,
-      "items": ["<bullet 1>", "<bullet 2>"],
-      "rows": [["Col 1", "Col 2"], ["Val 1", "Val 2"]],
-      "question": "<specific question to ask user if text is NEEDS_INPUT>"
+      "type": "heading",
+      "text": "Executive Summary",
+      "level": 1
+    },
+    {
+      "type": "paragraph",
+      "text": "Detailed, thorough paragraph explaining the objective, scope, background, and operational context."
+    },
+    {
+      "type": "bullets",
+      "items": [
+        "Key operational parameter or requirement 1",
+        "Key operational parameter or requirement 2",
+        "Key operational parameter or requirement 3"
+      ]
+    },
+    {
+      "type": "heading",
+      "text": "Technical Specifications & Parameters",
+      "level": 1
+    },
+    {
+      "type": "table",
+      "rows": [
+        ["Parameter / Component", "Design Spec", "Operating Range", "Status"],
+        ["Operating Pressure", "15.2 bar", "14.0 - 16.5 bar", "Normal"],
+        ["Process Temperature", "240 °C", "220 - 260 °C", "Normal"],
+        ["Flow Rate", "450 m3/h", "400 - 500 m3/h", "Optimal"]
+      ]
+    },
+    {
+      "type": "heading",
+      "text": "Standard Operating & Safety Procedures",
+      "level": 1
+    },
+    {
+      "type": "bullets",
+      "items": [
+        "Pre-start inspection of all isolation valves and pressure relief devices",
+        "Continuous monitoring of differential pressure and seal flush systems",
+        "Emergency shutdown protocol execution upon high vibration alarm"
+      ]
     }
   ]
 }
-If data needed for any section is NOT in the conversation, set that block's text to "NEEDS_INPUT" and add "question": "<what you need>". Never invent numbers, names, dates, or findings. Output ONLY valid JSON."""
+
+RULES:
+1. Always generate a COMPLETE, ready-to-render document with multi-paragraph content, structured tables, and clear headings (level 1, 2, 3).
+2. Populate realistic, domain-accurate engineering/operational data, metrics, standards, and procedures.
+3. Use a mix of headings, paragraphs, bullet lists, and tables to make the document rich and well-structured.
+4. Output ONLY valid, parseable JSON. Do not include markdown commentary or reasoning outside the JSON."""
 
 
 def parse_plan_json(raw_text: str) -> Optional[Dict[str, Any]]:
-    """Extracts and parses JSON object from model output."""
+    """Extracts and parses JSON object from model output with multi-strategy fallbacks."""
+    if not raw_text:
+        return None
+    import re
     raw = raw_text.strip()
-    # Strip markdown code fencing if present
-    if raw.startswith("```"):
-        lines = raw.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw = "\n".join(lines).strip()
-        
+    
+    # Strategy 1: Strip markdown code fencing if present
+    cleaned = raw
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```")[1].split("```")[0].strip()
+
     try:
-        data = json.loads(raw)
-        if isinstance(data, dict) and "blocks" in data:
+        data = json.loads(cleaned)
+        if isinstance(data, dict) and ("blocks" in data or "sheets" in data or "title" in data):
             return data
         elif isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
             return {"title": "Document", "filename": "document.docx", "blocks": data}
@@ -58,6 +96,25 @@ def parse_plan_json(raw_text: str) -> Optional[Dict[str, Any]]:
             return data
     except Exception:
         pass
+
+    # Strategy 2: Direct load on raw
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+
+    # Strategy 3: Regex extract outermost JSON object {...}
+    match = re.search(r'(\{[\s\S]*\})', raw)
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+
     return None
 
 
@@ -65,18 +122,20 @@ async def handle_document_mode(
     mode: str,
     chat_id: str,
     user_message: str,
+    custom_system_prompt: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Executes Document / Excel / PPT mode:
     1. Plan with json_mode=True, temperature 0.3
-    2. Check for NEEDS_INPUT blocks -> ask question and pause if so
+    2. Check for explicit NEEDS_INPUT blocks -> ask question and pause if so
     3. Generate genuine binary deliverable with Python
     4. Stream progress and emit final file download link.
     """
     logger.info(f"[{mode.upper()}_MODE] chat_id={chat_id} temperature=0.3 mode={mode}")
     
+    system_prompt = custom_system_prompt if custom_system_prompt else DOC_PLANNER_SYSTEM_PROMPT
     save_message(chat_id, "user", user_message, mode=mode)
-    messages = await build_context_messages(chat_id, DOC_PLANNER_SYSTEM_PROMPT, user_message)
+    messages = await build_context_messages(chat_id, system_prompt, user_message)
     
     yield {"token": f"Planning {mode.upper()} structure based on conversation data...\n"}
     
@@ -95,7 +154,7 @@ async def handle_document_mode(
         plan_data = parse_plan_json(str(retry_raw))
         
     if not plan_data:
-        error_msg = f"Failed to parse document plan from model. Never fabricating unverified data."
+        error_msg = f"Failed to parse document plan from model."
         logger.error(error_msg)
         save_message(chat_id, "assistant", error_msg, mode=mode)
         yield {
@@ -109,18 +168,23 @@ async def handle_document_mode(
         }
         return
 
-    # Step 3: Check for NEEDS_INPUT blocks
+    # Normalize plan_data
+    if "blocks" not in plan_data and "sheets" not in plan_data:
+        plan_data["blocks"] = [{"type": "paragraph", "text": str(plan_data.get("description") or user_message)}]
+
+    # Step 3: Check for explicit NEEDS_INPUT blocks
     blocks = plan_data.get("blocks", [])
     missing_inputs = []
     
     for b in blocks:
+        if not isinstance(b, dict):
+            continue
         text_val = str(b.get("text", "")).strip()
         status_val = str(b.get("status", "")).strip()
         question = b.get("question")
         
-        if text_val == "NEEDS_INPUT" or status_val == "NEEDS_INPUT" or question:
-            q_text = question or f"Missing required information for section '{b.get('type', 'section')}'."
-            missing_inputs.append(q_text)
+        if (text_val == "NEEDS_INPUT" or status_val == "NEEDS_INPUT") and question:
+            missing_inputs.append(question)
 
     if missing_inputs:
         clarifying_question = "\n".join([f"• {q}" for q in missing_inputs])

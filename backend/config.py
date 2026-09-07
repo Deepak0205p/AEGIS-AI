@@ -19,7 +19,13 @@ PROJECT_ROOT = BACKEND_DIR.parent if BACKEND_DIR.name == "backend" else BACKEND_
 LOGS_DIR = PROJECT_ROOT / "logs"
 SANDBOX_JOBS_DIR = PROJECT_ROOT / "sandbox_jobs"
 GENERATED_DIR = PROJECT_ROOT / "generated"
-DB_PATH = PROJECT_ROOT / "chat_history.db"
+
+# XAMPP MySQL Database Configuration
+MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DB = os.getenv("MYSQL_DB", "sih_sovereign_ai")
 
 # Ensure runtime directories exist
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -27,7 +33,8 @@ SANDBOX_JOBS_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 # Model configuration: Exact model tag from `ollama list`
-MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-v4-pro:4b")
+MODEL_NAME = os.getenv("MODEL_NAME", "gemma4-e4b:latest")
+VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME", "qwen2.5vl:3b")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
 NUM_CTX = int(os.getenv("NUM_CTX", "8192"))
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "60.0"))
@@ -39,7 +46,7 @@ MIN_RAG_SCORE = float(os.getenv("MIN_RAG_SCORE", "0.3"))
 RAG_CACHE_TTL_SECONDS = 600.0  # 10 minutes
 
 # Universal equipment tag pattern (e.g. F-101, HEX-201, TK-1002, P-101A, MOV-104)
-EQUIPMENT_TAG_REGEX = r"\b[A-Z]{1,4}[- ]?\d{2,5}[A-Z]?\b"
+EQUIPMENT_TAG_REGEX = r"\b[A-Z]{1,4}[-]\d{2,5}[A-Z]?\b"
 
 # Domain technical keywords that trigger RAG search
 RAG_DOMAIN_KEYWORDS = [

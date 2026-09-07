@@ -2,6 +2,7 @@
 Sandbox execution engine for Python code verification.
 Prioritizes fully isolated Docker container (--network none, memory/CPU bounds).
 Gracefully falls back to local sandboxed subprocess if Docker is unavailable.
+Supports generated file detection for downloadable outputs.
 """
 
 import os
@@ -30,6 +31,32 @@ def is_docker_available() -> bool:
         return False
 
 
+# File extensions considered as generated output files
+GENERATED_FILE_EXTENSIONS = {
+    ".csv", ".json", ".xlsx", ".xls", ".png", ".jpg", ".jpeg",
+    ".svg", ".html", ".txt", ".pdf", ".xml", ".parquet",
+}
+
+
+def _scan_generated_files(job_dir: Path, exclude_files: set) -> list:
+    """Scans job directory for files created by the script execution."""
+    generated = []
+    try:
+        for f in job_dir.iterdir():
+            if f.is_file() and f.name not in exclude_files:
+                ext = f.suffix.lower()
+                if ext in GENERATED_FILE_EXTENSIONS:
+                    generated.append({
+                        "name": f.name,
+                        "path": str(f),
+                        "size_bytes": f.stat().st_size,
+                        "extension": ext,
+                    })
+    except Exception as e:
+        logger.warning(f"[SANDBOX] Error scanning generated files: {e}")
+    return generated
+
+
 def execute_python_sandbox(code: str, job_id: str = None) -> Dict[str, Any]:
     """
     Executes Python script in an isolated sandbox.
@@ -41,7 +68,8 @@ def execute_python_sandbox(code: str, job_id: str = None) -> Dict[str, Any]:
         "exit_code": int,
         "isolated": bool,
         "execution_time_sec": float,
-        "success": bool
+        "success": bool,
+        "generated_files": list
     }
     """
     if not job_id:
@@ -95,6 +123,12 @@ def execute_python_sandbox(code: str, job_id: str = None) -> Dict[str, Any]:
             exit_code = res.returncode
             isolated = True
         except subprocess.TimeoutExpired:
+            # Gracefully kill any leftover container
+            try:
+                subprocess.run(["docker", "kill", f"sandbox_{job_id}"], timeout=3,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
             stderr = "Execution timed out (exceeded 20 seconds limit)."
             exit_code = 124
             isolated = True
@@ -128,7 +162,14 @@ def execute_python_sandbox(code: str, job_id: str = None) -> Dict[str, Any]:
             stderr = res.stderr
             exit_code = res.returncode
             isolated = False
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as te:
+            # Kill the process tree to prevent zombies
+            try:
+                if hasattr(te, 'cmd'):
+                    import signal
+                    os.kill(res.pid, signal.SIGTERM) if hasattr(res, 'pid') else None
+            except Exception:
+                pass
             stderr = "Execution timed out (exceeded 20 seconds limit)."
             exit_code = 124
             isolated = False
@@ -147,6 +188,11 @@ def execute_python_sandbox(code: str, job_id: str = None) -> Dict[str, Any]:
     if stderr:
         logger.debug(f"[SANDBOX stderr] {stderr.strip()[:300]}")
 
+    # Scan for generated output files
+    generated_files = _scan_generated_files(job_dir, exclude_files={"main.py"})
+    if generated_files:
+        logger.info(f"[SANDBOX] Generated files detected: {[f['name'] for f in generated_files]}")
+
     return {
         "job_id": job_id,
         "stdout": stdout,
@@ -154,5 +200,6 @@ def execute_python_sandbox(code: str, job_id: str = None) -> Dict[str, Any]:
         "exit_code": exit_code,
         "isolated": isolated,
         "execution_time_sec": elapsed,
-        "success": success
+        "success": success,
+        "generated_files": generated_files
     }

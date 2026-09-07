@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Optional, AsyncGenerator, Union
 
 from backend.config import (
     MODEL_NAME,
+    VISION_MODEL_NAME,
     OLLAMA_HOST,
     NUM_CTX,
     OLLAMA_TIMEOUT,
@@ -140,10 +141,11 @@ async def check_ollama_health() -> Dict[str, Any]:
                     f"Model '{MODEL_NAME}' is missing from Ollama. Available: {models}. Fix: {exact_fix}"
                 )
                 
-            logger.info(f"Ollama health check PASSED. Active model: {MODEL_NAME}")
+            logger.info(f"Ollama health check PASSED. Active text model: {MODEL_NAME}, vision model: {VISION_MODEL_NAME}")
             return {
                 "status": "ok",
                 "model": MODEL_NAME,
+                "vision_model": VISION_MODEL_NAME,
                 "available_models": models,
                 "ollama_host": OLLAMA_HOST,
             }
@@ -155,19 +157,23 @@ async def check_ollama_health() -> Dict[str, Any]:
 
 
 async def call_ollama(
-    messages: List[Dict[str, str]],
+    messages: List[Dict[str, Any]],
     stream: bool = True,
     temperature: float = 0.5,
     json_mode: bool = False,
     max_tokens: Optional[int] = None,
     think: Optional[bool] = None,
+    images: Optional[List[str]] = None,
+    model: Optional[str] = None,
 ) -> Union[AsyncGenerator[Dict[str, str], None], str]:
     """
     Single inference gateway for all modes.
+    Supports multimodal inputs with base64 image strings.
     Yields Dict[str, str] with keys:
       - "type": "thinking" | "content"
       - "token": str
     """
+    target_model = model or (VISION_MODEL_NAME if images else MODEL_NAME)
     url = f"{OLLAMA_HOST}/api/chat"
     
     eff_num_predict = max_tokens if (max_tokens is not None and max_tokens > 0) else 2048
@@ -180,9 +186,19 @@ async def call_ollama(
         "num_predict": eff_num_predict,
     }
     
+    # Inject images into the last user message if provided
+    formatted_messages = list(messages)
+    if images and formatted_messages:
+        for idx in range(len(formatted_messages) - 1, -1, -1):
+            if formatted_messages[idx].get("role") == "user":
+                msg_copy = dict(formatted_messages[idx])
+                msg_copy["images"] = images
+                formatted_messages[idx] = msg_copy
+                break
+
     payload: Dict[str, Any] = {
-        "model": MODEL_NAME,
-        "messages": messages,
+        "model": target_model,
+        "messages": formatted_messages,
         "stream": stream,
         "options": options,
     }
@@ -194,7 +210,7 @@ async def call_ollama(
         payload["format"] = "json"
 
     logger.info(
-        f"Ollama inference request -> model={MODEL_NAME}, temp={temperature}, "
+        f"Ollama inference request -> model={target_model}, temp={temperature}, "
         f"num_predict={eff_num_predict}, think={think}, "
         f"json_mode={json_mode}, stream={stream}, messages_count={len(messages)}"
     )
@@ -273,3 +289,66 @@ async def _non_stream_ollama(url: str, payload: Dict[str, Any]) -> str:
             return filter_thinking(raw_text)
     except httpx.RequestError as e:
         raise OllamaConnectionError(f"Cannot reach Ollama at {OLLAMA_HOST}: {e}. Fix: {exact_fix}") from e
+
+
+async def unload_model(model_name: str) -> bool:
+    """
+    Explicitly unloads a model from Ollama VRAM by setting keep_alive=0.
+    This frees GPU memory before loading a different model.
+    Returns True if successful, False otherwise.
+    """
+    url = f"{OLLAMA_HOST}/api/generate"
+    payload = {
+        "model": model_name,
+        "prompt": "",
+        "keep_alive": 0,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code == 200:
+                logger.info(f"[MODEL_SWAP] Successfully unloaded model '{model_name}' from VRAM")
+                return True
+            else:
+                logger.warning(f"[MODEL_SWAP] Unload request for '{model_name}' returned status {response.status_code}")
+                return False
+    except Exception as e:
+        logger.warning(f"[MODEL_SWAP] Failed to unload model '{model_name}': {e}")
+        return False
+
+
+async def preload_model(model_name: str, keep_alive: int = 300) -> bool:
+    """
+    Preloads a model into Ollama VRAM with a specified keep_alive duration (seconds).
+    This ensures the model is warm and ready for inference.
+    Returns True if successful, False otherwise.
+    """
+    url = f"{OLLAMA_HOST}/api/generate"
+    payload = {
+        "model": model_name,
+        "prompt": "",
+        "keep_alive": keep_alive,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code == 200:
+                logger.info(f"[MODEL_SWAP] Successfully preloaded model '{model_name}' (keep_alive={keep_alive}s)")
+                return True
+            else:
+                logger.warning(f"[MODEL_SWAP] Preload request for '{model_name}' returned status {response.status_code}")
+                return False
+    except Exception as e:
+        logger.warning(f"[MODEL_SWAP] Failed to preload model '{model_name}': {e}")
+        return False
+
+
+async def swap_to_model(target_model: str, unload_model_name: str) -> bool:
+    """
+    Performs a full model swap: unloads current model from VRAM, then preloads target.
+    Used for vision↔text model transitions on VRAM-constrained systems.
+    """
+    logger.info(f"[MODEL_SWAP] Swapping: unload '{unload_model_name}' → load '{target_model}'")
+    await unload_model(unload_model_name)
+    return await preload_model(target_model)
+
