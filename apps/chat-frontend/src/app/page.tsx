@@ -740,6 +740,7 @@ export default function GeminiReplicaChatApp() {
 
   useEffect(() => {
     initAuth();
+    useDeliverableStore.getState().fetchDiskDeliverables();
   }, [initAuth]);
 
   useEffect(() => {
@@ -1161,32 +1162,41 @@ export default function GeminiReplicaChatApp() {
                             {/* Generated Deliverables Interactive Badges */}
                             {msg.deliverable_ids && msg.deliverable_ids.length > 0 && (
                               <div className="pt-2 flex flex-wrap gap-2 w-full">
-                                {msg.deliverable_ids.map((deliv) => (
-                                  <div
-                                    key={deliv}
-                                    className="flex items-center space-x-2 px-3 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-xs text-slate-900 font-medium transition-all group shadow-xs dark:bg-[#121215] dark:hover:bg-[#19191e] dark:border-[#2a2a32] dark:text-[#e3e3e3] w-full sm:w-auto"
-                                  >
-                                    <button
-                                      onClick={() => openCanvas(deliv)}
-                                      className="flex items-center space-x-2 text-left truncate flex-1 hover:text-blue-600 dark:hover:text-[#a8c7fa] transition-colors cursor-pointer"
-                                      title="Open & Edit Live in Interactive Workspace"
+                                {msg.deliverable_ids.map((deliv) => {
+                                  const cleanId = deliv.replace(/^\/api\/files\/(download\/)?/, '').trim();
+                                  const matchedDeliv = deliverables.find(
+                                    (d) => d.id === cleanId || d.filename.toLowerCase() === cleanId.toLowerCase()
+                                  );
+                                  const displayName = matchedDeliv?.filename || (cleanId.includes('.') ? cleanId : `${cleanId}.docx`);
+                                  const downloadUrl = `/api/files/${cleanId}`;
+
+                                  return (
+                                    <div
+                                      key={deliv}
+                                      className="flex items-center space-x-2 px-3 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-xs text-slate-900 font-medium transition-all group shadow-xs dark:bg-[#121215] dark:hover:bg-[#19191e] dark:border-[#2a2a32] dark:text-[#e3e3e3] w-full sm:w-auto"
                                     >
-                                      <Sparkles className="h-4 w-4 text-blue-600 dark:text-[#a8c7fa] shrink-0" />
-                                      <span className="truncate max-w-[200px] font-bold">{deliv}</span>
-                                      <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-blue-50 text-blue-700 border border-blue-200 dark:bg-[#1c2230] dark:text-[#a8c7fa] dark:border-[#2f3d5a]">
-                                        Edit Live
-                                      </span>
-                                    </button>
-                                    <a
-                                      href={`/api/files/download/${deliv}`}
-                                      download
-                                      title="Download original file"
-                                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-[#282834] text-slate-400 dark:text-[#8e918f] hover:text-slate-800 dark:hover:text-[#e3e3e3] transition-colors ml-1"
-                                    >
-                                      <Download className="h-3.5 w-3.5" />
-                                    </a>
-                                  </div>
-                                ))}
+                                      <button
+                                        onClick={() => openCanvas(matchedDeliv || deliv)}
+                                        className="flex items-center space-x-2 text-left truncate flex-1 hover:text-blue-600 dark:hover:text-[#a8c7fa] transition-colors cursor-pointer"
+                                        title="Open & Edit Live in Interactive Workspace"
+                                      >
+                                        <Sparkles className="h-4 w-4 text-blue-600 dark:text-[#a8c7fa] shrink-0" />
+                                        <span className="truncate max-w-[200px] font-bold">{displayName}</span>
+                                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-blue-50 text-blue-700 border border-blue-200 dark:bg-[#1c2230] dark:text-[#a8c7fa] dark:border-[#2f3d5a]">
+                                          Edit Live
+                                        </span>
+                                      </button>
+                                      <a
+                                        href={downloadUrl}
+                                        download
+                                        title={`Download ${displayName}`}
+                                        className="p-1 rounded hover:bg-slate-100 dark:hover:bg-[#282834] text-slate-400 dark:text-[#8e918f] hover:text-slate-800 dark:hover:text-[#e3e3e3] transition-colors ml-1"
+                                      >
+                                        <Download className="h-3.5 w-3.5" />
+                                      </a>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             )}
 

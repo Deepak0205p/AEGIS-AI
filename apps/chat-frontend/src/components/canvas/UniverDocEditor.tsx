@@ -171,22 +171,100 @@ export function UniverDocEditor({ deliverable }: UniverDocEditorProps) {
       `;
     }
 
+    const fLower = deliverable.filename.toLowerCase();
+    const titleClean = deliverable.filename.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ').toUpperCase();
+
+    if (fLower.includes('insurance') || fLower.includes('machinery') || fLower.includes('letter')) {
+      return `
+        <div style="font-family: Calibri, 'Segoe UI', Arial, sans-serif; color: #0f172a; line-height: 1.6;">
+          <div style="text-align: right; color: #64748b; font-size: 13px; margin-bottom: 20px;">
+            <p><strong>Ref:</strong> MRPL/ENG-INS/2026/089</p>
+            <p><strong>Date:</strong> ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+          </div>
+
+          <div style="margin-bottom: 24px; font-size: 14px; line-height: 1.5;">
+            <p><strong>To,</strong></p>
+            <p>The Senior Divisional Manager / Underwriting Head</p>
+            <p>Industrial & Engineering Risk Underwriting Division</p>
+            <p>National Insurance Company Ltd. / United India Insurance</p>
+          </div>
+
+          <h2 style="color: #1e40af; border-bottom: 2px solid #cbd5e1; padding-bottom: 6px; font-size: 16px; font-weight: 800; text-transform: uppercase;">
+            Subject: Formal Application for Machinery Breakdown & Comprehensive Plant Asset Coverage
+          </h2>
+
+          <p style="margin-top: 16px; font-size: 14px;">Dear Sir/Madam,</p>
+          <p style="font-size: 14px; margin-top: 8px;">
+            We hereby submit our formal request for the endorsement and renewal of Machinery Breakdown (MBD) and Comprehensive Industrial Risk Insurance for our high-criticality refinery machinery and rotary equipment.
+          </p>
+
+          <h3 style="color: #0369a1; margin-top: 20px; font-size: 14px; font-weight: 700;">1. Equipment Inventory & Valuation Details</h3>
+          <table style="width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 16px; border: 1px solid #cbd5e1; font-size: 13px;">
+            <thead>
+              <tr style="background-color: #f1f5f9; border-bottom: 2px solid #cbd5e1;">
+                <th style="padding: 8px 10px; text-align: left; border: 1px solid #cbd5e1;">Tag / Asset ID</th>
+                <th style="padding: 8px 10px; text-align: left; border: 1px solid #cbd5e1;">Description</th>
+                <th style="padding: 8px 10px; text-align: center; border: 1px solid #cbd5e1;">Operating Rating</th>
+                <th style="padding: 8px 10px; text-align: right; border: 1px solid #cbd5e1;">Declared Sum Insured</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0; font-weight: 600;">P-104A/B</td>
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0;">Crude Distillation Multi-Stage Feed Pump</td>
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0; text-align: center;">450 kW / 2950 RPM</td>
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0; text-align: right;">₹ 4,85,00,000</td>
+              </tr>
+              <tr style="background-color: #f8fafc;">
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0; font-weight: 600;">C-201</td>
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0;">Centrifugal Cracked Gas Compressor</td>
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0; text-align: center;">18.5 Bar / 1.2 MW</td>
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0; text-align: right;">₹ 18,20,00,000</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0; font-weight: 600;">F-101</td>
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0;">Crude Vacuum Charge Furnace</td>
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0; text-align: center;">42 GCal/hr Heavy Duty</td>
+                <td style="padding: 8px 10px; border: 1px solid #e2e8f0; text-align: right;">₹ 32,50,00,000</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3 style="color: #0369a1; margin-top: 18px; font-size: 14px; font-weight: 700;">2. Risk Mitigation & Statutory Compliance</h3>
+          <p style="font-size: 13.5px; line-height: 1.6;">
+            All designated assets are operated under strict compliance with OISD-STD-105, API 610/617, and certified ISO 55001 Asset Integrity Management Systems. Predictive vibration diagnostics, thermography surveys, and lube oil analysis are logged bi-weekly.
+          </p>
+
+          <h3 style="color: #0369a1; margin-top: 18px; font-size: 14px; font-weight: 700;">3. Action Requested</h3>
+          <p style="font-size: 13.5px; line-height: 1.6;">
+            Kindly arrange the technical pre-risk inspection by your certified surveyor and issue the formal premium quote along with the policy endorsement draft at your earliest convenience.
+          </p>
+
+          <div style="margin-top: 32px; font-size: 13.5px;">
+            <p>Yours faithfully,</p>
+            <p style="margin-top: 24px; font-weight: bold; color: #1e3a8a;">Authorised Signatory / Chief General Manager (Engineering & Finance)</p>
+            <p style="color: #64748b;">Mangalore Refinery and Petrochemicals Limited (MRPL)</p>
+          </div>
+        </div>
+      `;
+    }
+
     return `
-      <h1 style="color: #1e40af; border-bottom: 2px solid #cbd5e1; padding-bottom: 8px; font-size: 22px; font-weight: 800; letter-spacing: -0.02em;">${deliverable.filename.replace(/\.[^/.]+$/, '').toUpperCase()}</h1>
+      <h1 style="color: #1e40af; border-bottom: 2px solid #cbd5e1; padding-bottom: 8px; font-size: 22px; font-weight: 800; letter-spacing: -0.02em;">${titleClean}</h1>
       <p style="color: #64748b; font-size: 13px; margin-top: 6px;"><strong>Classification:</strong> Confidential Refinery Standard Operating Procedure &bull; <strong>Status:</strong> AUTHORIZED</p>
-      <p style="color: #1e293b; line-height: 1.7; margin-top: 12px; font-size: 14px;"><strong>Summary:</strong> ${deliverable.summary}</p>
+      <p style="color: #1e293b; line-height: 1.7; margin-top: 12px; font-size: 14px;"><strong>Summary:</strong> ${deliverable.summary || 'Technical engineering deliverable and operational benchmark document.'}</p>
       
       <h2 style="color: #0369a1; margin-top: 24px; font-size: 16px; font-weight: 700;">1. Operational Overview & Objectives</h2>
-      <p style="color: #1e293b; line-height: 1.7; font-size: 14px;">This technical procedure enforces all statutory norms mandated by OISD, Petroleum and Explosives Safety Organization (PESO), and internal MRPL technical benchmarks.</p>
+      <p style="color: #1e293b; line-height: 1.7; font-size: 14px;">This technical document formalizes all statutory norms, process parameters, safety guardrails, and quality specifications mandated by OISD, PESO, and internal MRPL technical benchmarks.</p>
 
       <h2 style="color: #0369a1; margin-top: 24px; font-size: 16px; font-weight: 700;">2. Key Compliance & Performance Criteria</h2>
       <ul style="color: #1e293b; line-height: 1.8; font-size: 14px;">
-        ${deliverable.key_metrics.map(m => `<li><strong>${m.label}:</strong> ${m.value}</li>`).join('')}
+        ${(deliverable.key_metrics || []).map(m => `<li><strong>${m.label}:</strong> ${m.value}</li>`).join('')}
       </ul>
 
       <h2 style="color: #0369a1; margin-top: 24px; font-size: 16px; font-weight: 700;">3. Referenced SOPs and Regulatory Standards</h2>
       <ul style="color: #1e293b; line-height: 1.8; font-size: 14px;">
-        ${deliverable.sop_citations.map(c => `<li>${c}</li>`).join('')}
+        ${(deliverable.sop_citations || ['MRPL Plant Operating Guide', 'OISD-STD-105']).map(c => `<li>${c}</li>`).join('')}
       </ul>
     `;
   };
