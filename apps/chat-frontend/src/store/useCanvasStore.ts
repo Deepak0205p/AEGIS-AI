@@ -37,7 +37,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (typeof deliverableOrId === 'string') {
       const cleanTarget = deliverableOrId.replace(/^\/api\/files\/(download\/)?/, '').trim();
       
-      // Attempt 1: Look up in existing deliverableStore
+      // Always ensure deliverables are synced
+      await useDeliverableStore.getState().fetchDiskDeliverables();
       let { deliverables } = useDeliverableStore.getState();
       item = deliverables.find(
         (d) =>
@@ -46,19 +47,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           d.filename.toLowerCase() === cleanTarget.toLowerCase() ||
           d.filename.toLowerCase() === deliverableOrId.toLowerCase()
       ) || null;
-
-      // Attempt 2: If not found, proactively trigger disk sync and check again
-      if (!item) {
-        await useDeliverableStore.getState().fetchDiskDeliverables();
-        deliverables = useDeliverableStore.getState().deliverables;
-        item = deliverables.find(
-          (d) =>
-            d.id === cleanTarget ||
-            d.id === deliverableOrId ||
-            d.filename.toLowerCase() === cleanTarget.toLowerCase() ||
-            d.filename.toLowerCase() === deliverableOrId.toLowerCase()
-        ) || null;
-      }
 
       if (!item) {
         // Create an on-the-fly deliverable item if it's a newly generated filename or raw ID

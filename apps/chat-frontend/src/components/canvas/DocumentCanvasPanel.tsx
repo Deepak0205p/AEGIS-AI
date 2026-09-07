@@ -82,8 +82,16 @@ export function DocumentCanvasPanel() {
   // 1. Automatic Extension & Language Category Resolver
   const getExtension = () => {
     const dotIdx = filename.lastIndexOf('.');
-    if (dotIdx !== -1) return filename.slice(dotIdx);
-    return `.${deliverableType}`;
+    if (dotIdx !== -1) {
+      const extracted = filename.slice(dotIdx).toLowerCase();
+      if (['.docx', '.doc', '.xlsx', '.xls', '.csv', '.pptx', '.ppt', '.py', '.ipynb', '.sql', '.html', '.htm', '.svg', '.xml', '.css', '.json', '.yaml', '.yml', '.env', '.toml', '.ts', '.tsx', '.js', '.jsx', '.sh', '.bash'].includes(extracted)) {
+        return extracted;
+      }
+    }
+    if (['docx', 'doc', 'xlsx', 'xls', 'csv', 'pptx', 'ppt', 'py', 'ipynb', 'sql', 'html', 'json', 'ts', 'js', 'sh'].includes(deliverableType)) {
+      return `.${deliverableType}`;
+    }
+    return '.docx';
   };
 
   const ext = getExtension();
@@ -96,7 +104,7 @@ export function DocumentCanvasPanel() {
     if (['.pptx', '.ppt'].includes(ext) || deliverableType === 'pptx') {
       return <Presentation className="h-5 w-5 text-orange-600" />;
     }
-    if (['.docx', '.doc'].includes(ext) || deliverableType === 'docx') {
+    if (['.docx', '.doc'].includes(ext) || deliverableType === 'docx' || deliverableType === '') {
       return <FileText className="h-5 w-5 text-blue-600" />;
     }
     if (['.py', '.ipynb'].includes(ext) || deliverableType === 'py') {
@@ -114,7 +122,7 @@ export function DocumentCanvasPanel() {
     if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
       return <FileCode2 className="h-5 w-5 text-blue-500" />;
     }
-    return <Terminal className="h-5 w-5 text-slate-700" />;
+    return <FileText className="h-5 w-5 text-blue-600" />;
   };
 
   // 3. Dedicated Language Viewer Component Resolver
@@ -126,10 +134,6 @@ export function DocumentCanvasPanel() {
     // Presentations
     if (['.pptx', '.ppt'].includes(ext) || deliverableType === 'pptx') {
       return <UniverSlideEditor deliverable={activeDeliverable} />;
-    }
-    // Word Documents
-    if (['.docx', '.doc'].includes(ext) || deliverableType === 'docx') {
-      return <UniverDocEditor deliverable={activeDeliverable} />;
     }
     // Python Logic & Data Scripts
     if (['.py', '.ipynb'].includes(ext) || deliverableType === 'py') {
@@ -151,8 +155,12 @@ export function DocumentCanvasPanel() {
     if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
       return <TsJsCanvasEditor deliverable={activeDeliverable} />;
     }
-    // Shell, Systems Code, Markdown & Logs
-    return <ShellSystemsCanvasEditor deliverable={activeDeliverable} />;
+    // Shell Script specifically
+    if (['.sh', '.bash', '.zsh'].includes(ext) || deliverableType === 'sh') {
+      return <ShellSystemsCanvasEditor deliverable={activeDeliverable} />;
+    }
+    // Default: Word Documents (.docx, .doc, templates, general reports)
+    return <UniverDocEditor deliverable={activeDeliverable} />;
   };
 
   return (

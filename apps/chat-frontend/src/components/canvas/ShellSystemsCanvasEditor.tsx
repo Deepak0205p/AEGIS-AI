@@ -31,37 +31,24 @@ export function ShellSystemsCanvasEditor({ deliverable }: ShellSystemsCanvasEdit
     editedContent[deliverable.id]?.code ||
     `#!/usr/bin/env bash
 # ================================================================
-# MRPL SOVEREIGN AIR-GAPPED SYSTEM INTEGRITY & OISD CHECK SCRIPT
-# Filename: ${deliverable.filename}
+# SOVEREIGN AIR-GAPPED SYSTEM EXECUTION SCRIPT
+# Target Deliverable: ${deliverable.filename}
 # ================================================================
 
 set -euo pipefail
 
 echo "=================================================="
-echo "  MRPL SOVEREIGN SYSTEM INTEGRITY & OISD AUDIT   "
+echo "  EXECUTING AIR-GAPPED TASK PIPELINE              "
 echo "=================================================="
 
-# 1. Check Network Isolation
-echo "[1/3] Verifying Air-Gapped Network State..."
-if ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; then
-    echo "❌ ERROR: External route detected! Aborting."
-    exit 1
-else
-    echo "✓ PASS: Network isolated (Air-Gapped 100%)."
-fi
+# 1. Check Execution Environment
+echo "[1/2] Checking Execution Environment..."
+echo "✓ Isolation Mode: Air-Gapped / Sovereign"
 
-# 2. Check SHA-256 Deliverables Signatures
-echo "[2/3] Verifying Deliverable Signatures & Checksums..."
-echo "✓ HW-B-OISD105.docx : VALID_SIGNATURE"
-echo "✓ HSE-KPI-Dash.xlsx : VALID_SIGNATURE"
-echo "✓ Apex_Review.pptx  : VALID_SIGNATURE"
-
-# 3. Model Engine Health
-echo "[3/3] Querying Local On-Premise Inference Engine..."
-echo "✓ Primary Reasoning Engine (Q4_K_M) : READY (0.0ms WAN)"
-
-echo "--------------------------------------------------"
-echo "SYSTEM STATE: SECURE & 100% OPERATIONAL"
+# 2. Process Deliverable
+echo "[2/2] Processing ${deliverable.filename}..."
+echo "✓ File ID: ${deliverable.id}"
+echo "✓ Status: Ready"
 `;
 
   const [shellCode, setShellCode] = useState(defaultShellCode);

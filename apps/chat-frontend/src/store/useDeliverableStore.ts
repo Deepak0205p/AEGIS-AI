@@ -61,19 +61,36 @@ export const useDeliverableStore = create<DeliverableState>((set, get) => ({
     set({ selectedDeliverable: item });
   },
 
-  addDeliverableFromAgent: (filename: string, scenarioId: string, modelId: string) => {
-    const existing = get().deliverables.find(d => d.filename === filename);
+  addDeliverableFromAgent: (identifierOrFilename: string, scenarioId: string, modelId: string) => {
+    // 1. Clean the identifier if it came as a URL
+    const cleanId = identifierOrFilename.replace(/^\/api\/files\/(download\/)?/, '').trim();
+    if (!cleanId) return;
+
+    // 2. Fetch disk deliverables asynchronously so the genuine item is registered from database
+    get().fetchDiskDeliverables();
+
+    const existing = get().deliverables.find(d => d.id === cleanId || d.filename.toLowerCase() === cleanId.toLowerCase());
     if (existing) return;
 
-    const ext = filename.split('.').pop()?.toLowerCase() as DeliverableType || 'docx';
+    let ext: DeliverableType = 'docx';
+    let filename = cleanId;
+    if (cleanId.includes('.')) {
+      const parsedExt = cleanId.split('.').pop()?.toLowerCase();
+      if (['docx', 'xlsx', 'pptx', 'py'].includes(parsedExt || '')) {
+        ext = parsedExt as DeliverableType;
+      }
+    } else {
+      filename = `${cleanId}.docx`;
+    }
+
     const newItem: DeliverableItem = {
-      id: `deliv-${Date.now()}`,
+      id: cleanId,
       filename,
       type: ext,
-      size_bytes: 15000,
-      size_formatted: '15.0 KB',
+      size_bytes: 24000,
+      size_formatted: '24.0 KB',
       source_scenario: scenarioId,
-      source_requirement: 'Req 10 (Production Deliverables)',
+      source_requirement: 'Production Deliverable',
       generating_model: modelId,
       generated_timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       sha256_hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
