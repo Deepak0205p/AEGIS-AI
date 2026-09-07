@@ -368,7 +368,7 @@ async def swap_to_model(
         except Exception as err:
             logger.warning(f"[MODEL_SWAP] Could not store handoff context: {err}")
 
-    logger.info(f"[MODEL_SWAP] Swapping: unload '{unload_model_name}' → load '{target_model}'")
+    logger.info(f"[MODEL_SWAP] Swapping: unload '{unload_model_name}' -> load '{target_model}'")
     await unload_model(unload_model_name)
     return await preload_model(target_model)
 
