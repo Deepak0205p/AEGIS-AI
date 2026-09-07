@@ -343,6 +343,28 @@ export function UniverSlideEditor({ deliverable }: UniverSlideEditorProps) {
   useEffect(() => {
     const initial = getInitialSlides();
     setSlides(initial);
+
+    // Automatically fetch genuine parsed .pptx slides from backend
+    const fetchLiveContent = async () => {
+      const cleanId = deliverable.id.replace(/^\/api\/files\/(download\/)?/, '').trim();
+      if (!cleanId) return;
+
+      const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
+      try {
+        const res = await fetch(`http://${host}:8000/api/files/${cleanId}/content`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.slides && Array.isArray(data.slides) && data.slides.length > 0) {
+            setSlides(data.slides);
+            updateEditedContent(deliverable.id, { slides: data.slides });
+          }
+        }
+      } catch (err) {
+        console.warn('[UniverSlideEditor] Fallback to initial slides:', err);
+      }
+    };
+
+    fetchLiveContent();
   }, [deliverable.id]);
 
   const currentSlide = slides[activeSlideIndex] || slides[0];

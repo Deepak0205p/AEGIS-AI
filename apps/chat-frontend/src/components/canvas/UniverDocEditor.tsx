@@ -278,6 +278,32 @@ export function UniverDocEditor({ deliverable }: UniverDocEditorProps) {
       editorRef.current.innerHTML = initial;
       updateStats(editorRef.current.innerText || '');
     }
+
+    // Automatically fetch genuine parsed .docx content from backend
+    const fetchLiveContent = async () => {
+      const cleanId = deliverable.id.replace(/^\/api\/files\/(download\/)?/, '').trim();
+      if (!cleanId) return;
+
+      const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
+      try {
+        const res = await fetch(`http://${host}:8000/api/files/${cleanId}/content`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.html) {
+            setDocHtml(data.html);
+            updateEditedContent(deliverable.id, { html: data.html });
+            if (editorRef.current) {
+              editorRef.current.innerHTML = data.html;
+              updateStats(editorRef.current.innerText || '');
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[UniverDocEditor] Fallback to initial docHtml:', err);
+      }
+    };
+
+    fetchLiveContent();
   }, [deliverable.id]);
 
   const updateStats = (text: string) => {

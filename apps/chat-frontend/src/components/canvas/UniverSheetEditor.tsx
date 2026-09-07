@@ -218,10 +218,37 @@ export function UniverSheetEditor({ deliverable }: UniverSheetEditorProps) {
   };
 
   const [sheets, setSheets] = useState<SheetTab[]>(getInitialSheets);
+  const [isLoadingContent, setIsLoadingContent] = useState(false);
 
   useEffect(() => {
+    // 1. Initial local state setup
     const initial = getInitialSheets();
     setSheets(initial);
+
+    // 2. Automatically fetch genuine parsed .xlsx data from live backend
+    const fetchLiveContent = async () => {
+      const cleanId = deliverable.id.replace(/^\/api\/files\/(download\/)?/, '').trim();
+      if (!cleanId) return;
+
+      const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
+      try {
+        setIsLoadingContent(true);
+        const res = await fetch(`http://${host}:8000/api/files/${cleanId}/content`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.sheets && Array.isArray(data.sheets) && data.sheets.length > 0) {
+            setSheets(data.sheets);
+            updateEditedContent(deliverable.id, { sheets: data.sheets });
+          }
+        }
+      } catch (err) {
+        console.warn('[UniverSheetEditor] Fallback to cached sheet view:', err);
+      } finally {
+        setIsLoadingContent(false);
+      }
+    };
+
+    fetchLiveContent();
   }, [deliverable.id]);
 
   const currentSheet = sheets[activeSheetIndex] || sheets[0];

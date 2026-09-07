@@ -723,6 +723,154 @@ async def list_files(chat_id: Optional[str] = None):
     return {"files": items}
 
 
+@app.get("/api/files/{file_id}/content")
+async def get_file_content(file_id: str):
+    """
+    Parses and returns structured content of generated deliverables (.xlsx, .docx, .pptx)
+    so Canvas Editors display the EXACT live generated data instead of fallback templates.
+    """
+    record = get_file_record(file_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found.")
+        
+    file_path = Path(record["file_path"])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk.")
+        
+    filename = record["filename"]
+    file_type = record["file_type"].lower()
+
+    # 1. Parse Excel Workbook (.xlsx)
+    if file_type == "xlsx":
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(str(file_path), data_only=True)
+            sheets_out = []
+            for s_idx, ws in enumerate(wb.worksheets):
+                rows_data = []
+                for r_idx, row in enumerate(ws.iter_rows(values_only=True)):
+                    row_cells = []
+                    for c_idx, val in enumerate(row):
+                        is_hdr = (r_idx == 0 or (r_idx == 2 and ws.cell(row=1, column=1).value))
+                        val_str = "" if val is None else str(val)
+                        align = "right" if isinstance(val, (int, float)) else "left"
+                        bg = "#f1f5f9" if is_hdr else "#ffffff"
+                        row_cells.append({
+                            "value": val_str,
+                            "isHeader": is_hdr,
+                            "style": {
+                                "bold": is_hdr,
+                                "align": align,
+                                "bgColor": bg,
+                                "color": "#0f172a" if is_hdr else "#1e293b"
+                            }
+                        })
+                    if any(c["value"] for c in row_cells):
+                        rows_data.append(row_cells)
+                        
+                sheets_out.append({
+                    "id": f"sheet-{s_idx + 1}",
+                    "name": ws.title,
+                    "rows": rows_data if rows_data else [
+                        [{"value": "No Data", "isHeader": False, "style": {"align": "left"}}]
+                    ]
+                })
+            return {"file_id": file_id, "filename": filename, "file_type": "xlsx", "sheets": sheets_out}
+        except Exception as e:
+            logger.error(f"Error parsing xlsx deliverable {file_id}: {e}")
+            return {"file_id": file_id, "filename": filename, "file_type": "xlsx", "error": str(e)}
+
+    # 2. Parse Word Document (.docx)
+    elif file_type == "docx":
+        try:
+            import docx
+            doc = docx.Document(str(file_path))
+            html_parts = []
+            
+            for p in doc.paragraphs:
+                text = p.text.strip()
+                if not text:
+                    continue
+                if p.style.name.startswith("Heading 1"):
+                    html_parts.append(f'<h1 style="color: #1e40af; border-bottom: 2px solid #cbd5e1; padding-bottom: 6px; font-size: 20px; font-weight: 800; margin-top: 18px;">{text}</h1>')
+                elif p.style.name.startswith("Heading 2"):
+                    html_parts.append(f'<h2 style="color: #0369a1; font-size: 16px; font-weight: 700; margin-top: 16px;">{text}</h2>')
+                elif p.style.name.startswith("Heading 3"):
+                    html_parts.append(f'<h3 style="color: #0f172a; font-size: 14px; font-weight: 700; margin-top: 12px;">{text}</h3>')
+                elif p.style.name.startswith("List Bullet") or text.startswith("• ") or text.startswith("- "):
+                    clean_bullet = text.lstrip("•-* ")
+                    html_parts.append(f'<li style="color: #1e293b; line-height: 1.7; font-size: 14px; margin-left: 18px;">{clean_bullet}</li>')
+                else:
+                    html_parts.append(f'<p style="color: #1e293b; line-height: 1.7; font-size: 14px; margin-top: 8px;">{text}</p>')
+
+            for tbl in doc.tables:
+                table_html = ['<table style="width: 100%; border-collapse: collapse; margin-top: 14px; margin-bottom: 18px; border: 1px solid #cbd5e1; font-size: 13px;">']
+                for r_idx, row in enumerate(tbl.rows):
+                    table_html.append("<tr>")
+                    for cell in row.cells:
+                        c_text = cell.text.strip()
+                        if r_idx == 0:
+                            table_html.append(f'<th style="padding: 9px 12px; background-color: #f1f5f9; border: 1px solid #cbd5e1; font-weight: 700; text-align: left; color: #0f172a;">{c_text}</th>')
+                        else:
+                            table_html.append(f'<td style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #334155;">{c_text}</td>')
+                    table_html.append("</tr>")
+                table_html.append("</table>")
+                html_parts.append("".join(table_html))
+
+            final_html = "".join(html_parts)
+            return {"file_id": file_id, "filename": filename, "file_type": "docx", "html": final_html}
+        except Exception as e:
+            logger.error(f"Error parsing docx deliverable {file_id}: {e}")
+            return {"file_id": file_id, "filename": filename, "file_type": "docx", "error": str(e)}
+
+    # 3. Parse PowerPoint Slides (.pptx)
+    elif file_type == "pptx":
+        try:
+            from pptx import Presentation
+            prs = Presentation(str(file_path))
+            slides_out = []
+            
+            for s_idx, slide in enumerate(prs.slides):
+                title = ""
+                subtitle = ""
+                bullets = []
+                notes = ""
+                
+                if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                    notes = slide.notes_slide.notes_text_frame.text.strip()
+                    
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        for p_idx, p in enumerate(shape.text_frame.paragraphs):
+                            t = p.text.strip()
+                            if not t:
+                                continue
+                            if not title:
+                                title = t
+                            elif not subtitle and s_idx == 0:
+                                subtitle = t
+                            else:
+                                bullets.append(t.lstrip("•-*✓ "))
+                                
+                slides_out.append({
+                    "id": s_idx + 1,
+                    "layout": "title" if s_idx == 0 else "content",
+                    "title": title or f"Slide {s_idx + 1}",
+                    "subtitle": subtitle,
+                    "bullets": bullets if bullets else ["Key Takeaways & Findings"],
+                    "kpis": [],
+                    "timeline": [],
+                    "notes": notes,
+                })
+                
+            return {"file_id": file_id, "filename": filename, "file_type": "pptx", "slides": slides_out}
+        except Exception as e:
+            logger.error(f"Error parsing pptx deliverable {file_id}: {e}")
+            return {"file_id": file_id, "filename": filename, "file_type": "pptx", "error": str(e)}
+
+    return {"file_id": file_id, "filename": filename, "file_type": file_type, "content": "Raw Binary"}
+
+
 @app.get("/api/files/{file_id}")
 @app.get("/api/files/download/{file_id}")
 async def download_file(file_id: str):
@@ -757,6 +905,154 @@ async def download_file(file_id: str):
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+
+@app.get("/api/files/{file_id}/content")
+async def get_file_content(file_id: str):
+    """
+    Parses and returns structured content of generated deliverables (.xlsx, .docx, .pptx)
+    so Canvas Editors display the EXACT live generated data instead of fallback templates.
+    """
+    record = get_file_record(file_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found.")
+        
+    file_path = Path(record["file_path"])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk.")
+        
+    filename = record["filename"]
+    file_type = record["file_type"].lower()
+
+    # 1. Parse Excel Workbook (.xlsx)
+    if file_type == "xlsx":
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(str(file_path), data_only=True)
+            sheets_out = []
+            for s_idx, ws in enumerate(wb.worksheets):
+                rows_data = []
+                for r_idx, row in enumerate(ws.iter_rows(values_only=True)):
+                    row_cells = []
+                    for c_idx, val in enumerate(row):
+                        is_hdr = (r_idx == 0 or (r_idx == 2 and ws.cell(row=1, column=1).value))
+                        val_str = "" if val is None else str(val)
+                        align = "right" if isinstance(val, (int, float)) else "left"
+                        bg = "#f1f5f9" if is_hdr else "#ffffff"
+                        row_cells.append({
+                            "value": val_str,
+                            "isHeader": is_hdr,
+                            "style": {
+                                "bold": is_hdr,
+                                "align": align,
+                                "bgColor": bg,
+                                "color": "#0f172a" if is_hdr else "#1e293b"
+                            }
+                        })
+                    if any(c["value"] for c in row_cells):
+                        rows_data.append(row_cells)
+                        
+                sheets_out.append({
+                    "id": f"sheet-{s_idx + 1}",
+                    "name": ws.title,
+                    "rows": rows_data if rows_data else [
+                        [{"value": "No Data", "isHeader": False, "style": {"align": "left"}}]
+                    ]
+                })
+            return {"file_id": file_id, "filename": filename, "file_type": "xlsx", "sheets": sheets_out}
+        except Exception as e:
+            logger.error(f"Error parsing xlsx deliverable {file_id}: {e}")
+            return {"file_id": file_id, "filename": filename, "file_type": "xlsx", "error": str(e)}
+
+    # 2. Parse Word Document (.docx)
+    elif file_type == "docx":
+        try:
+            import docx
+            doc = docx.Document(str(file_path))
+            html_parts = []
+            
+            for p in doc.paragraphs:
+                text = p.text.strip()
+                if not text:
+                    continue
+                if p.style.name.startswith("Heading 1"):
+                    html_parts.append(f'<h1 style="color: #1e40af; border-bottom: 2px solid #cbd5e1; padding-bottom: 6px; font-size: 20px; font-weight: 800; margin-top: 18px;">{text}</h1>')
+                elif p.style.name.startswith("Heading 2"):
+                    html_parts.append(f'<h2 style="color: #0369a1; font-size: 16px; font-weight: 700; margin-top: 16px;">{text}</h2>')
+                elif p.style.name.startswith("Heading 3"):
+                    html_parts.append(f'<h3 style="color: #0f172a; font-size: 14px; font-weight: 700; margin-top: 12px;">{text}</h3>')
+                elif p.style.name.startswith("List Bullet") or text.startswith("• ") or text.startswith("- "):
+                    clean_bullet = text.lstrip("•-* ")
+                    html_parts.append(f'<li style="color: #1e293b; line-height: 1.7; font-size: 14px; margin-left: 18px;">{clean_bullet}</li>')
+                else:
+                    html_parts.append(f'<p style="color: #1e293b; line-height: 1.7; font-size: 14px; margin-top: 8px;">{text}</p>')
+
+            for tbl in doc.tables:
+                table_html = ['<table style="width: 100%; border-collapse: collapse; margin-top: 14px; margin-bottom: 18px; border: 1px solid #cbd5e1; font-size: 13px;">']
+                for r_idx, row in enumerate(tbl.rows):
+                    table_html.append("<tr>")
+                    for cell in row.cells:
+                        c_text = cell.text.strip()
+                        if r_idx == 0:
+                            table_html.append(f'<th style="padding: 9px 12px; background-color: #f1f5f9; border: 1px solid #cbd5e1; font-weight: 700; text-align: left; color: #0f172a;">{c_text}</th>')
+                        else:
+                            table_html.append(f'<td style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #334155;">{c_text}</td>')
+                    table_html.append("</tr>")
+                table_html.append("</table>")
+                html_parts.append("".join(table_html))
+
+            final_html = "".join(html_parts)
+            return {"file_id": file_id, "filename": filename, "file_type": "docx", "html": final_html}
+        except Exception as e:
+            logger.error(f"Error parsing docx deliverable {file_id}: {e}")
+            return {"file_id": file_id, "filename": filename, "file_type": "docx", "error": str(e)}
+
+    # 3. Parse PowerPoint Slides (.pptx)
+    elif file_type == "pptx":
+        try:
+            from pptx import Presentation
+            prs = Presentation(str(file_path))
+            slides_out = []
+            
+            for s_idx, slide in enumerate(prs.slides):
+                title = ""
+                subtitle = ""
+                bullets = []
+                notes = ""
+                
+                if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                    notes = slide.notes_slide.notes_text_frame.text.strip()
+                    
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        for p_idx, p in enumerate(shape.text_frame.paragraphs):
+                            t = p.text.strip()
+                            if not t:
+                                continue
+                            if not title:
+                                title = t
+                            elif not subtitle and s_idx == 0:
+                                subtitle = t
+                            else:
+                                bullets.append(t.lstrip("•-*✓ "))
+                                
+                slides_out.append({
+                    "id": s_idx + 1,
+                    "layout": "title" if s_idx == 0 else "content",
+                    "title": title or f"Slide {s_idx + 1}",
+                    "subtitle": subtitle,
+                    "bullets": bullets if bullets else ["Key Takeaways & Findings"],
+                    "kpis": [],
+                    "timeline": [],
+                    "notes": notes,
+                })
+                
+            return {"file_id": file_id, "filename": filename, "file_type": "pptx", "slides": slides_out}
+        except Exception as e:
+            logger.error(f"Error parsing pptx deliverable {file_id}: {e}")
+            return {"file_id": file_id, "filename": filename, "file_type": "pptx", "error": str(e)}
+
+    return {"file_id": file_id, "filename": filename, "file_type": file_type, "content": "Raw Binary"}
     
 @app.get("/api/models")
 @app.get("/api/v1/models")
