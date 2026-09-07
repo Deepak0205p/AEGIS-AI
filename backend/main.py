@@ -835,12 +835,25 @@ async def get_file_content(file_id: str):
                 subtitle = ""
                 bullets = []
                 notes = ""
+                table_data = None
                 
                 if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
                     notes = slide.notes_slide.notes_text_frame.text.strip()
                     
                 for shape in slide.shapes:
-                    if shape.has_text_frame:
+                    # Check for Table Shape
+                    if shape.has_table:
+                        tbl = shape.table
+                        t_headers = [tbl.cell(0, c_idx).text.strip() for c_idx in range(len(tbl.columns))]
+                        t_rows = []
+                        for r_idx in range(1, len(tbl.rows)):
+                            row_vals = [tbl.cell(r_idx, c_idx).text.strip() for c_idx in range(len(tbl.columns))]
+                            if any(row_vals):
+                                t_rows.append(row_vals)
+                        table_data = {"headers": t_headers, "rows": t_rows}
+                    
+                    # Check for Text Shape
+                    elif shape.has_text_frame:
                         for p_idx, p in enumerate(shape.text_frame.paragraphs):
                             t = p.text.strip()
                             if not t:
@@ -852,12 +865,14 @@ async def get_file_content(file_id: str):
                             else:
                                 bullets.append(t.lstrip("•-*✓ "))
                                 
+                layout_type = "title" if s_idx == 0 else ("table" if table_data else "content")
                 slides_out.append({
                     "id": s_idx + 1,
-                    "layout": "title" if s_idx == 0 else "content",
+                    "layout": layout_type,
                     "title": title or f"Slide {s_idx + 1}",
                     "subtitle": subtitle,
-                    "bullets": bullets if bullets else ["Key Takeaways & Findings"],
+                    "bullets": bullets if bullets else (["Key Takeaways & Findings"] if not table_data else []),
+                    "tableData": table_data,
                     "kpis": [],
                     "timeline": [],
                     "notes": notes,

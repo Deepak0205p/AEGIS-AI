@@ -232,108 +232,32 @@ export function UniverSlideEditor({ deliverable }: UniverSlideEditorProps) {
       return editedContent[deliverable.id].slides;
     }
 
+    const titleClean = deliverable.filename
+      .replace(/\.[^/.]+$/, '')
+      .replace(/[_-]/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+
     return [
       {
         id: 1,
         layout: 'title',
-        title: 'Monthly Apex Safety & Refinery Operations Review',
-        subtitle: 'Executive Engineering Briefing • Q2 FY26 Statutory Compliance',
+        title: titleClean || 'Executive Presentation Briefing',
+        subtitle: deliverable.summary || 'Air-Gapped Sovereign AI Generated Deliverable',
         bullets: [
-          'Zero Loss Time Incidents (LTI) maintained across all process complexes.',
-          '100% compliance with OISD-STD-105 Form B hot work & atmospheric gas safety norms.'
+          'Generated from active session analysis & conversation data.',
+          'Air-gapped and verified for local deployment.',
         ],
-        kpis: [
-          { label: 'Safe Man-Hours', value: '4.82 M', change: '+12% YoY' },
-          { label: 'LTIFR Score', value: '0.00', change: 'Zero Target' },
-          { label: 'Compliance', value: '100%', change: 'Certified' }
-        ],
-        timeline: [
-          { step: '01', title: 'Process Unit Pre-Audit', desc: '4-gas testing verified' },
-          { step: '02', title: 'LOTO Lockout', desc: 'Blind tags installed' },
-          { step: '03', title: 'Hot Work', desc: 'Continuous firewatch' },
-        ],
-        notes: 'Introduce refinery leadership team and emphasize statutory OISD zero-harm targets.',
-        bgColor: '#ffffff',
-        accentColor: '#ea580c'
-      },
-      {
-        id: 2,
-        layout: 'content',
-        title: 'Operational Highlights & Safe Man-Hours',
-        subtitle: 'Key Achievements across Process Units & Contractor Zones',
-        bullets: [
-          '4.82 Million Safe Man-Hours achieved with zero recorded hydrocarbon loss of containment.',
-          'Near-Miss reporting elevated by 38% through real-time mobile safety station logging.',
-          'Contractor safety onboarding program certified with 100% attendance.'
-        ],
-        kpis: [
-          { label: 'Near Miss Log', value: '209', change: 'Addressed' },
-          { label: 'Audits Passed', value: '84', change: '100%' },
-          { label: 'Uptime Score', value: '99.9%', change: 'Nominal' }
-        ],
+        kpis: deliverable.key_metrics && deliverable.key_metrics.length > 0
+          ? deliverable.key_metrics.map(m => ({ label: m.label, value: m.value, change: 'Verified' }))
+          : [
+              { label: 'Status', value: 'VERIFIED', change: '100%' },
+              { label: 'Format', value: 'PPTX', change: 'Ready' },
+            ],
         timeline: [],
-        notes: 'Walk through zone breakdown. Compliment the operations team on fast audit closure.',
+        notes: `Opening slide for ${titleClean}. Present operational context.`,
         bgColor: '#ffffff',
-        accentColor: '#2563eb'
+        accentColor: '#ea580c',
       },
-      {
-        id: 3,
-        layout: 'two-column',
-        title: 'Refinery Yield & Energy Optimization Matrix',
-        subtitle: 'Process Unit Performance Benchmarks',
-        bullets: [
-          'High Sulphur Crude blend ratio optimized from 68% to 74% yielding +$1.42/bbl margin uplift.',
-          'FCCU Catalyst circulation rate maintained at 24.2 tons/min with zero slide-valve sticking.',
-          'Specific Energy Consumption (MBN) reduced to 54.2 vs statutory ceiling of 58.0.'
-        ],
-        kpis: [
-          { label: 'GRM Realization', value: '$12.45/bbl', change: '+$1.42' },
-          { label: 'Throughput', value: '310 KBPD', change: 'Optimal' },
-          { label: 'MBN Energy', value: '54.2', change: '-3.8 MBN' }
-        ],
-        timeline: [],
-        notes: 'Highlight FCCU catalyst savings and steam generation efficiency.',
-        bgColor: '#ffffff',
-        accentColor: '#16a34a'
-      },
-      {
-        id: 4,
-        layout: 'timeline',
-        title: 'Statutory SOP Verification & Milestone Timeline',
-        subtitle: 'Multi-Stage HSE Governance Roadmap',
-        bullets: [],
-        kpis: [],
-        timeline: [
-          { step: 'Phase 1', title: 'Atmospheric Gas Matrix', desc: '%LEL=0.0%, O2=20.8%, H2S=0.0ppm verified' },
-          { step: 'Phase 2', title: 'Mechanical Isolation', desc: 'Spectacle blinds BL-4402 locked in place' },
-          { step: 'Phase 3', title: 'Permit Authorization', desc: 'Digital shift in-charge sign-off' },
-          { step: 'Phase 4', title: 'Continuous Firewatch', desc: 'Dual 10kg DCP extinguishers active' },
-        ],
-        notes: 'Detail the 4-phase sequential workflow required for any category B hot work.',
-        bgColor: '#ffffff',
-        accentColor: '#7c3aed'
-      },
-      {
-        id: 5,
-        layout: 'table',
-        title: 'Process Parameters & Tolerance Limits',
-        subtitle: 'Standard Operating Matrix (OISD-STD-105)',
-        bullets: [],
-        kpis: [],
-        timeline: [],
-        tableData: {
-          headers: ['Parameter / Stream', 'Design Limit', 'Measured Value', 'Safety Status'],
-          rows: [
-            ['Combustible Hydrocarbons', '0.0% LEL', '0.0%', 'PASS'],
-            ['Oxygen Concentration (O₂)', '19.5% - 21.0%', '20.8%', 'SAFE'],
-            ['Hydrogen Sulfide (H₂S)', '< 10.0 ppm', '0.0 ppm', 'PASS'],
-            ['Carbon Monoxide (CO)', '< 25.0 ppm', '2.1 ppm', 'PASS'],
-          ]
-        },
-        notes: 'All atmospheric telemetry measured using calibrated portable multi-gas detectors.',
-        bgColor: '#ffffff',
-        accentColor: '#ea580c'
-      }
     ];
   };
 
