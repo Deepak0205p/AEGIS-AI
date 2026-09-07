@@ -32,30 +32,61 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   hasUnsavedChanges: false,
   isSaving: false,
 
-  openCanvas: (deliverableOrId: DeliverableItem | string) => {
+  openCanvas: async (deliverableOrId: DeliverableItem | string) => {
     let item: DeliverableItem | null = null;
     if (typeof deliverableOrId === 'string') {
-      const { deliverables } = useDeliverableStore.getState();
+      const cleanTarget = deliverableOrId.replace(/^\/api\/files\/(download\/)?/, '').trim();
+      
+      // Attempt 1: Look up in existing deliverableStore
+      let { deliverables } = useDeliverableStore.getState();
       item = deliverables.find(
-        (d) => d.id === deliverableOrId || d.filename.toLowerCase() === deliverableOrId.toLowerCase()
+        (d) =>
+          d.id === cleanTarget ||
+          d.id === deliverableOrId ||
+          d.filename.toLowerCase() === cleanTarget.toLowerCase() ||
+          d.filename.toLowerCase() === deliverableOrId.toLowerCase()
       ) || null;
 
+      // Attempt 2: If not found, proactively trigger disk sync and check again
       if (!item) {
-        // Create an on-the-fly deliverable item if it's a newly generated filename
-        const ext = deliverableOrId.split('.').pop()?.toLowerCase() || 'docx';
-        const type = (['docx', 'xlsx', 'pptx', 'py'].includes(ext) ? ext : 'docx') as any;
+        await useDeliverableStore.getState().fetchDiskDeliverables();
+        deliverables = useDeliverableStore.getState().deliverables;
+        item = deliverables.find(
+          (d) =>
+            d.id === cleanTarget ||
+            d.id === deliverableOrId ||
+            d.filename.toLowerCase() === cleanTarget.toLowerCase() ||
+            d.filename.toLowerCase() === deliverableOrId.toLowerCase()
+        ) || null;
+      }
+
+      if (!item) {
+        // Create an on-the-fly deliverable item if it's a newly generated filename or raw ID
+        let cleanName = deliverableOrId;
+        if (cleanName.startsWith('/api/files/')) {
+          cleanName = cleanName.replace('/api/files/', '');
+        }
+        
+        let ext = 'docx';
+        if (cleanName.includes('.')) {
+          ext = cleanName.split('.').pop()?.toLowerCase() || 'docx';
+        }
+        
+        const type = (['docx', 'xlsx', 'pptx', 'py', 'sql', 'html', 'json', 'ts', 'sh'].includes(ext) ? ext : 'docx') as any;
+        const displayFilename = cleanName.includes('.') ? cleanName : `${cleanName}.${type}`;
+
         item = {
-          id: `deliv-dyn-${Date.now()}`,
-          filename: deliverableOrId,
+          id: cleanTarget || `deliv-dyn-${Date.now()}`,
+          filename: displayFilename,
           type,
           size_bytes: 32000,
           size_formatted: '32.0 KB',
-          source_scenario: 'Agent Live Generation',
+          source_scenario: 'Live Document Workspace',
           source_requirement: 'Refinery AI Output',
-          generating_model: 'Gemini Sovereign Engine',
+          generating_model: 'Sovereign Engine',
           generated_timestamp: new Date().toLocaleTimeString(),
           sha256_hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-          summary: `Interactive document generated live by Sovereign Agent for ${deliverableOrId}.`,
+          summary: `Interactive document generated live by Sovereign Agent: ${displayFilename}`,
           key_metrics: [
             { label: 'Status', value: 'ACTIVE_EDIT' },
             { label: 'Air-Gap Compliance', value: '100% VERIFIED' },
