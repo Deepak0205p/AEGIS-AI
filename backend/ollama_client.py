@@ -343,11 +343,31 @@ async def preload_model(model_name: str, keep_alive: int = 300) -> bool:
         return False
 
 
-async def swap_to_model(target_model: str, unload_model_name: str) -> bool:
+async def swap_to_model(
+    target_model: str,
+    unload_model_name: str,
+    chat_id: Optional[str] = None,
+    context_to_transfer: Optional[Any] = None
+) -> bool:
     """
-    Performs a full model swap: unloads current model from VRAM, then preloads target.
-    Used for vision↔text model transitions on VRAM-constrained systems.
+    Performs a full model swap:
+    1. Saves context_to_transfer in temporary backend memory (context_handoff).
+    2. Unloads current model from VRAM (keep_alive=0).
+    3. Preloads target model into VRAM.
+    Used for seamless vision↔text model transitions without losing working memory.
     """
+    if chat_id and context_to_transfer is not None:
+        try:
+            from backend.context_handoff import context_handoff
+            context_handoff.save_handoff_context(
+                chat_id=chat_id,
+                from_model=unload_model_name,
+                to_model=target_model,
+                context_payload=context_to_transfer
+            )
+        except Exception as err:
+            logger.warning(f"[MODEL_SWAP] Could not store handoff context: {err}")
+
     logger.info(f"[MODEL_SWAP] Swapping: unload '{unload_model_name}' → load '{target_model}'")
     await unload_model(unload_model_name)
     return await preload_model(target_model)

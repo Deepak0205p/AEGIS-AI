@@ -325,8 +325,13 @@ async def _handle_cached_followup(
         logger.info(f"[{mode_name.upper()}_AUTO_RESCAN] Cached analysis insufficient, triggering fresh scan")
         yield {"token": f"🔍 Requested detail not in previous analysis. Running fresh {mode_name.upper()} scan...\n\n"}
 
-        # Swap: unload text model → load vision model
-        await swap_to_model(VISION_MODEL_NAME, MODEL_NAME)
+        # Swap: unload text model → load vision model (save current user intent to context handoff)
+        await swap_to_model(
+            target_model=VISION_MODEL_NAME,
+            unload_model_name=MODEL_NAME,
+            chat_id=chat_id,
+            context_to_transfer=f"User requested re-inspection: {user_message}"
+        )
 
         system_prompt = OCR_SYSTEM_PROMPT if is_ocr else VISION_SYSTEM_PROMPT
         save_message(chat_id, "user", user_message, mode=mode_name)
@@ -354,8 +359,13 @@ async def _handle_cached_followup(
 
         final_content = filter_thinking("".join(gen_tokens))
 
-        # Swap back: unload vision → load text model
-        await swap_to_model(MODEL_NAME, VISION_MODEL_NAME)
+        # Swap back: unload vision → load text model (save visual findings to context handoff)
+        await swap_to_model(
+            target_model=MODEL_NAME,
+            unload_model_name=VISION_MODEL_NAME,
+            chat_id=chat_id,
+            context_to_transfer=f"Vision/OCR Analysis Output:\n{final_content[:1500]}"
+        )
 
         # Update cache with the new, more detailed analysis
         if cached_image_b64:
@@ -488,9 +498,14 @@ async def handle_vision_mode(
         _vision_cache.invalidate(chat_id, image_hash)
 
     # ── Fresh Vision/OCR Inference ──
-    # Swap: unload text model → load vision model
+    # Swap: unload text model → load vision model (save prompt context to handoff buffer)
     yield {"token": f"🔄 Loading vision model for {mode_name.upper()} analysis...\n\n"}
-    await swap_to_model(VISION_MODEL_NAME, MODEL_NAME)
+    await swap_to_model(
+        target_model=VISION_MODEL_NAME,
+        unload_model_name=MODEL_NAME,
+        chat_id=chat_id,
+        context_to_transfer=f"User requested {mode_name.upper()} task: {user_message}"
+    )
 
     # Multi-image comparison prompt
     if len(image_base64_list) > 1 and not is_ocr:
@@ -584,8 +599,13 @@ async def handle_vision_mode(
         image_hash = _compute_image_hash(image_base64_list)
         _vision_cache.store(chat_id, image_hash, final_content, is_ocr, image_base64_list)
 
-    # Swap back: unload vision model → load text model (gemma4-e4b)
-    await swap_to_model(MODEL_NAME, VISION_MODEL_NAME)
+    # Swap back: unload vision model → load text model (gemma4-e4b) with visual context handoff
+    await swap_to_model(
+        target_model=MODEL_NAME,
+        unload_model_name=VISION_MODEL_NAME,
+        chat_id=chat_id,
+        context_to_transfer=f"Vision/OCR Analysis Output:\n{final_content[:1500]}"
+    )
     
     save_message(chat_id, "assistant", final_content, mode=mode_name)
     yield {

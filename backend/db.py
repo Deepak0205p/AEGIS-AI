@@ -294,6 +294,16 @@ async def build_context_messages(
     effective_system_prompt = system_prompt
     if summary_text:
         effective_system_prompt += f"\n\n[Earlier Conversation Context Summary]:\n{summary_text}"
+
+    # Check for temporary cross-model handoff context buffer
+    try:
+        from backend.context_handoff import context_handoff
+        handoff_block = context_handoff.format_handoff_prompt_block(chat_id)
+        if handoff_block:
+            effective_system_prompt += f"\n\n{handoff_block}"
+            logger.info(f"[CONTEXT] Injected cross-model handoff context into system prompt for chat_id={chat_id}")
+    except Exception as handoff_err:
+        logger.warning(f"[CONTEXT] Handoff context injection error: {handoff_err}")
         
     messages: List[Dict[str, str]] = [{"role": "system", "content": effective_system_prompt}]
     
