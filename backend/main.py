@@ -723,6 +723,17 @@ async def list_files(chat_id: Optional[str] = None):
     return {"files": items}
 
 
+@app.get("/api/ppt/styles")
+async def get_ppt_styles():
+    """Returns the comprehensive registry of 50 unique presentation styles and themes."""
+    from backend.ppt_styles import list_all_ppt_styles
+    styles = list_all_ppt_styles()
+    return {
+        "count": len(styles),
+        "styles": styles
+    }
+
+
 @app.get("/api/files/{file_id}/content")
 async def get_file_content(file_id: str):
     """
