@@ -8,7 +8,13 @@ from typing import AsyncGenerator, Dict, Any
 from backend.docs_mode import handle_document_mode
 
 EXCEL_PLANNER_SYSTEM_PROMPT = """You are an expert financial, engineering, and data spreadsheet architect.
-Your task is to create a complete, highly structured Microsoft Excel workbook plan in JSON format based on the user's request.
+Your task is to create a complete, highly structured Microsoft Excel workbook plan in JSON format based on the user's request and the entire prior conversation history.
+
+CRITICAL DATA EXTRACTION INSTRUCTIONS:
+- You MUST carefully read all prior messages and extract ALL specific numbers, data points, calculations, equipment tags, categories, costs, and parameters discussed in the chat.
+- DO NOT create empty templates or placeholder values if actual data was discussed.
+- Populate EVERY table with ALL rows and columns corresponding to the real numbers, metrics, and details from previous messages in this chat.
+- If the user previously generated or asked about a calculation, inventory, budget, or metrics table, put that EXACT complete dataset into the table rows.
 
 For SINGLE-SHEET spreadsheets:
 {
@@ -21,7 +27,7 @@ For SINGLE-SHEET spreadsheets:
     },
     {
       "type": "paragraph",
-      "text": "<Brief summary or notes about this dataset>"
+      "text": "<Brief summary or notes about this dataset with real context>"
     },
     {
       "type": "table",
@@ -89,12 +95,13 @@ For MULTI-SHEET spreadsheets (e.g., multi-unit tracking, budget, or logs):
 }
 
 CRITICAL SPREADSHEET RULES:
-1. Provide REALISTIC, comprehensive domain data with multiple populated data rows (at least 4-8 rows).
-2. Use numeric values (integers or floats, not strings) for all quantities, pressures, rates, costs, and measurements.
-3. For calculated columns, formula strings starting with "=" may be used (e.g. "=SUM(C3:C7)").
-4. Include conditional formatting rules in "highlight_rules" where appropriate (conditions: greater_than, less_than, equal, not_equal; color hex like FF4444 or 22C55E).
-5. Ensure the first row of each table is a clean list of column header strings.
-6. Output ONLY valid, parseable JSON."""
+1. Transfer and include ALL real data points and metrics from prior conversation messages into the rows.
+2. Provide REALISTIC, comprehensive domain data with multiple populated data rows (at least 4-8 rows).
+3. Use numeric values (integers or floats, not strings) for all quantities, pressures, rates, costs, and measurements.
+4. For calculated columns, formula strings starting with "=" may be used (e.g. "=SUM(C3:C7)").
+5. Include conditional formatting rules in "highlight_rules" where appropriate (conditions: greater_than, less_than, equal, not_equal; color hex like FF4444 or 22C55E).
+6. Ensure the first row of each table is a clean list of column header strings.
+7. Output ONLY valid, parseable JSON."""
 
 
 async def handle_excel_mode(
