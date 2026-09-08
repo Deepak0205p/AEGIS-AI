@@ -613,10 +613,12 @@ async def handle_vision_mode(
         image_hash = _compute_image_hash(image_base64_list)
         _vision_cache.invalidate(chat_id, image_hash)
 
-    # ── Step 1: Model Swap (Unload DeepSeek -> Load Gemma) ──
-    yield {"token": f"🔄 Unloading DeepSeek & Loading Vision Model ({VISION_MODEL_NAME})...\n\n"}
+    scanner_model = OCR_MODEL_NAME if is_ocr else VISION_MODEL_NAME
+
+    # ── Step 1: Model Swap (Unload DeepSeek -> Load OCR/Vision Scanner Model) ──
+    yield {"token": f"🔄 Unloading DeepSeek & Loading {('Unlimited-OCR' if is_ocr else 'Vision')} Model ({scanner_model})...\n\n"}
     await swap_to_model(
-        target_model=VISION_MODEL_NAME,
+        target_model=scanner_model,
         unload_model_name=MODEL_NAME,
         chat_id=chat_id,
         context_to_transfer=f"User requested {mode_name.upper()} task: {user_message}"
