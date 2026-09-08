@@ -148,7 +148,7 @@ ATTACHMENT_EXTENSION_MAP = {
     ".tiff": "ocr",
     ".tif": "ocr",
     ".webp": "ocr",
-    ".pdf": "docs",
+    ".pdf": "ocr",
 }
 
 # Regex patterns for backward compatibility fast check
@@ -218,17 +218,34 @@ def route_message(
 
     # 2. Phase 1: Attachment-aware routing
     if attachments:
+        # Check text intent for explicit diagram / visual inspection
+        is_diagram_or_inspection = bool(
+            re.search(r"\b(p&id|pid|cad|diagram|drawing|blueprint|schematic|photo|picture|gauge|needle|corrosion|flowsheet)\b", message_text, re.IGNORECASE)
+        )
+        is_explicit_ocr = bool(
+            re.search(r"\b(ocr|extract|text|table|transcribe|read text|digitize|invoice|receipt|document|pdf|slip)\b", message_text, re.IGNORECASE)
+        )
+
         for att in attachments:
             clean_att = str(att).lower().strip()
-            # If attachment is direct base64 image data or data URI
-            if clean_att.startswith("data:image") or len(clean_att) > 100:
-                logger.info("[ROUTER] Route decision: 'vision' via base64 image payload in attachments")
-                return "vision", "attachment_base64_image"
-            # Extract extension
+            # If attachment is PDF extension or PDF base64 header (%PDF)
+            if clean_att.endswith(".pdf") or "pdf" in clean_att[:50] or clean_att.startswith("jvber"):
+                route = "vision" if is_diagram_or_inspection else "ocr"
+                logger.info(f"[ROUTER] Route decision: '{route}' via PDF attachment (diagram={is_diagram_or_inspection})")
+                return route, "attachment_pdf"
+
+            # If attachment has specific file extension
             for ext, mapped_mode in ATTACHMENT_EXTENSION_MAP.items():
                 if clean_att.endswith(ext):
                     logger.info(f"[ROUTER] Route decision: '{mapped_mode}' via attachment extension '{ext}' in '{att}'")
                     return mapped_mode, f"attachment_{ext}"
+
+            # Direct base64 image data (e.g. data:image/png;base64,... or raw base64)
+            if clean_att.startswith("data:image") or len(clean_att) > 100:
+                # If user asks to extract text/table/OCR or attached PDF, route to OCR; else vision
+                target_route = "ocr" if is_explicit_ocr else ("vision" if is_diagram_or_inspection else "ocr")
+                logger.info(f"[ROUTER] Route decision: '{target_route}' via base64 payload (ocr={is_explicit_ocr}, diagram={is_diagram_or_inspection})")
+                return target_route, f"attachment_base64_{target_route}"
 
     # Check for image filename / attached indicators in user message text
     image_ext_in_text = re.search(r"\b\w+\.(png|jpg|jpeg|webp|bmp|tiff|tif)\b", message_text, re.IGNORECASE)

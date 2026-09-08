@@ -200,6 +200,33 @@ def encode_image_to_base64(file_path: str) -> Optional[str]:
         if clean_b64:
             try:
                 raw_bytes = base64.b64decode(clean_b64)
+                
+                # Check if decoded payload is a PDF file (%PDF- / 0x25 0x50 0x44 0x46)
+                if raw_bytes.startswith(b"%PDF") or clean_b64.startswith("JVBERi0"):
+                    try:
+                        import fitz  # PyMuPDF
+                        doc = fitz.open(stream=raw_bytes, filetype="pdf")
+                        for page in doc:
+                            pix = page.get_pixmap(dpi=200)
+                            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                            img = _enhance_image_quality(img)
+                            buf = io.BytesIO()
+                            img.save(buf, format="JPEG", quality=95, subsampling=0)
+                            return base64.b64encode(buf.getvalue()).decode("utf-8")
+                    except Exception as pdf_err:
+                        try:
+                            import pypdf
+                            reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
+                            for page in reader.pages:
+                                for img_obj in page.images:
+                                    img = Image.open(io.BytesIO(img_obj.data)).convert("RGB")
+                                    img = _enhance_image_quality(img)
+                                    buf = io.BytesIO()
+                                    img.save(buf, format="JPEG", quality=95, subsampling=0)
+                                    return base64.b64encode(buf.getvalue()).decode("utf-8")
+                        except Exception as pypdf_err:
+                            logger.warning(f"[VISION/OCR] Could not rasterize base64 PDF: {pypdf_err}")
+
                 img = Image.open(io.BytesIO(raw_bytes))
                 if img.mode not in ("RGB", "L"):
                     img = img.convert("RGB")
@@ -220,7 +247,8 @@ def encode_image_to_base64(file_path: str) -> Optional[str]:
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=95, subsampling=0)
                 return base64.b64encode(buf.getvalue()).decode("utf-8")
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[VISION] decode error: {e}")
                 return clean_b64
 
         # Check if valid file path
