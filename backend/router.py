@@ -396,10 +396,10 @@ async def classify_intent_model(
         "- 'code': Writing, running, debugging Python/SQL code, mathematical calculations, scientific simulations, or plotting charts with matplotlib/numpy/pandas.\n"
         "- 'excel': Creating, formatting, or updating spreadsheets, tabular data, formulas (SUM, AVERAGE, VLOOKUP), ledgers, or .xlsx/.csv files.\n"
         "- 'ppt': Generating presentation slides, slide decks, pitch decks, or .pptx presentations.\n"
-        "- 'docs': Drafting official Word documents, formal technical reports, memos, SOPs, circulars, letters, meeting minutes, or .docx files.\n"
+        "- 'docs': Generating downloadable Word (.docx) files for formal multi-page enterprise documents, technical reports, engineering SOPs, formal circulars, or investigation reports. DO NOT route emails, leave requests, letters, or short text drafts to 'docs' unless a .docx file is explicitly requested.\n"
         "- 'ocr': Extracting or reading raw text/numbers/tables from scanned documents, receipts, invoices, or images.\n"
         "- 'vision': Visual inspection, analyzing diagrams/P&ID schematics/blueprints, or detecting physical plant defects in photos.\n"
-        "- 'chat': General conversation, answering technical plant operations questions, explaining concepts, troubleshooting, or SOP consultation.\n\n"
+        "- 'chat': General conversation, drafting emails, leave requests, letters, message drafts, answering technical plant questions, explaining concepts, troubleshooting, or SOP consultation.\n\n"
         "Return ONLY a valid JSON object in this format:\n"
         '{"mode": "code"|"excel"|"ppt"|"docs"|"ocr"|"vision"|"chat", "confidence": 0.95, "reason": "<short explanation in 1 sentence>"}'
     )
@@ -465,9 +465,10 @@ async def route_message_async(
     Intelligent Asynchronous Route Dispatcher for Auto Mode.
     1. Honors explicit manual overrides (code, excel, ppt, docs, vision, ocr, chat).
     2. Fast-paths trivial 1-word greetings (0ms latency).
-    3. Uses the local sovereign LLM (deepseek-v4-pro:4b) as the primary intelligent orchestrator
+    3. Fast-paths email/letter/leave requests directly to chat (unless .docx explicitly asked).
+    4. Uses the local sovereign LLM (deepseek-v4-pro:4b) as the primary intelligent orchestrator
        to understand intent across Hindi, Hinglish, English, and nuanced tasks WITHOUT keywords.
-    4. Falls back gracefully to deterministic heuristics if the model is unreachable.
+    5. Falls back gracefully to deterministic heuristics if the model is unreachable.
     """
     clean_override = (mode_override or "").strip().lower()
 
@@ -482,7 +483,14 @@ async def route_message_async(
     if not attachments and clean_msg in ("hi", "hello", "hey", "namaste", "halo", "hola", "good morning", "good afternoon", "good evening"):
         return "chat", "greeting_fast_path"
 
-    # 3. Model-Driven Intent Orchestration (Zero Keywords)
+    # 3. Fast-path for emails, leave requests, and messages (must render as readable chat text, NOT Word .docx)
+    is_email = bool(re.search(r"\b(email|mail|e-mail|leave application|leave request|resignation)\b", clean_msg, re.IGNORECASE))
+    explicit_word_doc = bool(re.search(r"\b(word document|docx|\.docx|word file|downloadable doc)\b", clean_msg, re.IGNORECASE))
+    if is_email and not explicit_word_doc and not attachments:
+        logger.info("[ROUTER] Route decision: 'chat' for email/correspondence communication draft")
+        return "chat", "email_draft_chat"
+
+    # 4. Model-Driven Intent Orchestration (Zero Keywords)
     mode, reason, confidence = await classify_intent_model(
         user_message,
         attachments=attachments,

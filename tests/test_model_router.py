@@ -29,6 +29,9 @@ test_cases = [
     ("boiler B-201 ka temperature kitna hona chahiye as per SOP?", "chat", "Hinglish SOP QA query"),
     ("monthly budget ka hisab kitna hua table me calculate karo", "excel", "Hinglish ledger/table calculation"),
     ("safety meeting ke points pe official circular draft kardo", "docs", "Official circular / memo drafting"),
+    ("write an email to get paid leave", "chat", "Leave email draft staying in chat mode"),
+    ("paid leave request email", "chat", "Paid leave email staying in chat mode"),
+    ("create an email to get an new electronic computer", "chat", "Equipment request email in chat mode"),
 ]
 
 async def run_model_router_tests():
