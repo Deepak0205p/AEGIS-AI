@@ -42,6 +42,7 @@ export function PythonCanvasEditor({ deliverable }: PythonCanvasEditorProps) {
   const [generatedFiles, setGeneratedFiles] = useState<any[]>([]);
   const [fontSize, setFontSize] = useState(13);
   const [showLineNumbers, setShowLineNumbers] = useState(true);
+  const [stdinInput, setStdinInput] = useState('');
 
   // Dynamic code initial value
   const initialCode =
@@ -115,7 +116,7 @@ if __name__ == "__main__":
       const res = await fetch(`${getApiBase()}/api/sandbox/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, stdin_input: stdinInput || undefined }),
       });
 
       if (!res.ok) {
@@ -307,6 +308,30 @@ if __name__ == "__main__":
             <pre className={`flex-1 p-3.5 text-xs font-mono whitespace-pre-wrap overflow-auto selection:bg-emerald-900/50 ${runSuccess === false ? 'text-rose-300 bg-[#0c0a0f]' : 'text-emerald-300 bg-[#050811]'}`}>
               {outputConsole}
             </pre>
+
+            {/* Interactive STDIN Input Bar if input() is requested or needed */}
+            <div className="px-3 py-1.5 bg-[#0b1222] border-t border-slate-800 flex items-center gap-2">
+              <span className="text-[11px] font-mono text-emerald-400 font-semibold shrink-0">STDIN &gt;</span>
+              <input
+                type="text"
+                value={stdinInput}
+                onChange={(e) => setStdinInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleRunCode();
+                  }
+                }}
+                placeholder="Type interactive inputs for input() here and click Rerun or press Enter..."
+                className="flex-1 bg-[#050811] text-xs font-mono text-white px-2.5 py-1 rounded border border-slate-700/80 focus:border-emerald-500 focus:outline-none"
+              />
+              <button
+                onClick={handleRunCode}
+                disabled={isRunning}
+                className="px-2.5 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white font-medium text-[11px] transition-colors shrink-0"
+              >
+                Send & Run
+              </button>
+            </div>
 
             {/* Generated Files if any */}
             {generatedFiles.length > 0 && (

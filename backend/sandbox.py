@@ -2,7 +2,7 @@
 Sandbox execution engine for Python code verification.
 Prioritizes fully isolated Docker container (--network none, memory/CPU bounds).
 Gracefully falls back to local sandboxed subprocess if Docker is unavailable.
-Supports generated file detection for downloadable outputs.
+Supports generated file detection for downloadable outputs and interactive stdin inputs.
 """
 
 import os
@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 
 from backend.config import SANDBOX_JOBS_DIR, SANDBOX_MEMORY_LIMIT, logger
 
@@ -57,9 +57,10 @@ def _scan_generated_files(job_dir: Path, exclude_files: set) -> list:
     return generated
 
 
-def execute_python_sandbox(code: str, job_id: str = None) -> Dict[str, Any]:
+def execute_python_sandbox(code: str, job_id: str = None, stdin_input: Optional[str] = None) -> Dict[str, Any]:
     """
     Executes Python script in an isolated sandbox.
+    Supports optional stdin_input for scripts requiring user input (e.g. input()).
     Returns:
     {
         "job_id": str,
@@ -89,17 +90,20 @@ def execute_python_sandbox(code: str, job_id: str = None) -> Dict[str, Any]:
     exit_code = -1
     isolated = False
     
+    # Standardize input stream data
+    input_data = (stdin_input if stdin_input is not None else "").strip()
+    if input_data and not input_data.endswith("\n"):
+        input_data += "\n"
+
     if docker_active:
         abs_path = str(job_dir.resolve())
-        # Format Windows path for Docker volume mounting if running on Windows
-        # e.g. C:\path -> //c/path or /c/path or normalized absolute path
         docker_mount_path = abs_path.replace("\\", "/")
         if len(docker_mount_path) > 1 and docker_mount_path[1] == ":":
             drive = docker_mount_path[0].lower()
             docker_mount_path = f"/{drive}" + docker_mount_path[2:]
             
         cmd = [
-            "docker", "run", "--rm",
+            "docker", "run", "--rm", "-i",
             "--network", "none",
             "--memory", SANDBOX_MEMORY_LIMIT,
             "--cpus", "1",
@@ -107,29 +111,29 @@ def execute_python_sandbox(code: str, job_id: str = None) -> Dict[str, Any]:
             "-u", "1000:1000",
             "-v", f"{abs_path}:/task",
             "python-sandbox",
-            "python", "/task/main.py"
+            "python", "-u", "/task/main.py"
         ]
         
         try:
             res = subprocess.run(
                 cmd,
+                input=input_data if input_data else None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=20,
+                timeout=15,
             )
             stdout = res.stdout
             stderr = res.stderr
             exit_code = res.returncode
             isolated = True
         except subprocess.TimeoutExpired:
-            # Gracefully kill any leftover container
             try:
                 subprocess.run(["docker", "kill", f"sandbox_{job_id}"], timeout=3,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 pass
-            stderr = "Execution timed out (exceeded 20 seconds limit)."
+            stderr = "Execution timed out (exceeded 15 seconds limit).\nNote: If your script uses input(), provide stdin input or values directly in code."
             exit_code = 124
             isolated = True
         except Exception as e:
@@ -152,10 +156,11 @@ def execute_python_sandbox(code: str, job_id: str = None) -> Dict[str, Any]:
             res = subprocess.run(
                 [sys.executable, "-u", str(script_path)],
                 cwd=str(job_dir),
+                input=input_data if input_data else "",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=20,
+                timeout=15,
                 env=restricted_env,
             )
             stdout = res.stdout
@@ -163,14 +168,13 @@ def execute_python_sandbox(code: str, job_id: str = None) -> Dict[str, Any]:
             exit_code = res.returncode
             isolated = False
         except subprocess.TimeoutExpired as te:
-            # Kill the process tree to prevent zombies
             try:
                 if hasattr(te, 'cmd'):
                     import signal
                     os.kill(res.pid, signal.SIGTERM) if hasattr(res, 'pid') else None
             except Exception:
                 pass
-            stderr = "Execution timed out (exceeded 20 seconds limit)."
+            stderr = "Execution timed out (exceeded 15 seconds limit).\nNote: If your script asks for interactive input(), provide inputs in the terminal prompt or assign values in code."
             exit_code = 124
             isolated = False
         except Exception as e:

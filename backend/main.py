@@ -1187,6 +1187,7 @@ async def manual_model_swap(body: ModelSwapRequest):
 class SandboxRunRequest(BaseModel):
     code: str
     job_id: Optional[str] = None
+    stdin_input: Optional[str] = None
 
 
 @app.post("/api/sandbox/run")
@@ -1197,7 +1198,7 @@ async def run_sandbox_code(body: SandboxRunRequest):
     and returns genuine stdout, stderr, execution time, and generated files.
     """
     from backend.sandbox import execute_python_sandbox
-    result = execute_python_sandbox(body.code, job_id=body.job_id)
+    result = execute_python_sandbox(body.code, job_id=body.job_id, stdin_input=body.stdin_input)
     return result
 
 
