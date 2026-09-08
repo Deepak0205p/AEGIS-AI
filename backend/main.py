@@ -1184,6 +1184,23 @@ async def manual_model_swap(body: ModelSwapRequest):
     }
 
 
+class SandboxRunRequest(BaseModel):
+    code: str
+    job_id: Optional[str] = None
+
+
+@app.post("/api/sandbox/run")
+@app.post("/api/v1/sandbox/run")
+async def run_sandbox_code(body: SandboxRunRequest):
+    """
+    Executes Python script in isolated local or Docker sandbox
+    and returns genuine stdout, stderr, execution time, and generated files.
+    """
+    from backend.sandbox import execute_python_sandbox
+    result = execute_python_sandbox(body.code, job_id=body.job_id)
+    return result
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

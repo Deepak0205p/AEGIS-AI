@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DeliverableItem } from '@/store/useDeliverableStore';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import {
@@ -8,20 +8,16 @@ import {
   Copy,
   Check,
   Terminal,
-  RotateCcw,
   ZoomIn,
   ZoomOut,
-  Sparkles,
   Download,
-  Search,
   Sliders,
   CheckCircle2,
+  XCircle,
   FileCode2,
-  Layers,
-  Code,
-  X,
+  Cpu,
   RefreshCw,
-  Cpu
+  FolderDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -29,74 +25,73 @@ interface PythonCanvasEditorProps {
   deliverable: DeliverableItem;
 }
 
+function getApiBase(): string {
+  if (typeof window !== 'undefined') {
+    return `http://${window.location.hostname}:8000`;
+  }
+  return 'http://localhost:8000';
+}
+
 export function PythonCanvasEditor({ deliverable }: PythonCanvasEditorProps) {
   const { updateEditedContent, editedContent } = useCanvasStore();
   const [copied, setCopied] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [outputConsole, setOutputConsole] = useState<string | null>(null);
+  const [runSuccess, setRunSuccess] = useState<boolean | null>(null);
+  const [executionTime, setExecutionTime] = useState<number | null>(null);
+  const [generatedFiles, setGeneratedFiles] = useState<any[]>([]);
   const [fontSize, setFontSize] = useState(13);
   const [showLineNumbers, setShowLineNumbers] = useState(true);
-  const [apiGravity, setApiGravity] = useState(28.4);
-  const [sulfurPct, setSulfurPct] = useState(1.85);
 
-  const defaultCode =
+  // Dynamic code initial value
+  const initialCode =
     editedContent[deliverable.id]?.code ||
+    (deliverable as any).code ||
     `"""
-MRPL SOVEREIGN REFINERY OPTIMIZATION SCRIPT
+AIR-GAPPED SOVEREIGN REFINERY SCRIPT
 Filename: ${deliverable.filename}
-Runtime: Python 3.11 On-Premise Sandboxed Engine
-Compliance: OISD-STD-105 / PESO / Bureau of Energy Efficiency
+Runtime: Isolated Python 3.11 Execution Engine
+Compliance: OISD-STD-105 / PESO Statutory Rules
 """
 
+import sys
 import math
-from typing import Dict, Any
 
-def calculate_crude_blend_economics(
-    api_gravity: float = 28.4,
-    sulfur_pct: float = 1.85,
-    brent_differential: float = 2.40,
-    daily_throughput_kbpd: float = 310.5
-) -> Dict[str, Any]:
-    """Calculates refinery gross margin (GRM) uplift & energy efficiency metrics."""
-    base_grm_usd_bbl = 11.20
+def run_analysis():
+    print("=" * 55)
+    print("  AIR-GAPPED PYTHON RUNTIME EXECUTION")
+    print("=" * 55)
     
-    # Gravity adjustment (Benchmark 32.0 API)
+    api_gravity = 28.4
+    sulfur_pct = 1.85
+    throughput_kbpd = 310.5
+    
+    # Calculate refinery economics
+    base_margin = 11.20
     gravity_bonus = (api_gravity - 32.0) * 0.15
-    
-    # Hydrodesulfurization chemical & hydrogen consumption cost penalty
     sulfur_penalty = max(0.0, (sulfur_pct - 0.5) * 1.20)
+    net_grm = round(base_margin + 2.40 + gravity_bonus - sulfur_penalty, 2)
+    daily_ebitda = round(net_grm * throughput_kbpd * 1000, 2)
     
-    net_grm = base_grm_usd_bbl + brent_differential + gravity_bonus - sulfur_penalty
-    daily_ebitda_usd = net_grm * (daily_throughput_kbpd * 1000)
-    
-    return {
-        "crude_assay_api": api_gravity,
-        "sulfur_content_pct": sulfur_pct,
-        "net_realized_grm_usd_bbl": round(net_grm, 2),
-        "daily_operating_ebitda_usd": round(daily_ebitda_usd, 2),
-        "energy_consumption_mbn": 54.2,
-        "oisd_safety_compliant": True,
-        "feedstock_verdict": "OPTIMAL_BLEND" if net_grm >= 12.0 else "SUB_OPTIMAL"
-    }
+    print(f"  [+] Crude Assay Gravity      : {api_gravity}° API")
+    print(f"  [+] Sulfur Content           : {sulfur_pct}% wt")
+    print(f"  [+] Realized Gross Margin    : ${net_grm:.2f} / bbl")
+    print(f"  [+] Daily Operating EBITDA   : ${daily_ebitda:,.2f}")
+    print(f"  [+] OISD Safety Verification : COMPLIANT (Pass)")
+    print("=" * 55)
+    print("  STATUS: EXECUTION FINISHED SUCCESSFULLY")
 
 if __name__ == "__main__":
-    print("=====================================================")
-    print("      MRPL CRUDE ASSAY REFINERY ECONOMICS RUNNER     ")
-    print("=====================================================")
-    
-    result = calculate_crude_blend_economics(
-        api_gravity=${apiGravity},
-        sulfur_pct=${sulfurPct}
-    )
-    
-    for key, value in result.items():
-        print(f"  {key:<30} : {value}")
-        
-    print("=====================================================")
-    print("  STATUS: 100% AIR-GAPPED PYTHON RUN COMPLETE (38ms) ")
+    run_analysis()
 `;
 
-  const [code, setCode] = useState(defaultCode);
+  const [code, setCode] = useState(initialCode);
+
+  useEffect(() => {
+    if (editedContent[deliverable.id]?.code) {
+      setCode(editedContent[deliverable.id].code);
+    }
+  }, [deliverable.id, editedContent]);
 
   const handleCodeChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -112,26 +107,51 @@ if __name__ == "__main__":
 
   const handleRunCode = async () => {
     setIsRunning(true);
-    setOutputConsole('Initializing Python 3.11 WASM Sandbox (--network none, 2 vCPU, 512MB RAM)...');
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    setOutputConsole('Executing script in air-gapped Python sandbox...');
+    setRunSuccess(null);
+    setGeneratedFiles([]);
 
-    const netGrm = (11.20 + 2.40 + (apiGravity - 32.0) * 0.15 - Math.max(0, (sulfurPct - 0.5) * 1.20)).toFixed(2);
-    const dailyEbitda = (Number(netGrm) * 310500).toLocaleString('en-US', { maximumFractionDigits: 2 });
+    try {
+      const res = await fetch(`${getApiBase()}/api/sandbox/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
 
-    setOutputConsole(`[PYTHON 3.11 WASM SANDBOX SUCCESS]
-=====================================================
-      MRPL CRUDE ASSAY REFINERY ECONOMICS RUNNER     
-=====================================================
-  crude_assay_api                : ${apiGravity}°
-  sulfur_content_pct             : ${sulfurPct}%
-  net_realized_grm_usd_bbl       : $${netGrm} / bbl
-  daily_operating_ebitda_usd     : $${dailyEbitda}
-  energy_consumption_mbn         : 54.2 MBN (Statutory Pass)
-  oisd_safety_compliant          : True (OISD-STD-105 Verified)
-  feedstock_verdict              : ${Number(netGrm) >= 12.0 ? 'OPTIMAL_BLEND' : 'SUB_OPTIMAL'}
-=====================================================
-  Process exited with code 0 (Time: 36ms, Memory: 14.2 MB)`);
-    setIsRunning(false);
+      if (!res.ok) {
+        throw new Error(`HTTP Error: ${res.status} ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      const stdout = data.stdout || '';
+      const stderr = data.stderr || '';
+      const exitCode = data.exit_code ?? (data.success ? 0 : 1);
+      const isSuccess = data.success ?? exitCode === 0;
+
+      setRunSuccess(isSuccess);
+      setExecutionTime(data.execution_time_sec ? Math.round(data.execution_time_sec * 1000) : 45);
+      if (data.generated_files && Array.isArray(data.generated_files)) {
+        setGeneratedFiles(data.generated_files);
+      }
+
+      let consoleOutput = '';
+      if (stdout) {
+        consoleOutput += stdout;
+      }
+      if (stderr) {
+        consoleOutput += (consoleOutput ? '\n\n[STDERR]:\n' : '') + stderr;
+      }
+      if (!consoleOutput.trim()) {
+        consoleOutput = `[Script executed with exit code ${exitCode} (No standard output returned)]`;
+      }
+
+      setOutputConsole(consoleOutput);
+    } catch (err: any) {
+      setRunSuccess(false);
+      setOutputConsole(`[SANDBOX EXECUTION ERROR]:\n${err.message || 'Failed to reach air-gapped sandbox backend.'}`);
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   const handleDownload = () => {
@@ -147,112 +167,80 @@ if __name__ == "__main__":
   const lines = code.split('\n');
 
   return (
-    <div className="flex flex-col h-full bg-[#0f172a] text-[#f8fafc] select-none font-sans relative overflow-hidden">
-      {/* 1. TOP STATUS & ACTION BAR (Mobile Optimized) */}
-      <div className="flex items-center justify-between px-2.5 sm:px-4 py-2 sm:py-2.5 bg-[#0b1120] border-b border-slate-800 text-xs shrink-0 gap-2 overflow-x-auto scrollbar-none">
-        {/* Left: Runtime Status */}
+    <div className="flex flex-col h-full bg-[#0b1120] text-[#f8fafc] select-none font-sans relative overflow-hidden">
+      {/* 1. TOP HEADER & ACTION CONTROLS */}
+      <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 bg-[#070b14] border-b border-slate-800 text-xs shrink-0 gap-2 overflow-x-auto scrollbar-none">
+        {/* Left: Environment & Runtime status */}
         <div className="flex items-center space-x-2 shrink-0">
-          <div className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1 rounded-xl bg-slate-800/80 border border-slate-700 text-emerald-400 font-mono text-[10px] sm:text-xs">
-            <Cpu className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-            <span className="hidden sm:inline">Python 3.11 WASM Engine &bull; Air-Gapped Sandbox</span>
-            <span className="sm:hidden">Python 3.11 WASM</span>
+          <div className="flex items-center space-x-2 px-3 py-1 rounded-xl bg-slate-900 border border-slate-700/80 text-emerald-400 font-mono text-[11px] sm:text-xs shadow-inner">
+            <Cpu className="h-3.5 w-3.5 text-emerald-400 shrink-0 animate-pulse" />
+            <span className="font-semibold text-white">Python 3.11</span>
+            <span className="text-slate-500">•</span>
+            <span className="text-emerald-400 font-medium">Air-Gapped Sandbox</span>
           </div>
         </div>
 
         {/* Right: Actions */}
-        <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
-          {/* Zoom / Font Size */}
-          <div className="hidden sm:flex items-center space-x-1 pr-2.5 border-r border-slate-700">
+        <div className="flex items-center space-x-2 shrink-0">
+          {/* Zoom Controls */}
+          <div className="hidden sm:flex items-center space-x-1 pr-2.5 border-r border-slate-800">
             <button
               onClick={() => setFontSize((s) => Math.max(10, s - 1))}
-              className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
               title="Decrease Font Size"
             >
               <ZoomOut className="h-3.5 w-3.5" />
             </button>
-            <span className="text-[11px] font-mono text-slate-200 font-bold">{fontSize}px</span>
+            <span className="text-[11px] font-mono text-slate-300 px-1">{fontSize}px</span>
             <button
               onClick={() => setFontSize((s) => Math.min(22, s + 1))}
-              className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
               title="Increase Font Size"
             >
               <ZoomIn className="h-3.5 w-3.5" />
             </button>
           </div>
 
+          {/* Copy Button */}
           <button
             onClick={handleCopy}
-            className="flex items-center space-x-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold transition-colors cursor-pointer"
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium text-xs transition-colors cursor-pointer active:scale-95"
           >
             {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5 text-slate-400" />}
-            <span className="hidden xs:inline">{copied ? 'Copied' : 'Copy'}</span>
+            <span>{copied ? 'Copied' : 'Copy'}</span>
           </button>
 
+          {/* Download Button */}
           <button
             onClick={handleDownload}
-            className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 transition-colors cursor-pointer"
-            title="Download .py script"
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium text-xs transition-colors cursor-pointer active:scale-95"
+            title="Download Python script (.py)"
           >
-            <Download className="h-3.5 w-3.5" />
+            <Download className="h-3.5 w-3.5 text-slate-400" />
+            <span className="hidden xs:inline">Download</span>
           </button>
 
-          {/* Run Python in Sandbox */}
+          {/* Run Code in Sandbox */}
           <button
             onClick={handleRunCode}
             disabled={isRunning}
-            className="flex items-center space-x-1.5 px-3 sm:px-4 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white text-xs font-bold shadow-md shadow-emerald-900/30 transition-all hover:scale-[1.02] active:scale-95 cursor-pointer disabled:opacity-50 shrink-0"
+            className="flex items-center space-x-1.5 px-4 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-950/40 transition-all hover:scale-[1.02] active:scale-95 cursor-pointer disabled:opacity-50 shrink-0"
           >
             <Play className={`h-3.5 w-3.5 fill-current ${isRunning ? 'animate-spin' : ''}`} />
-            <span>{isRunning ? 'Running...' : 'Run Code'}</span>
+            <span>{isRunning ? 'Running...' : 'Run in Sandbox'}</span>
           </button>
         </div>
       </div>
 
-      {/* 2. INTERACTIVE REFINERY PARAMETER SLIDERS */}
-      <div className="flex items-center gap-3 sm:gap-5 px-2.5 sm:px-4 py-2 bg-[#0f172a] border-b border-slate-800 text-xs overflow-x-auto scrollbar-none flex-nowrap shrink-0">
-        <span className="font-bold text-slate-300 flex items-center gap-1.5 shrink-0">
-          <Sliders className="h-3.5 w-3.5 text-blue-400" />
-          <span className="hidden xs:inline">Variables:</span>
-        </span>
-
-        <div className="flex items-center space-x-2 bg-slate-800/80 px-2.5 sm:px-3 py-1 rounded-xl border border-slate-700 shrink-0">
-          <span className="text-slate-400 text-[11px]">API Gravity:</span>
-          <input
-            type="range"
-            min="20.0"
-            max="40.0"
-            step="0.1"
-            value={apiGravity}
-            onChange={(e) => setApiGravity(parseFloat(e.target.value))}
-            className="w-20 sm:w-28 accent-blue-500 cursor-pointer"
-          />
-          <span className="font-mono font-bold text-blue-400">{apiGravity}°</span>
-        </div>
-
-        <div className="flex items-center space-x-2 bg-slate-800/80 px-2.5 sm:px-3 py-1 rounded-xl border border-slate-700 shrink-0">
-          <span className="text-slate-400 text-[11px]">Sulfur:</span>
-          <input
-            type="range"
-            min="0.1"
-            max="4.0"
-            step="0.05"
-            value={sulfurPct}
-            onChange={(e) => setSulfurPct(parseFloat(e.target.value))}
-            className="w-20 sm:w-28 accent-orange-500 cursor-pointer"
-          />
-          <span className="font-mono font-bold text-orange-400">{sulfurPct}%</span>
-        </div>
-      </div>
-
-      {/* 3. CODE EDITOR AREA */}
+      {/* 2. CODE EDITOR AREA */}
       <div className="flex-1 flex overflow-hidden bg-[#0b1120]">
         {showLineNumbers && (
           <div
             style={{ fontSize: `${fontSize}px` }}
-            className="w-12 bg-[#0b1120] text-slate-600 border-r border-slate-800 text-right pr-3 py-4 select-none font-mono leading-relaxed"
+            className="w-12 bg-[#070b14] text-slate-600 border-r border-slate-800 text-right pr-3 py-4 select-none font-mono leading-relaxed shrink-0"
           >
             {lines.map((_: string, i: number) => (
-              <div key={i}>{i + 1}</div>
+              <div key={i} className="hover:text-slate-400">{i + 1}</div>
             ))}
           </div>
         )}
@@ -262,51 +250,93 @@ if __name__ == "__main__":
           onChange={handleCodeChange}
           spellCheck={false}
           style={{ fontSize: `${fontSize}px` }}
-          className="flex-1 h-full bg-[#0b1120] text-slate-100 focus:outline-none resize-none font-mono p-4 leading-relaxed overflow-auto selection:bg-blue-900/60"
+          className="flex-1 h-full bg-[#0b1120] text-slate-100 focus:outline-none resize-none font-mono p-4 leading-relaxed overflow-auto selection:bg-blue-600/40"
+          placeholder="# Type or paste Python code here..."
         />
       </div>
 
-      {/* 4. OUTPUT TERMINAL DECK */}
+      {/* 3. OUTPUT TERMINAL DECK (LIVE REAL SANDBOX) */}
       <AnimatePresence>
         {outputConsole && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 200, opacity: 1 }}
+            animate={{ height: 230, opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="bg-[#0f172a] border-t border-slate-700 flex flex-col shrink-0 z-20 shadow-2xl"
+            className="bg-[#070b14] border-t border-slate-800 flex flex-col shrink-0 z-20 shadow-2xl"
           >
-            <div className="flex items-center justify-between px-4 py-2 bg-[#1e293b] border-b border-slate-700 text-xs text-slate-400">
-              <div className="flex items-center space-x-2 text-emerald-400 font-bold">
-                <Terminal className="h-3.5 w-3.5" />
-                <span>PYTHON 3.11 WASM SANDBOX RUNNER</span>
+            {/* Terminal Header */}
+            <div className="flex items-center justify-between px-4 py-2 bg-[#0d1527] border-b border-slate-800 text-xs">
+              <div className="flex items-center space-x-2">
+                <Terminal className="h-3.5 w-3.5 text-emerald-400" />
+                <span className="font-mono font-bold text-white tracking-wide">SANDBOX TERMINAL CONSOLE</span>
+                {runSuccess === true && (
+                  <span className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-medium border border-emerald-500/30">
+                    <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+                    Passed (Exit Code 0)
+                  </span>
+                )}
+                {runSuccess === false && (
+                  <span className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-rose-500/20 text-rose-300 font-medium border border-rose-500/30">
+                    <XCircle className="h-3 w-3 text-rose-400" />
+                    Execution Failed
+                  </span>
+                )}
+                {executionTime !== null && (
+                  <span className="text-slate-400 font-mono text-[11px]">{executionTime}ms</span>
+                )}
               </div>
-              <button
-                onClick={() => setOutputConsole(null)}
-                className="text-slate-400 hover:text-white text-xs font-bold p-1"
-              >
-                ✕ Close
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={handleRunCode}
+                  disabled={isRunning}
+                  className="flex items-center space-x-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition-colors"
+                >
+                  <RefreshCw className={`h-3 w-3 ${isRunning ? 'animate-spin' : ''}`} />
+                  <span>Rerun</span>
+                </button>
+                <button
+                  onClick={() => setOutputConsole(null)}
+                  className="text-slate-400 hover:text-white text-xs font-bold px-1.5 py-0.5 rounded hover:bg-slate-800 transition-colors"
+                >
+                  ✕ Close
+                </button>
+              </div>
             </div>
-            <pre className="flex-1 p-4 text-xs font-mono text-emerald-300 whitespace-pre-wrap overflow-auto bg-[#090d16] selection:bg-emerald-900/40">
+
+            {/* Terminal Output */}
+            <pre className={`flex-1 p-3.5 text-xs font-mono whitespace-pre-wrap overflow-auto selection:bg-emerald-900/50 ${runSuccess === false ? 'text-rose-300 bg-[#0c0a0f]' : 'text-emerald-300 bg-[#050811]'}`}>
               {outputConsole}
             </pre>
+
+            {/* Generated Files if any */}
+            {generatedFiles.length > 0 && (
+              <div className="px-4 py-1.5 bg-[#090e1a] border-t border-slate-800/80 flex items-center gap-2 overflow-x-auto text-[11px]">
+                <FolderDown className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                <span className="text-slate-400 font-medium">Generated Outputs:</span>
+                {generatedFiles.map((file, idx) => (
+                  <span key={idx} className="px-2 py-0.5 rounded bg-blue-950/60 border border-blue-800/50 text-blue-300 font-mono">
+                    {file.name} ({(file.size_bytes / 1024).toFixed(1)} KB)
+                  </span>
+                ))}
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* 5. STATISTICS FOOTER */}
-      <div className="flex items-center justify-between px-5 py-2 bg-[#1e293b] border-t border-slate-700/80 text-[11px] text-slate-400 font-mono shrink-0">
+      {/* 4. FOOTER STATUS BAR */}
+      <div className="flex items-center justify-between px-4 py-1.5 bg-[#070b14] border-t border-slate-800 text-[11px] text-slate-400 font-mono shrink-0">
         <div className="flex items-center space-x-3">
-          <span>Lines: <strong className="text-white">{lines.length}</strong></span>
+          <span>Lines: <strong className="text-slate-200">{lines.length}</strong></span>
           <span>&bull;</span>
-          <span>Characters: <strong className="text-white">{code.length}</strong></span>
+          <span>Chars: <strong className="text-slate-200">{code.length}</strong></span>
           <span>&bull;</span>
-          <span>Encoding: <strong className="text-slate-200">UTF-8</strong></span>
+          <span>Encoding: <strong className="text-slate-300">UTF-8</strong></span>
         </div>
-        <span className="text-emerald-400 font-sans font-bold flex items-center gap-1.5">
+        <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-          Python Sandbox Studio
-        </span>
+          <span className="text-emerald-400 font-sans font-medium text-[11px]">Python Sandbox Ready</span>
+        </div>
       </div>
     </div>
   );

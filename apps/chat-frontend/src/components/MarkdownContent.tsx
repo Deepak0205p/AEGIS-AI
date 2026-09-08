@@ -1,8 +1,31 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import {
+  Play,
+  Copy,
+  Check,
+  Code2,
+  Terminal,
+  ExternalLink,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
+  CheckCircle2,
+  XCircle,
+  RefreshCw,
+  Edit3
+} from 'lucide-react';
+import { useCanvasStore } from '@/store/useCanvasStore';
+
+function getApiBase(): string {
+  if (typeof window !== 'undefined') {
+    return `http://${window.location.hostname}:8000`;
+  }
+  return 'http://localhost:8000';
+}
 
 /**
  * Pre-processes markdown content to clean up escaped characters,
@@ -12,13 +35,13 @@ function cleanMarkdownText(raw: string): string {
   if (!raw) return '';
   let text = raw;
 
-  // Clean LaTeX text wraps like $\\text{FCV}$, $\\text{D-105}$, \\text{V-1}, etc.
+  // Clean LaTeX text wraps like $\text{FCV}$, $\text{D-105}$, \text{V-1}, etc.
   text = text.replace(/\$\s*\\text\{([^}]+)\}\s*\$/g, '$1');
   text = text.replace(/\\text\{([^}]+)\}/g, '$1');
   text = text.replace(/\$([A-Za-z0-9\-_]+)\$/g, '$1');
 
   // Clean unrendered escaped characters like \[ or \] or \( or \)
-  text = text.replace(/\\\[([\s\S]*?)\\\]/g, '\n\n```\n$1\n```\n\n');
+  text = text.replace(/\\\[([\s\S]*?)\\\]/g, '\n\n```python\n$1\n```\n\n');
   text = text.replace(/\\\(([\s\S]*?)\\\)/g, '`$1`');
   
   // Clean raw LaTeX symbol tags if leaked
@@ -37,6 +60,232 @@ function cleanMarkdownText(raw: string): string {
 
   return text.trim();
 }
+
+/**
+ * Professional Interactive Python Code Block
+ * Supports:
+ * - One-click Copy
+ * - Instant Run in Air-Gapped Sandbox with genuine live stdout / stderr terminal
+ * - Edit in Studio Terminal / Canvas
+ */
+interface PythonBlockProps {
+  code: string;
+  language?: string;
+}
+
+const PythonCodeBlock = ({ code, language = 'python' }: PythonBlockProps) => {
+  const { openCanvas, updateEditedContent } = useCanvasStore();
+  const [copied, setCopied] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [outputResult, setOutputResult] = useState<{
+    stdout?: string;
+    stderr?: string;
+    exitCode?: number;
+    success?: boolean;
+    timeMs?: number;
+  } | null>(null);
+
+  const cleanCode = code.replace(/\n$/, '');
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(cleanCode);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleOpenStudio = () => {
+    const filename = `sandbox_script_${Date.now().toString().slice(-4)}.py`;
+    const dynamicId = `deliv-py-${Date.now()}`;
+    
+    updateEditedContent(dynamicId, { code: cleanCode });
+    
+    openCanvas({
+      id: dynamicId,
+      filename,
+      type: 'py',
+      size_bytes: cleanCode.length,
+      size_formatted: `${(cleanCode.length / 1024).toFixed(1)} KB`,
+      source_scenario: 'Interactive Code Studio',
+      source_requirement: 'Python Sandbox Execution',
+      generating_model: 'Sovereign Engine',
+      generated_timestamp: new Date().toLocaleTimeString(),
+      sha256_hash: 'py_sandbox_hash',
+      summary: 'Interactive Python Air-Gapped Sandbox Editor & Runner',
+      key_metrics: [
+        { label: 'Language', value: 'Python 3.11' },
+        { label: 'Sandbox Mode', value: 'Air-Gapped / Isolated' },
+        { label: 'Status', value: 'Ready to Run' }
+      ],
+      sop_citations: ['OISD-STD-105', 'Python 3.11 Execution Standard']
+    } as any);
+  };
+
+  const handleRunSandbox = async () => {
+    setIsRunning(true);
+    setTerminalOpen(true);
+    setOutputResult(null);
+
+    const startTime = performance.now();
+    try {
+      const res = await fetch(`${getApiBase()}/api/sandbox/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: cleanCode }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      const elapsed = Math.round(performance.now() - startTime);
+      const isSuccess = data.success ?? (data.exit_code === 0);
+
+      setOutputResult({
+        stdout: data.stdout || '',
+        stderr: data.stderr || '',
+        exitCode: data.exit_code ?? (isSuccess ? 0 : 1),
+        success: isSuccess,
+        timeMs: data.execution_time_sec ? Math.round(data.execution_time_sec * 1000) : elapsed,
+      });
+    } catch (err: any) {
+      setOutputResult({
+        stderr: err.message || 'Failed to connect to Python Sandbox backend.',
+        exitCode: 1,
+        success: false,
+        timeMs: Math.round(performance.now() - startTime),
+      });
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  return (
+    <div className="my-4 rounded-xl border border-slate-700/80 bg-[#080d1a] shadow-xl overflow-hidden text-left">
+      {/* 1. TOP HEADER BAR */}
+      <div className="flex items-center justify-between px-3 sm:px-4 py-2 bg-[#0d1527] border-b border-slate-800 text-xs">
+        {/* Left: Language & Execution Environment */}
+        <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1.5 px-2.5 py-0.5 rounded-lg bg-blue-950/70 border border-blue-800/60 text-blue-400 font-mono text-[11px] font-semibold">
+            <Code2 className="h-3.5 w-3.5 text-blue-400" />
+            <span>Python 3.11</span>
+          </div>
+          <span className="hidden sm:inline-block text-[11px] text-slate-400 font-medium">
+            Air-Gapped Sandbox
+          </span>
+        </div>
+
+        {/* Right: Actions */}
+        <div className="flex items-center space-x-1.5 sm:space-x-2">
+          {/* Copy Button */}
+          <button
+            onClick={handleCopy}
+            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 text-[11px] font-medium transition-colors"
+            title="Copy Python Code"
+          >
+            {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3 text-slate-400" />}
+            <span>{copied ? 'Copied' : 'Copy'}</span>
+          </button>
+
+          {/* Open in Full Studio Terminal */}
+          <button
+            onClick={handleOpenStudio}
+            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700/60 text-[11px] font-medium transition-colors cursor-pointer"
+            title="Open Interactive Code Studio & Terminal"
+          >
+            <Edit3 className="h-3 w-3 text-blue-400" />
+            <span className="hidden xs:inline">Edit in Studio</span>
+          </button>
+
+          {/* Run in Sandbox Button */}
+          <button
+            onClick={handleRunSandbox}
+            disabled={isRunning}
+            className="flex items-center space-x-1.5 px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold shadow-md shadow-emerald-950/50 transition-all hover:scale-[1.02] active:scale-95 cursor-pointer disabled:opacity-50"
+            title="Execute Python code in isolated sandbox"
+          >
+            <Play className={`h-3 w-3 fill-current ${isRunning ? 'animate-spin' : ''}`} />
+            <span>{isRunning ? 'Running...' : 'Run Code'}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 2. CODE BLOCK BODY */}
+      <div className="p-3 sm:p-4 overflow-x-auto text-[13px] font-mono leading-relaxed bg-[#060a14] text-slate-100 scrollbar-thin">
+        <pre className="m-0 p-0">
+          <code>{cleanCode}</code>
+        </pre>
+      </div>
+
+      {/* 3. LIVE SANDBOX EXECUTION OUTPUT CONSOLE */}
+      {terminalOpen && (
+        <div className="border-t border-slate-800 bg-[#040711]">
+          {/* Terminal Title Bar */}
+          <div className="flex items-center justify-between px-3 py-1.5 bg-[#090f1f] border-b border-slate-800/80 text-[11px]">
+            <div className="flex items-center space-x-2">
+              <Terminal className="h-3.5 w-3.5 text-emerald-400" />
+              <span className="font-mono font-bold text-slate-200">SANDBOX OUTPUT</span>
+              {isRunning && (
+                <span className="text-amber-400 flex items-center gap-1">
+                  <RefreshCw className="h-3 w-3 animate-spin" />
+                  Executing...
+                </span>
+              )}
+              {outputResult && (
+                <>
+                  {outputResult.success ? (
+                    <span className="flex items-center gap-1 px-1.5 py-0.2 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-400 font-medium text-[10px]">
+                      <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400" />
+                      Success (0)
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1 px-1.5 py-0.2 rounded bg-rose-950/80 border border-rose-700/60 text-rose-400 font-medium text-[10px]">
+                      <XCircle className="h-2.5 w-2.5 text-rose-400" />
+                      Exit Code {outputResult.exitCode}
+                    </span>
+                  )}
+                  {outputResult.timeMs !== undefined && (
+                    <span className="text-slate-500 font-mono text-[10px]">{outputResult.timeMs}ms</span>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => setTerminalOpen(false)}
+                className="text-slate-400 hover:text-white text-[11px] p-0.5"
+              >
+                Hide
+              </button>
+            </div>
+          </div>
+
+          {/* Console Content */}
+          <div className="p-3 text-xs font-mono max-h-48 overflow-y-auto whitespace-pre-wrap">
+            {isRunning && (
+              <span className="text-slate-400 italic">Initializing Python sandbox environment & running code...</span>
+            )}
+            {!isRunning && outputResult && (
+              <div>
+                {outputResult.stdout && (
+                  <div className="text-emerald-400 leading-relaxed">{outputResult.stdout}</div>
+                )}
+                {outputResult.stderr && (
+                  <div className="text-rose-400 mt-2 leading-relaxed">{outputResult.stderr}</div>
+                )}
+                {!outputResult.stdout && !outputResult.stderr && (
+                  <span className="text-slate-500 italic">Code executed without any output.</span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const MarkdownContent = ({ content }: { content: string }) => {
   const cleanedContent = cleanMarkdownText(content);
@@ -95,6 +344,10 @@ export const MarkdownContent = ({ content }: { content: string }) => {
 
           // Code blocks & Inline code
           code: ({ node, inline, className, children, ...props }: any) => {
+            const match = /language-(\w+)/.exec(className || '');
+            const lang = match ? match[1] : '';
+            const codeString = String(children);
+
             if (inline) {
               return (
                 <code className="px-1.5 py-0.5 mx-0.5 rounded-md bg-slate-100 dark:bg-white/[0.08] text-blue-700 dark:text-blue-300 font-mono text-[13px] border border-slate-200/60 dark:border-white/10" {...props}>
@@ -102,12 +355,13 @@ export const MarkdownContent = ({ content }: { content: string }) => {
                 </code>
               );
             }
+
+            // Always render multi-line code blocks using our dedicated PythonCodeBlock
             return (
-              <div className="my-3 rounded-xl overflow-hidden border border-slate-200 dark:border-white/10 bg-slate-900 text-slate-100 text-xs sm:text-[13px] font-mono shadow-md">
-                <div className="px-4 py-3 overflow-x-auto scrollbar-thin">
-                  <code {...props}>{children}</code>
-                </div>
-              </div>
+              <PythonCodeBlock
+                code={codeString}
+                language={lang || 'python'}
+              />
             );
           },
 
