@@ -619,14 +619,64 @@ async def handle_vision_mode(
         {"role": "user", "content": clean_user_prompt}
     ]
 
-    gen_tokens = []
-    token_gen = await call_ollama(
+    # ── Step 1: Extract Raw Visual Details via Qwen2.5-VL into Temporary Variable ──
+    yield {"token": f"🔍 Scanning image with {VISION_MODEL_NAME}...\n\n"}
+    
+    raw_vision_output = await call_ollama(
         vision_messages,
-        stream=True,
+        stream=False,
         temperature=0.05 if is_ocr else 0.15,
         think=False,
         images=image_base64_list if image_base64_list else None,
         model=VISION_MODEL_NAME,
+    )
+    raw_visual_extracted_data = filter_thinking(str(raw_vision_output))
+    logger.info(f"[{mode_name.upper()}] Qwen2.5-VL raw extraction completed ({len(raw_visual_extracted_data)} chars)")
+
+    # ── Step 2: Model Swap (Unload Qwen -> Load Gemma 4 E4B) ──
+    PROFESSIONAL_REWRITER_MODEL = "gemma4-e4b:latest"
+    yield {"token": f"✨ Formatting & polishing report with Gemma 4 E4B...\n\n"}
+    await swap_to_model(
+        target_model=PROFESSIONAL_REWRITER_MODEL,
+        unload_model_name=VISION_MODEL_NAME,
+        chat_id=chat_id,
+        context_to_transfer=f"Raw Vision Extraction:\n{raw_visual_extracted_data[:2000]}"
+    )
+
+    # ── Step 3: Professional Rewriting via Gemma 4 E4B (Strictly Zero Data Modification) ──
+    rewrite_messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are an Industrial Operations Technical Editor. "
+                "You have been provided with raw verified visual inspection data extracted directly from an engineering diagram or image by a vision sensor model. "
+                "YOUR SOLE TASK: Rewrite and format this extracted inspection data into a clean, highly professional, executive industrial markdown report.\n\n"
+                "STRICT GROUNDING & FIDELITY CONSTRAINTS:\n"
+                "1. PRESERVE ALL extracted equipment tags, numbers, vessel names, sensor labels, and readings VERBATIM.\n"
+                "2. DO NOT add, invent, modify, or fabricate any data, values, or components not present in the extraction data.\n"
+                "3. If the extraction mentions an element is not visible or unreadable, keep it exactly as reported.\n"
+                "4. Structure the report with clear headings, bullet points, and neat tables for readability."
+            )
+        },
+        {
+            "role": "user",
+            "content": (
+                f"### RAW VERIFIED VISUAL EXTRACTION DATA:\n"
+                f"\"\"\"\n{raw_visual_extracted_data}\n\"\"\"\n\n"
+                f"User Instruction: {clean_user_prompt}\n\n"
+                f"Please produce a clear, authoritative, and professionally formatted technical inspection report strictly based on the extraction data above."
+            )
+        }
+    ]
+
+    gen_tokens = []
+    token_gen = await call_ollama(
+        rewrite_messages,
+        stream=True,
+        temperature=0.2,
+        think=think,
+        images=None,
+        model=PROFESSIONAL_REWRITER_MODEL,
     )
 
     async for chunk in token_gen:
