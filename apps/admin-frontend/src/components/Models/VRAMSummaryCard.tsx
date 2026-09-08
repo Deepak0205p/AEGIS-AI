@@ -111,16 +111,16 @@ export function VRAMSummaryCard() {
         </div>
 
         <div className="space-y-0.5 p-2 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/60">
-          <p className="text-[10px] text-cyan-400 uppercase">Primary Model (DeepSeek 4B)</p>
+          <p className="text-[10px] text-cyan-400 uppercase truncate">Primary ({useModelStore.getState().models.find(m => m.is_primary)?.id || 'deepseek-v4-pro:4b'})</p>
           <p className="text-cyan-600 dark:text-cyan-300 font-bold tabular-nums">
             {vram.primary_model_mb || 2480} MB
           </p>
         </div>
 
         <div className="space-y-0.5 p-2 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/60">
-          <p className="text-[10px] text-emerald-400 uppercase">Active Code / ReAct Model</p>
+          <p className="text-[10px] text-emerald-400 uppercase truncate">Secondary ({useModelStore.getState().models.find(m => !m.is_primary && m.status === 'active')?.id || 'qwen2.5vl:3b'})</p>
           <p className="text-emerald-600 dark:text-emerald-300 font-bold tabular-nums">
-            {vram.secondary_model_mb || 2480} MB
+            {vram.secondary_model_mb || 2200} MB
           </p>
         </div>
 

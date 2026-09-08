@@ -16,7 +16,7 @@ import time
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 
-from backend.config import OLLAMA_HOST, logger
+from backend.config import MODEL_NAME, VISION_MODEL_NAME, OLLAMA_HOST, logger
 
 class ComputeNode(BaseModel):
     id: str
@@ -45,7 +45,7 @@ _nodes_db: Dict[str, ComputeNode] = {
         is_local=True,
         status="online",
         device_type="Local GPU",
-        discovered_models=["qwen3-4b", "qwen2-vl-2b", "qwen2.5-coder-3b"],
+        discovered_models=[MODEL_NAME, VISION_MODEL_NAME],
         latency_ms=0.8,
         last_seen=time.strftime("%Y-%m-%d %H:%M:%S"),
         vram_total_mb=8029,
@@ -111,6 +111,18 @@ async def test_node_connection(host_ip: str, port: int) -> Dict[str, Any]:
         }
 
 def get_all_nodes() -> List[ComputeNode]:
+    # Update local node models dynamically
+    if "node-local" in _nodes_db:
+        local_node = _nodes_db["node-local"]
+        try:
+            import httpx
+            r = httpx.get(f"http://{local_node.host_ip}:{local_node.port}/api/tags", timeout=1.0)
+            if r.status_code == 200:
+                tags = [m.get("name", "") for m in r.json().get("models", [])]
+                if tags:
+                    local_node.discovered_models = tags
+        except Exception:
+            local_node.discovered_models = [MODEL_NAME, VISION_MODEL_NAME]
     return list(_nodes_db.values())
 
 def get_node(node_id: str) -> Optional[ComputeNode]:

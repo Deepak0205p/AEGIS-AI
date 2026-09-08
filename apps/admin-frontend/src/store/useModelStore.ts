@@ -117,7 +117,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
       is_local: true,
       status: 'online',
       device_type: 'Local GPU',
-      discovered_models: ['qwen3-4b', 'qwen2-vl-2b', 'qwen2.5-coder-3b'],
+      discovered_models: ['deepseek-v4-pro:4b', 'qwen2.5vl:3b'],
       latency_ms: 0.8,
       vram_total_mb: 8029,
       vram_used_mb: 4200,

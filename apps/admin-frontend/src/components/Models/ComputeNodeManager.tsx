@@ -337,25 +337,44 @@ export function ComputeNodeManager() {
 
                 {/* Available / Discovered Models Pill List */}
                 <div>
-                  <span className="text-[10px] text-gray-400 uppercase tracking-wider block mb-1">
-                    Available Models on this device:
-                  </span>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] text-gray-400 uppercase tracking-wider">
+                      Available Models on this device:
+                    </span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">
+                      {isLocal ? '● Live Telemetry Synced' : '● Node Bound'}
+                    </span>
+                  </div>
                   <div className="flex flex-wrap gap-1.5">
-                    {node.discovered_models && node.discovered_models.length > 0 ? (
-                      node.discovered_models.map((m) => (
-                        <span
-                          key={m}
-                          className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-800 dark:text-gray-200 text-[10px] font-mono flex items-center gap-1"
-                        >
-                          <Cpu className="w-2.5 h-2.5 text-blue-500" />
-                          <span>{m}</span>
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-[10px] text-gray-400 italic">
-                        No custom models discovered yet (Ollama default)
-                      </span>
-                    )}
+                    {(() => {
+                      // If local node, sync with active models in store
+                      const availableModels = isLocal && models.length > 0
+                        ? models.map(m => m.id)
+                        : (node.discovered_models && node.discovered_models.length > 0 ? node.discovered_models : ['deepseek-v4-pro:4b', 'qwen2.5vl:3b']);
+
+                      return availableModels.map((m) => {
+                        const isPrimary = models.find(mod => mod.id === m)?.is_primary;
+                        const isSecondary = models.find(mod => mod.id === m)?.status === 'active' && !isPrimary;
+
+                        return (
+                          <span
+                            key={m}
+                            className={`px-2 py-0.5 rounded border text-[10px] font-mono flex items-center gap-1 transition-all ${
+                              isPrimary
+                                ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-semibold shadow-xs'
+                                : isSecondary
+                                ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-300 dark:border-blue-800 text-blue-700 dark:text-blue-300 font-semibold'
+                                : 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-800 dark:text-gray-200'
+                            }`}
+                          >
+                            <Cpu className={`w-2.5 h-2.5 ${isPrimary ? 'text-emerald-500' : isSecondary ? 'text-blue-500' : 'text-gray-400'}`} />
+                            <span>{m}</span>
+                            {isPrimary && <span className="text-[8px] bg-emerald-600 text-white px-1 rounded">PRIMARY</span>}
+                            {isSecondary && <span className="text-[8px] bg-blue-600 text-white px-1 rounded">ACTIVE</span>}
+                          </span>
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
               </div>
