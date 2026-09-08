@@ -103,7 +103,7 @@ function groupChatsByTime(sessions: any[]) {
 
 interface AppSidebarProps {
   onOpenSearchModal?: () => void;
-  activePage?: 'chat' | 'artifacts';
+  activePage?: 'chat' | 'artifacts' | 'agents';
 }
 
 export function AppSidebar({ onOpenSearchModal, activePage = 'chat' }: AppSidebarProps) {
@@ -140,7 +140,8 @@ export function AppSidebar({ onOpenSearchModal, activePage = 'chat' }: AppSideba
   }, [toggleSidebar, onOpenSearchModal]);
 
   const isArtifactsActive = activePage === 'artifacts' || pathname === '/artifacts';
-  const isChatActive = activePage === 'chat' && pathname !== '/artifacts';
+  const isAgentsActive = activePage === 'agents' || pathname === '/agents';
+  const isChatActive = activePage === 'chat' && pathname !== '/artifacts' && pathname !== '/agents';
 
   const filteredSessions = useMemo(() => {
     if (!chatSearch.trim()) return sessions;
@@ -210,13 +211,17 @@ export function AppSidebar({ onOpenSearchModal, activePage = 'chat' }: AppSideba
         </SidebarTooltip>
 
         <SidebarTooltip text="Agent Builder">
-          <button
-            onClick={() => useCustomAgentStore.getState().openModal()}
+          <Link
+            href="/agents"
             aria-label="Agent Builder"
-            className="h-10 w-10 flex items-center justify-center rounded-full hover:bg-slate-200 text-slate-700 hover:text-slate-900 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-white transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer"
+            className={`h-10 w-10 flex items-center justify-center rounded-full transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer ${
+              isAgentsActive
+                ? 'bg-blue-50 text-blue-700 dark:bg-[#1e1f20] dark:text-[#a8c7fa]'
+                : 'hover:bg-slate-200 text-slate-700 hover:text-slate-900 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-white'
+            }`}
           >
-            <Cpu className="h-4 w-4 text-blue-600 dark:text-[#a8c7fa]" />
-          </button>
+            <Cpu className="h-4 w-4" />
+          </Link>
         </SidebarTooltip>
 
         <SidebarTooltip text="Artifacts">
@@ -317,16 +322,18 @@ export function AppSidebar({ onOpenSearchModal, activePage = 'chat' }: AppSideba
             <FileText className="h-4 w-4 shrink-0" />
             <span>Artifacts</span>
           </Link>
-          <button
-            onClick={() => {
-              useCustomAgentStore.getState().openModal();
-              if (typeof window !== 'undefined' && window.innerWidth < 768) closeSidebar();
-            }}
-            className="w-full flex items-center space-x-3 px-3 py-2 rounded-xl text-xs transition-colors min-h-[38px] hover:bg-slate-200/80 text-slate-700 hover:text-slate-900 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-white font-medium cursor-pointer"
+          <Link
+            href="/agents"
+            onClick={() => { if (typeof window !== 'undefined' && window.innerWidth < 768) closeSidebar(); }}
+            className={`w-full flex items-center space-x-3 px-3 py-2 rounded-xl text-xs transition-colors min-h-[38px] cursor-pointer ${
+              isAgentsActive
+                ? 'bg-blue-50 text-blue-700 font-bold dark:bg-[#1e1f20] dark:text-[#a8c7fa]'
+                : 'hover:bg-slate-200/80 text-slate-700 hover:text-slate-900 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-white font-medium'
+            }`}
           >
             <Cpu className="h-4 w-4 shrink-0" />
             <span>Agent Builder</span>
-          </button>
+          </Link>
         </div>
 
         {/* Recent Chats — Grouped */}

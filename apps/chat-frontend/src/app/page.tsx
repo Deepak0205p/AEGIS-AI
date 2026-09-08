@@ -1109,15 +1109,15 @@ export default function GeminiReplicaChatApp() {
                 <RevealBrand size="sm" />
               </div>
               <div className="flex items-center space-x-1.5">
-                <button
-                  onClick={openAgentModal}
+                <Link
+                  href="/agents"
                   aria-label="Custom Agents"
                   className="flex items-center space-x-1 px-2.5 py-1.5 rounded-full bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:hover:bg-blue-500/20 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30 text-[11px] font-bold transition-all active:scale-95 cursor-pointer"
                   title="Custom AI Agents Builder"
                 >
                   <Cpu className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
                   <span>Agents</span>
-                </button>
+                </Link>
                 <button
                   onClick={cycleTheme}
                   aria-label="Toggle theme"
