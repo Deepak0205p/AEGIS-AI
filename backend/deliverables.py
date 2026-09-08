@@ -232,10 +232,7 @@ def build_docx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
     # ── Title ──
     title_p = doc.add_heading(title, level=0)
     title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    # ── Table of Contents ──
-    toc_heading = doc.add_heading("Table of Contents", level=1)
-    _add_docx_toc(doc)
+    doc.add_paragraph()  # Spacing after title
     
     # ── Numbered Heading Counters ──
     h1_counter = 0
