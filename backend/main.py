@@ -621,24 +621,32 @@ AUTH_USERS = {
         "role": "SUPER_ADMIN",
         "full_name": "Refinery Compliance Chief",
         "department": "Executive HSE & CISO",
+        "status": "ACTIVE",
+        "created_at": "2026-01-10 09:00:00",
     },
     "operator": {
         "password_hash": hashlib.sha256("RefineryPass2026!".encode()).hexdigest(),
         "role": "FIELD_OPERATOR",
         "full_name": "Lead Process Operator",
         "department": "Refinery Operations",
+        "status": "ACTIVE",
+        "created_at": "2026-02-14 11:30:00",
     },
     "engineer": {
         "password_hash": hashlib.sha256("RefineryEng2026!".encode()).hexdigest(),
         "role": "MAINTENANCE_ENG",
         "full_name": "Senior Reliability Engineer",
         "department": "Mechanical Maintenance",
+        "status": "ACTIVE",
+        "created_at": "2026-03-01 14:15:00",
     },
     "lead": {
         "password_hash": hashlib.sha256("ProcessLead2026!".encode()).hexdigest(),
         "role": "PROCESS_LEAD",
         "full_name": "Chief Process Lead",
         "department": "Crude Distillation Unit (CDU)",
+        "status": "ACTIVE",
+        "created_at": "2026-03-15 08:45:00",
     },
 }
 
@@ -673,6 +681,12 @@ async def login_endpoint(body: LoginRequest):
     user = AUTH_USERS.get(body.username)
     if not user:
         return JSONResponse(status_code=401, content={"status": "ERROR", "detail": "Invalid credentials"})
+
+    if user.get("status") == "FROZEN":
+        return JSONResponse(
+            status_code=403,
+            content={"status": "ERROR", "detail": "Access Denied: Account is frozen/suspended by Administrator."}
+        )
 
     pw_hash = hashlib.sha256(body.password.encode()).hexdigest()
     if not hmac.compare_digest(pw_hash, user["password_hash"]):
@@ -1338,6 +1352,23 @@ async def run_sandbox_code(body: SandboxRunRequest):
 
 # --- Additional Admin Endpoints for Complete Subsystem Support ---
 
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "FIELD_OPERATOR"
+    full_name: str
+    department: str = "Refinery Operations"
+
+class UpdateUserRequest(BaseModel):
+    role: Optional[str] = None
+    full_name: Optional[str] = None
+    department: Optional[str] = None
+    status: Optional[str] = None
+    password: Optional[str] = None
+
+class ToggleFreezeRequest(BaseModel):
+    status: str # "ACTIVE" | "FROZEN"
+
 @app.get("/api/v1/auth/users")
 @app.get("/api/auth/users")
 async def list_auth_users():
@@ -1348,12 +1379,106 @@ async def list_auth_users():
         users_list.append({
             "id": idx,
             "username": uname,
-            "role": udata["role"],
-            "full_name": udata["full_name"],
-            "department": udata["department"],
+            "role": udata.get("role", "FIELD_OPERATOR"),
+            "full_name": udata.get("full_name", uname),
+            "department": udata.get("department", "Operations"),
+            "status": udata.get("status", "ACTIVE"),
+            "created_at": udata.get("created_at", "2026-01-01 00:00:00"),
         })
         idx += 1
     return {"status": "SUCCESS", "users": users_list}
+
+@app.post("/api/v1/auth/users")
+async def create_auth_user(body: CreateUserRequest):
+    """Creates a new admin or operator account in the sovereign registry."""
+    uname = body.username.strip().lower()
+    if not uname:
+        raise HTTPException(status_code=400, detail="Username cannot be empty")
+    if uname in AUTH_USERS:
+        raise HTTPException(status_code=400, detail=f"User '{uname}' already exists")
+    
+    pw_hash = hashlib.sha256(body.password.encode()).hexdigest()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    AUTH_USERS[uname] = {
+        "password_hash": pw_hash,
+        "role": body.role,
+        "full_name": body.full_name,
+        "department": body.department,
+        "status": "ACTIVE",
+        "created_at": now_str,
+    }
+    logger.info(f"[USER_MGMT] Created user: {uname} ({body.role})")
+    return {
+        "status": "SUCCESS",
+        "message": f"User '{uname}' created successfully",
+        "user": {
+            "username": uname,
+            "role": body.role,
+            "full_name": body.full_name,
+            "department": body.department,
+            "status": "ACTIVE",
+            "created_at": now_str
+        }
+    }
+
+@app.put("/api/v1/auth/users/{username}")
+async def update_auth_user(username: str, body: UpdateUserRequest):
+    """Updates role, department, name, or password for an existing account."""
+    uname = username.strip().lower()
+    if uname not in AUTH_USERS:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user = AUTH_USERS[uname]
+    if body.role:
+        user["role"] = body.role
+    if body.full_name:
+        user["full_name"] = body.full_name
+    if body.department:
+        user["department"] = body.department
+    if body.status:
+        user["status"] = body.status
+    if body.password:
+        user["password_hash"] = hashlib.sha256(body.password.encode()).hexdigest()
+        
+    logger.info(f"[USER_MGMT] Updated user: {uname} (role={user['role']}, status={user['status']})")
+    return {
+        "status": "SUCCESS",
+        "message": f"User '{uname}' updated successfully",
+        "user": {
+            "username": uname,
+            "role": user["role"],
+            "full_name": user["full_name"],
+            "department": user["department"],
+            "status": user.get("status", "ACTIVE"),
+        }
+    }
+
+@app.post("/api/v1/auth/users/{username}/freeze")
+async def toggle_user_freeze(username: str, body: ToggleFreezeRequest):
+    """Freezes (suspends) or activates a user account."""
+    uname = username.strip().lower()
+    if uname not in AUTH_USERS:
+        raise HTTPException(status_code=404, detail="User not found")
+    if uname == "admin" and body.status == "FROZEN":
+        raise HTTPException(status_code=400, detail="Cannot freeze root administrator account 'admin'")
+        
+    AUTH_USERS[uname]["status"] = body.status
+    logger.info(f"[USER_MGMT] Toggled freeze for {uname}: {body.status}")
+    return {"status": "SUCCESS", "message": f"User '{uname}' status changed to {body.status}"}
+
+@app.delete("/api/v1/auth/users/{username}")
+async def delete_auth_user(username: str):
+    """Deletes an operator account."""
+    uname = username.strip().lower()
+    if uname not in AUTH_USERS:
+        raise HTTPException(status_code=404, detail="User not found")
+    if uname == "admin":
+        raise HTTPException(status_code=400, detail="Root administrator account 'admin' cannot be deleted")
+        
+    del AUTH_USERS[uname]
+    logger.info(f"[USER_MGMT] Deleted user: {uname}")
+    return {"status": "SUCCESS", "message": f"User '{uname}' deleted successfully"}
+
 
 
 class RouterEvalRequest(BaseModel):
