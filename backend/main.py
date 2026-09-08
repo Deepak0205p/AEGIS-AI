@@ -33,6 +33,7 @@ if str(BASE_DIR) not in sys.path:
 from backend.config import (
     MODEL_NAME,
     VISION_MODEL_NAME,
+    OCR_MODEL_NAME,
     OLLAMA_HOST,
     NUM_CTX,
     LOGS_DIR,
@@ -326,7 +327,7 @@ async def generate_chat_events(
                 # Use the handler's filtered content (thinking already stripped)
                 handler_content = event.get("content", "")
                 accumulated_text = handler_content if handler_content else filter_thinking("".join(full_tokens))
-                effective_model = VISION_MODEL_NAME if route in ("vision", "ocr") else MODEL_NAME
+                effective_model = OCR_MODEL_NAME if route == "ocr" else (VISION_MODEL_NAME if route == "vision" else MODEL_NAME)
                 yield {
                     "done": True,
                     "generated_file": gen_file,

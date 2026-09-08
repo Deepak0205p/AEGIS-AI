@@ -218,18 +218,18 @@ def route_message(
 
     # 2. Phase 1: Attachment-aware routing
     if attachments:
-        # Check text intent for explicit diagram / visual inspection
+        # Check text intent for explicit diagram / visual inspection (P&ID, schematic, CAD)
         is_diagram_or_inspection = bool(
             re.search(r"\b(p&id|pid|cad|diagram|drawing|blueprint|schematic|photo|picture|gauge|needle|corrosion|flowsheet)\b", message_text, re.IGNORECASE)
         )
         is_explicit_ocr = bool(
-            re.search(r"\b(ocr|extract|text|table|transcribe|read text|digitize|invoice|receipt|document|pdf|slip)\b", message_text, re.IGNORECASE)
+            re.search(r"\b(ocr|extract|text|table|transcribe|read text|digitize|invoice|receipt|document|pdf|slip|letter|report)\b", message_text, re.IGNORECASE)
         )
 
         for att in attachments:
             clean_att = str(att).lower().strip()
-            # If attachment is PDF extension or PDF base64 header (%PDF)
-            if clean_att.endswith(".pdf") or "pdf" in clean_att[:50] or clean_att.startswith("jvber"):
+            # If attachment is PDF extension or PDF base64 header (%PDF / JVBERi0)
+            if clean_att.endswith(".pdf") or "pdf" in clean_att[:50] or clean_att.startswith("jvber") or clean_att.startswith("data:application/pdf"):
                 route = "vision" if is_diagram_or_inspection else "ocr"
                 logger.info(f"[ROUTER] Route decision: '{route}' via PDF attachment (diagram={is_diagram_or_inspection})")
                 return route, "attachment_pdf"
@@ -242,10 +242,9 @@ def route_message(
 
             # Direct base64 image data (e.g. data:image/png;base64,... or raw base64)
             if clean_att.startswith("data:image") or len(clean_att) > 100:
-                # If user asks to extract text/table/OCR or attached PDF, route to OCR; else vision
-                target_route = "ocr" if is_explicit_ocr else ("vision" if is_diagram_or_inspection else "ocr")
-                logger.info(f"[ROUTER] Route decision: '{target_route}' via base64 payload (ocr={is_explicit_ocr}, diagram={is_diagram_or_inspection})")
-                return target_route, f"attachment_base64_{target_route}"
+                target_route = "vision" if (is_diagram_or_inspection and not is_explicit_ocr) else "ocr"
+                logger.info(f"[ROUTER] Route decision: '{target_route}' via image/attachment payload (ocr={is_explicit_ocr}, diagram={is_diagram_or_inspection})")
+                return target_route, f"attachment_{target_route}"
 
     # Check for image filename / attached indicators in user message text
     image_ext_in_text = re.search(r"\b\w+\.(png|jpg|jpeg|webp|bmp|tiff|tif)\b", message_text, re.IGNORECASE)
