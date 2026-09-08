@@ -208,11 +208,11 @@ export function AppSidebar({ onOpenSearchModal, activePage = 'chat' }: AppSideba
           </Link>
         </SidebarTooltip>
 
-        <SidebarTooltip text="Custom AI Agents">
+        <SidebarTooltip text="Agent Builder">
           <button
             onClick={() => useCustomAgentStore.getState().openModal()}
-            aria-label="Custom AI Agents"
-            className="h-10 w-10 flex items-center justify-center rounded-full hover:bg-slate-200 text-slate-700 hover:text-blue-600 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-[#a8c7fa] transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer"
+            aria-label="Agent Builder"
+            className="h-10 w-10 flex items-center justify-center rounded-full hover:bg-slate-200 text-slate-700 hover:text-slate-900 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-white transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer"
           >
             <Bot className="h-4 w-4" />
           </button>
@@ -321,15 +321,10 @@ export function AppSidebar({ onOpenSearchModal, activePage = 'chat' }: AppSideba
               useCustomAgentStore.getState().openModal();
               if (typeof window !== 'undefined' && window.innerWidth < 768) closeSidebar();
             }}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-colors min-h-[38px] hover:bg-slate-200/80 text-slate-700 hover:text-blue-600 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-[#a8c7fa] font-medium cursor-pointer"
+            className="w-full flex items-center space-x-3 px-3 py-2 rounded-xl text-xs transition-colors min-h-[38px] hover:bg-slate-200/80 text-slate-700 hover:text-slate-900 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-white font-medium cursor-pointer"
           >
-            <div className="flex items-center space-x-3">
-              <Bot className="h-4 w-4 shrink-0 text-blue-600 dark:text-[#a8c7fa]" />
-              <span>Custom AI Agents</span>
-            </div>
-            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300">
-              Builder
-            </span>
+            <Bot className="h-4 w-4 shrink-0" />
+            <span>Agent Builder</span>
           </button>
         </div>
 
