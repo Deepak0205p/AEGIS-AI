@@ -177,130 +177,129 @@ def _enhance_image_quality(img):
     return img
 
 
-def encode_image_to_base64(file_path: str) -> Optional[str]:
+def encode_all_images_or_pdf(file_path: str) -> List[str]:
     """
-    Encodes an image or PDF file to a base64 string for multimodal inference.
-    Supports PNG, JPG, JPEG, TIFF, BMP, WEBP, and single/multi-page PDFs.
-    Ensures high-resolution detail retention, crisp contrast, and dimensions >= 56x56.
+    Encodes an image or all pages of a PDF document into a list of base64 strings.
+    Supports multi-page PDFs (extracting and rasterizing every page up to 20 pages for unlimited OCR).
     """
-    try:
-        if not file_path:
-            return None
+    results: List[str] = []
+    if not file_path:
+        return results
 
-        from PIL import Image
-        import io
+    from PIL import Image
+    import io
 
-        # Check if already a raw or data-prefixed base64 string
-        clean_b64 = None
-        if str(file_path).startswith("data:image"):
-            clean_b64 = file_path.split(",", 1)[-1].strip()
-        elif len(str(file_path)) > 50:
-            clean_b64 = str(file_path).strip()
+    # Check if already a raw or data-prefixed base64 string
+    clean_b64 = None
+    if str(file_path).startswith("data:"):
+        clean_b64 = file_path.split(",", 1)[-1].strip()
+    elif len(str(file_path)) > 50:
+        clean_b64 = str(file_path).strip()
 
-        if clean_b64:
-            try:
-                raw_bytes = base64.b64decode(clean_b64)
-                
-                # Check if decoded payload is a PDF file (%PDF- / 0x25 0x50 0x44 0x46)
-                if raw_bytes.startswith(b"%PDF") or clean_b64.startswith("JVBERi0"):
+    if clean_b64:
+        try:
+            raw_bytes = base64.b64decode(clean_b64)
+            
+            # Check if decoded payload is a PDF file
+            if raw_bytes.startswith(b"%PDF") or clean_b64.startswith("JVBERi0"):
+                try:
+                    import fitz  # PyMuPDF
+                    doc = fitz.open(stream=raw_bytes, filetype="pdf")
+                    for page_idx, page in enumerate(doc):
+                        if page_idx >= 25:  # High-capacity multi-page limit
+                            break
+                        pix = page.get_pixmap(dpi=200)
+                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                        img = _enhance_image_quality(img)
+                        buf = io.BytesIO()
+                        img.save(buf, format="JPEG", quality=95, subsampling=0)
+                        results.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
+                    if results:
+                        return results
+                except Exception as fitz_err:
+                    logger.debug(f"[OCR] PyMuPDF multi-page fallback: {fitz_err}")
                     try:
-                        import fitz  # PyMuPDF
-                        doc = fitz.open(stream=raw_bytes, filetype="pdf")
-                        for page in doc:
-                            pix = page.get_pixmap(dpi=200)
-                            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                            img = _enhance_image_quality(img)
-                            buf = io.BytesIO()
-                            img.save(buf, format="JPEG", quality=95, subsampling=0)
-                            return base64.b64encode(buf.getvalue()).decode("utf-8")
-                    except Exception as pdf_err:
-                        try:
-                            import pypdf
-                            reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
-                            for page in reader.pages:
-                                for img_obj in page.images:
-                                    img = Image.open(io.BytesIO(img_obj.data)).convert("RGB")
-                                    img = _enhance_image_quality(img)
-                                    buf = io.BytesIO()
-                                    img.save(buf, format="JPEG", quality=95, subsampling=0)
-                                    return base64.b64encode(buf.getvalue()).decode("utf-8")
-                        except Exception as pypdf_err:
-                            logger.warning(f"[VISION/OCR] Could not rasterize base64 PDF: {pypdf_err}")
+                        import pypdf
+                        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
+                        for page in reader.pages:
+                            for img_obj in page.images:
+                                img = Image.open(io.BytesIO(img_obj.data)).convert("RGB")
+                                img = _enhance_image_quality(img)
+                                buf = io.BytesIO()
+                                img.save(buf, format="JPEG", quality=95, subsampling=0)
+                                results.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
+                        if results:
+                            return results
+                    except Exception as pypdf_err:
+                        logger.warning(f"[VISION/OCR] Could not rasterize base64 PDF: {pypdf_err}")
 
+            img = Image.open(io.BytesIO(raw_bytes))
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            if img.width < 56 or img.height < 56:
+                img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
+            img = _enhance_image_quality(img)
+            max_dim = 2560
+            ratio = min(max_dim / img.width, max_dim / img.height)
+            if ratio < 1.0:
+                new_size = (int(img.width * ratio), int(img.height * ratio))
+                img = img.resize(new_size, Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=95, subsampling=0)
+            results.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
+            return results
+        except Exception as e:
+            logger.warning(f"[VISION] decode error: {e}")
+            if clean_b64:
+                results.append(clean_b64)
+            return results
+
+    # File path handling
+    if len(str(file_path)) < 260:
+        p = Path(file_path)
+        if p.exists() and p.is_file():
+            ext = p.suffix.lower()
+            if ext == ".pdf":
+                try:
+                    import fitz
+                    doc = fitz.open(str(p))
+                    for page in doc:
+                        pix = page.get_pixmap(dpi=200)
+                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                        img = _enhance_image_quality(img)
+                        buf = io.BytesIO()
+                        img.save(buf, format="JPEG", quality=95, subsampling=0)
+                        results.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
+                    if results:
+                        return results
+                except Exception:
+                    pass
+            
+            raw_bytes = p.read_bytes()
+            try:
                 img = Image.open(io.BytesIO(raw_bytes))
                 if img.mode not in ("RGB", "L"):
                     img = img.convert("RGB")
-                # Ensure minimum 56x56 dimensions for VL patch embeddings
                 if img.width < 56 or img.height < 56:
                     img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
-                
-                # Apply quality enhancement
                 img = _enhance_image_quality(img)
-
-                # Keep higher resolution threshold for technical blueprints (up to 2560px)
                 max_dim = 2560
                 ratio = min(max_dim / img.width, max_dim / img.height)
                 if ratio < 1.0:
                     new_size = (int(img.width * ratio), int(img.height * ratio))
                     img = img.resize(new_size, Image.LANCZOS)
-                
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=95, subsampling=0)
-                return base64.b64encode(buf.getvalue()).decode("utf-8")
-            except Exception as e:
-                logger.warning(f"[VISION] decode error: {e}")
-                return clean_b64
+                results.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
+            except Exception:
+                results.append(base64.b64encode(raw_bytes).decode("utf-8"))
+    return results
 
-        # Check if valid file path
-        if len(str(file_path)) < 260:
-            p = Path(file_path)
-            if p.exists() and p.is_file():
-                ext = p.suffix.lower()
-                
-                # Handle PDF document pages
-                if ext == ".pdf":
-                    try:
-                        import pypdf
-                        reader = pypdf.PdfReader(str(p))
-                        for page in reader.pages:
-                            for img_obj in page.images:
-                                img = Image.open(io.BytesIO(img_obj.data)).convert("RGB")
-                                if img.width < 56 or img.height < 56:
-                                    img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
-                                img = _enhance_image_quality(img)
-                                buf = io.BytesIO()
-                                img.save(buf, format="JPEG", quality=95, subsampling=0)
-                                return base64.b64encode(buf.getvalue()).decode("utf-8")
-                    except Exception as pdf_err:
-                        logger.warning(f"[VISION/OCR] PDF image extraction fallback for {p.name}: {pdf_err}")
-                
-                # Standard image handling with high-fidelity enhancement
-                raw_bytes = p.read_bytes()
-                try:
-                    img = Image.open(io.BytesIO(raw_bytes))
-                    if img.mode not in ("RGB", "L"):
-                        img = img.convert("RGB")
-                    if img.width < 56 or img.height < 56:
-                        img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
-                    
-                    # Apply quality enhancement filter
-                    img = _enhance_image_quality(img)
 
-                    max_dim = 2560
-                    ratio = min(max_dim / img.width, max_dim / img.height)
-                    if ratio < 1.0:
-                        new_size = (int(img.width * ratio), int(img.height * ratio))
-                        img = img.resize(new_size, Image.LANCZOS)
-                    
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=95, subsampling=0)
-                    norm_bytes = buf.getvalue()
-                    return base64.b64encode(norm_bytes).decode("utf-8")
-                except Exception:
-                    return base64.b64encode(raw_bytes).decode("utf-8")
-    except Exception as e:
-        logger.warning(f"[VISION] Failed to encode image '{str(file_path)[:40]}...': {e}")
-    return None
+def encode_image_to_base64(file_path: str) -> Optional[str]:
+    """Compatibility wrapper returning the first page/image base64."""
+    all_imgs = encode_all_images_or_pdf(file_path)
+    return all_imgs[0] if all_imgs else None
 
 
 def _ocr_post_process(text: str) -> str:
@@ -567,13 +566,12 @@ async def handle_vision_mode(
     system_prompt = OCR_SYSTEM_PROMPT if is_ocr else VISION_SYSTEM_PROMPT
     logger.info(f"[{mode_name.upper()}_MODE] chat_id={chat_id} think={think} attachments={attachments}")
 
-    # Encode all image attachments (multi-image support)
+    # Encode all image attachments & all pages of multi-page PDFs (unlimited OCR)
     image_base64_list: List[str] = []
     if attachments:
         for att in attachments:
-            b64 = encode_image_to_base64(att)
-            if b64:
-                image_base64_list.append(b64)
+            b64_list = encode_all_images_or_pdf(att)
+            image_base64_list.extend(b64_list)
 
     # ── Cache Check ──
     force_rescan = bool(RESCAN_PATTERN.search(user_message))
@@ -647,14 +645,15 @@ async def handle_vision_mode(
         {"role": "user", "content": clean_user_prompt}
     ]
 
-    # ── Step 1: Extract Raw Visual Details via Qwen2.5-VL into Temporary Variable ──
-    yield {"token": f"🔍 Scanning image with {VISION_MODEL_NAME}...\n\n"}
+    # ── Step 1: Extract Raw Visual Details via Qwen2.5-VL into Temporary Variable (Unlimited Token Budget) ──
+    yield {"token": f"🔍 Scanning image with {VISION_MODEL_NAME} (High-Density Multi-Page OCR)...\n\n"}
     
     raw_vision_output = await call_ollama(
         vision_messages,
         stream=False,
         temperature=0.05 if is_ocr else 0.15,
         think=False,
+        max_tokens=8192,
         images=image_base64_list if image_base64_list else None,
         model=VISION_MODEL_NAME,
     )
@@ -671,7 +670,7 @@ async def handle_vision_mode(
         context_to_transfer=f"Raw Vision Extraction:\n{raw_visual_extracted_data[:2000]}"
     )
 
-    # ── Step 3: Professional Rewriting via Gemma 4 E4B (Strictly Zero Data Modification) ──
+    # ── Step 3: Professional Rewriting via Gemma 4 E4B (Strictly Zero Data Modification, Unlimited Output) ──
     rewrite_messages = [
         {
             "role": "system",
@@ -704,6 +703,7 @@ async def handle_vision_mode(
         stream=True,
         temperature=0.2,
         think=think,
+        max_tokens=8192,
         images=None,
         model=PROFESSIONAL_REWRITER_MODEL,
     )
