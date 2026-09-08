@@ -495,32 +495,38 @@ async def route_message_async(
         logger.info(f"[ROUTER] Route decision: '{clean_override}' via manual mode override")
         return clean_override, "manual_override"
 
-    # 2. Fast-path attachment routing: Images must be processed by multimodal vision model
+    # 2. Fast-path attachment routing: Images & PDFs go to OCR by default (or vision for diagrams)
     if attachments:
-        has_image = any(
+        is_explicit_diagram = bool(
+            re.search(r"\b(p&id|pid|cad|diagram|drawing|blueprint|schematic|photo|picture|gauge|needle|corrosion|flowsheet)\b", clean_msg, re.IGNORECASE)
+        )
+        is_explicit_ocr = bool(
+            re.search(r"\b(ocr|extract|text|table|transcribe|read text|digitize|invoice|receipt|document|pdf|slip|letter|report)\b", clean_msg, re.IGNORECASE)
+        )
+
+        has_image_or_pdf = any(
             str(a).startswith("data:image")
+            or str(a).startswith("data:application/pdf")
             or len(str(a)) > 50
             or str(a).startswith("iVBORw0")
+            or str(a).startswith("JVBERi0")
             or str(a).startswith("/9j/")
             or str(a).startswith("R0lGOD")
             or str(a).startswith("UklGR")
-            or any(str(a).lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"])
+            or any(str(a).lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".pdf"])
             for a in attachments
         )
-        if has_image:
-            # Check if user specifically requested OCR text extraction
-            if re.search(r"\b(ocr|extract text|read text|transcribe|get text|text nikal|extract table)\b", clean_msg, re.IGNORECASE):
-                logger.info("[ROUTER] Route decision: 'ocr' via image attachment + OCR extraction request")
-                return "ocr", "attachment_image_ocr"
-            logger.info("[ROUTER] Route decision: 'vision' via image attachment")
-            return "vision", "attachment_image_vision"
+        if has_image_or_pdf:
+            route = "vision" if (is_explicit_diagram and not is_explicit_ocr) else "ocr"
+            logger.info(f"[ROUTER] Route decision: '{route}' via attachment payload (diagram={is_explicit_diagram}, ocr={is_explicit_ocr})")
+            return route, f"attachment_{route}"
 
         has_spreadsheet = any(any(str(a).lower().endswith(ext) for ext in [".xlsx", ".xls", ".csv"]) for a in attachments)
         if has_spreadsheet:
             logger.info("[ROUTER] Route decision: 'excel' via spreadsheet attachment")
             return "excel", "attachment_spreadsheet"
 
-        has_doc = any(any(str(a).lower().endswith(ext) for ext in [".docx", ".doc", ".pdf"]) for a in attachments)
+        has_doc = any(any(str(a).lower().endswith(ext) for ext in [".docx", ".doc"]) for a in attachments)
         if has_doc:
             logger.info("[ROUTER] Route decision: 'docs' via document attachment")
             return "docs", "attachment_doc"
