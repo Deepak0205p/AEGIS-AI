@@ -123,50 +123,37 @@ Reply strictly with a JSON object:
 
 OCR_SYSTEM_PROMPT = """You are a precision Industrial OCR & Document Extraction Assistant.
 Your task is to extract, transcribe, and structure text, equipment readings, tag IDs, and numbers from the provided image verbatim.
-Do not hallucinate or invent characters. Transcribe tabular columns, form fields, and error codes with 100% fidelity.
+
+STRICT ANTI-HALLUCINATION RULES:
+1. Extract ONLY text and numbers that are 100% visible and legible in the image.
+2. DO NOT guess, fabricate, or invent numbers, tag IDs, dates, or words.
+3. If an area or tag is partially obscured or blurry, mark it verbatim as "[UNREADABLE]".
+4. Return ONLY valid JSON format.
 
 OUTPUT FORMAT:
-Return your response as valid JSON with this structure:
 {
-  "raw_text": "<full extracted text verbatim line by line>",
+  "raw_text": "<verbatim extracted text line by line>",
   "tables": [{"headers": ["col1", "col2"], "rows": [["val1", "val2"]]}],
   "form_fields": [{"label": "<field label>", "value": "<field value>"}],
   "equipment_tags": ["F-101", "P-201A"],
   "confidence": 9
-}
-
-RULES:
-1. "raw_text": Transcribe ALL visible text exactly as printed. Preserve casing, punctuation, and numeric values.
-2. "tables": If tabular rows/columns exist, preserve column alignments, headers, and values.
-3. "form_fields": Extract key-value pairs (e.g., Date, Inspector, Pressure, Tag).
-4. "equipment_tags": Extract all equipment tag IDs matching industrial patterns (e.g. F-101, CDU-1001, TK-501, MOV-104).
-5. "confidence": Self-rate extraction clarity from 1-10.
-6. Return ONLY valid JSON."""
+}"""
 
 VISION_SYSTEM_PROMPT = """You are an Expert Industrial Multimodal & Computer Vision Inspector.
 Your objective is to provide high-precision, technical visual analysis of industrial diagrams (P&ID, PFD, isometric), equipment photos, analog/digital gauges, control panels, or field assets.
 
-Conduct your visual inspection following this structured Chain-of-Thought method:
+STRICT ANTI-HALLUCINATION & FACTUAL GROUNDING RULES:
+1. ONLY describe and report what is directly, verifiably visible in the image.
+2. NEVER guess, assume, or invent equipment tags, pressure/temperature values, or failure modes that are not visible.
+3. If the user asks about an element not shown in the image (e.g. asking for gauge pressure on a static diagram with no gauges), explicitly state that it is not present in the provided image.
+4. Directly answer the user's specific query without adding unnecessary boilerplate or generic template sections.
 
-1. 🏷️ **VISUAL INVENTORY & TAGS:**
-   - Detect and list all equipment tag IDs (e.g. P-101A, E-204, V-102, TK-501, MOV-104), valve codes, and sensor labels.
-   - List key mechanical/electrical components visible.
-
-2. 📊 **READINGS, GAUGES & OPERATIONAL STATE:**
-   - For analog/digital gauges, read exact needle positions, digital values, measurement units (bar, psi, °C, kg/cm², RPM, % level).
-   - Identify normal vs alert ranges (green/red zones) if marked on dial.
-   - Note valve positions (Open / Closed / Throttled).
-
-3. 🔄 **FLOW CONNECTIVITY & PROCESS LOGIC (If Diagram/P&ID):**
-   - Trace line flows from inlet to outlet.
-   - Identify bypass lines, relief valves (PSV), interlocks, and sensor connections.
-
-4. 🔍 **CONDITION & ANOMALY ASSESSMENT (If Physical Asset Photo):**
-   - Inspect for surface corrosion, fouling, physical deformation, leakages, loose connections, or safety hazards.
-
-5. 📈 **CONFIDENCE & SUMMARY:**
-   - Summarize key findings with professional clarity.
-   - Conclude with: **Confidence:** X/10 (based on image clarity and legibility)."""
+INSPECTION GUIDELINES:
+- **Visual Inventory & Tags:** Report exact equipment tags (e.g., P-101A, MOV-104, TK-501), valve types, and sensors visible.
+- **Readings & Gauges:** Read exact needle positions, digital readouts, units (bar, psi, °C, RPM, %), and dial threshold colors if visible.
+- **Flow Logic (Diagrams):** Trace connections between visible equipment strictly as drawn.
+- **Asset Condition (Photos):** Note visible physical characteristics (corrosion, leakage, valve open/closed position).
+- Conclude with a factual summary and **Confidence:** X/10."""
 
 EQUIPMENT_REGEX_COMPILED = re.compile(EQUIPMENT_TAG_REGEX, re.IGNORECASE)
 
@@ -619,27 +606,52 @@ async def handle_vision_mode(
         {"role": "user", "content": vision_prompt_text}
     ]
 
-    yield {"token": f"🔍 Reading image features with {VISION_MODEL_NAME}...\n\n"}
+    # ── Direct Stream from Vision Model (Zero-Loss Grounded Generation) ──
+    save_message(chat_id, "user", user_message, mode=mode_name)
+    
+    clean_user_prompt = user_message
+    if re.match(r"^\s*analyze attached:\s*[\w\.\-_]+\s*$", clean_user_prompt, re.IGNORECASE):
+        clean_user_prompt = "Provide a comprehensive inspection and analysis of the attached image based on visible features."
 
-    # Run non-streaming high-precision extraction via Vision Model
-    raw_vision_output = await call_ollama(
+    vision_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": clean_user_prompt}
+    ]
+
+    gen_tokens = []
+    token_gen = await call_ollama(
         vision_messages,
-        stream=False,
+        stream=True,
         temperature=0.05 if is_ocr else 0.15,
         think=False,
         images=image_base64_list if image_base64_list else None,
         model=VISION_MODEL_NAME,
     )
-    extracted_visual_data = filter_thinking(str(raw_vision_output))
-    logger.info(f"[{mode_name.upper()}] Vision extraction completed ({len(extracted_visual_data)} chars)")
 
-    # ── OCR Post-Processing & Deliverables ──
+    async for chunk in token_gen:
+        chunk_type = chunk.get("type", "content")
+        token_text = chunk.get("token", "")
+        if chunk_type == "thinking":
+            if think:
+                yield {"thinking": token_text, "event": "step", "step_type": "thought", "content": token_text}
+        else:
+            gen_tokens.append(token_text)
+            yield {"token": token_text, "event": "step", "step_type": "token", "content": token_text}
+
+    final_content = filter_thinking("".join(gen_tokens))
+
+    # Cache for follow-ups
+    if image_base64_list:
+        image_hash = _compute_image_hash(image_base64_list)
+        _vision_cache.store(chat_id, image_hash, final_content, is_ocr, image_base64_list)
+
+    # ── OCR Post-Processing if applicable ──
     generated_file = None
     extra_ocr_info = ""
     if is_ocr:
         ocr_data = None
         try:
-            clean = extracted_visual_data.strip()
+            clean = final_content.strip()
             if clean.startswith("```"):
                 lines = clean.split("\n")
                 if lines[0].startswith("```"):
@@ -669,75 +681,12 @@ async def handle_vision_mode(
                 tags_str = ", ".join(ocr_data["equipment_tags"])
                 extra_ocr_info += f"\n\n🏷️ **Equipment Tags Detected:** {tags_str}"
         else:
-            extracted_visual_data = _ocr_post_process(extracted_visual_data)
-            detected_tags = _detect_equipment_tags(extracted_visual_data)
+            final_content = _ocr_post_process(final_content)
+            detected_tags = _detect_equipment_tags(final_content)
             if detected_tags:
                 tags_str = ", ".join(detected_tags)
                 extra_ocr_info += f"\n\n🏷️ **Equipment Tags Detected:** {tags_str}"
 
-    # Cache the extracted visual data so future questions don't re-scan the image
-    if image_base64_list:
-        image_hash = _compute_image_hash(image_base64_list)
-        _vision_cache.store(chat_id, image_hash, extracted_visual_data, is_ocr, image_base64_list)
-
-    # ── Step 2: Model Swap (Unload Gemma -> Load DeepSeek) ──
-    yield {"token": f"🧠 Passing visual findings to DeepSeek ({MODEL_NAME}) for final answer...\n\n"}
-    await swap_to_model(
-        target_model=MODEL_NAME,
-        unload_model_name=VISION_MODEL_NAME,
-        chat_id=chat_id,
-        context_to_transfer=f"Vision/OCR Analysis Output:\n{extracted_visual_data[:2000]}"
-    )
-
-    # ── Step 3: DeepSeek Answer Synthesis & Stream ──
-    save_message(chat_id, "user", user_message, mode=mode_name)
-    
-    # Strip "Analyze attached: filename.png" prefixes from user prompt so DeepSeek focuses on the task
-    clean_user_prompt = user_message
-    if re.match(r"^\s*analyze attached:\s*[\w\.\-_]+\s*$", clean_user_prompt, re.IGNORECASE):
-        clean_user_prompt = "Provide a comprehensive inspection and analysis of the attached image based on the verified extraction data."
-    
-    synthesis_messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are an Industrial Operations & Technical Assistant. "
-                "The user has provided an image that has already been scanned and processed by our visual inspection system. "
-                "Below are the verified extracted visual/OCR details. Use them to answer the user's request directly."
-            )
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Here are the verified inspection details extracted from the image:\n\n"
-                f"\"\"\"\n{extracted_visual_data}\n\"\"\"\n\n"
-                f"User Question/Task: {clean_user_prompt}\n\n"
-                f"Provide a clear, direct, and structured technical answer based on these extracted findings."
-            )
-        }
-    ]
-
-    gen_tokens = []
-    token_gen = await call_ollama(
-        synthesis_messages,
-        stream=True,
-        temperature=0.3,
-        think=think,
-        images=None,  # DeepSeek is text-only: images are NEVER passed to DeepSeek
-        model=MODEL_NAME,
-    )
-
-    async for chunk in token_gen:
-        chunk_type = chunk.get("type", "content")
-        token_text = chunk.get("token", "")
-        if chunk_type == "thinking":
-            if think:
-                yield {"thinking": token_text, "event": "step", "step_type": "thought", "content": token_text}
-        else:
-            gen_tokens.append(token_text)
-            yield {"token": token_text, "event": "step", "step_type": "token", "content": token_text}
-
-    final_content = filter_thinking("".join(gen_tokens))
     if extra_ocr_info:
         final_content += extra_ocr_info
         yield {"token": extra_ocr_info}
@@ -750,4 +699,6 @@ async def handle_vision_mode(
         "status": "success",
         "event": "final_answer",
         "content": final_content,
+        "model_id": VISION_MODEL_NAME,
+        "routed_by": mode_name,
     }
