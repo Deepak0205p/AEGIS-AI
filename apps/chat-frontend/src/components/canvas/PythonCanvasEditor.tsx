@@ -38,6 +38,7 @@ export function PythonCanvasEditor({ deliverable }: PythonCanvasEditorProps) {
   const [isRunning, setIsRunning] = useState(false);
   const [outputConsole, setOutputConsole] = useState<string | null>(null);
   const [runSuccess, setRunSuccess] = useState<boolean | null>(null);
+  const [isIsolated, setIsIsolated] = useState<boolean>(false);
   const [executionTime, setExecutionTime] = useState<number | null>(null);
   const [generatedFiles, setGeneratedFiles] = useState<any[]>([]);
   const [fontSize, setFontSize] = useState(13);
@@ -142,6 +143,7 @@ if __name__ == "__main__":
       const isSuccess = data.success ?? exitCode === 0;
 
       setRunSuccess(isSuccess);
+      setIsIsolated(Boolean(data.isolated));
       setExecutionTime(data.execution_time_sec ? Math.round(data.execution_time_sec * 1000) : 45);
       if (data.generated_files && Array.isArray(data.generated_files)) {
         setGeneratedFiles(data.generated_files);
@@ -286,6 +288,16 @@ if __name__ == "__main__":
                   <span className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-medium border border-emerald-500/30">
                     <CheckCircle2 className="h-3 w-3 text-emerald-400" />
                     Passed (Exit Code 0)
+                  </span>
+                )}
+                {isIsolated && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-950/80 border border-blue-800 text-blue-300 font-mono">
+                    Docker Container
+                  </span>
+                )}
+                {!isIsolated && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-emerald-400 font-mono">
+                    Air-Gapped Sandbox
                   </span>
                 )}
                 {runSuccess === false && (

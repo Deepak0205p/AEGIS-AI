@@ -1,21 +1,29 @@
+# ====================================================================
+# AIR-GAPPED PYTHON RUNTIME SANDBOX CONTAINER
+# Image Tag: python-sandbox:latest
+# Security: Non-root user (uid 1000), Air-gapped (no network access),
+#           Pre-installed data science & industrial calculation packages.
+# ====================================================================
+
 FROM python:3.11-slim
 
+# Create dedicated unprivileged sandbox user
+RUN groupadd -g 1000 sandbox && \
+    useradd -u 1000 -g sandbox -m -s /bin/bash sandbox
+
+# Install standard computational & data manipulation libraries
+RUN pip install --no-cache-dir \
+    numpy \
+    pandas \
+    openpyxl \
+    matplotlib \
+    scipy \
+    requests
+
+# Working directory for air-gapped script execution
 WORKDIR /task
+RUN chown -R sandbox:sandbox /task
 
-# Setup offline wheels or fallback installation for building sandbox image
-RUN mkdir -p /wheels
-COPY wheels* /wheels/
+USER sandbox
 
-RUN if [ -d "/wheels" ] && [ "$(ls -A /wheels/*.whl 2>/dev/null)" ]; then \
-        pip install --no-cache-dir --no-index --find-links=/wheels pandas numpy openpyxl; \
-    else \
-        pip install --no-cache-dir pandas numpy openpyxl; \
-    fi
-
-# Create unprivileged sandbox user (UID 1000)
-RUN useradd -m -u 1000 -s /bin/bash sandboxuser && \
-    chown -R sandboxuser:sandboxuser /task
-
-USER 1000:1000
-
-CMD ["python", "/task/main.py"]
+CMD ["python", "main.py"]
