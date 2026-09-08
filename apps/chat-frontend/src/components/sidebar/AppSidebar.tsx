@@ -19,7 +19,8 @@ import {
   X,
   LogOut,
   UserCheck,
-  Bot
+  Cpu,
+  Sparkles
 } from 'lucide-react';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useChatStore } from '@/store/useChatStore';
@@ -214,7 +215,7 @@ export function AppSidebar({ onOpenSearchModal, activePage = 'chat' }: AppSideba
             aria-label="Agent Builder"
             className="h-10 w-10 flex items-center justify-center rounded-full hover:bg-slate-200 text-slate-700 hover:text-slate-900 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-white transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer"
           >
-            <Bot className="h-4 w-4" />
+            <Cpu className="h-4 w-4 text-blue-600 dark:text-[#a8c7fa]" />
           </button>
         </SidebarTooltip>
 
@@ -323,7 +324,7 @@ export function AppSidebar({ onOpenSearchModal, activePage = 'chat' }: AppSideba
             }}
             className="w-full flex items-center space-x-3 px-3 py-2 rounded-xl text-xs transition-colors min-h-[38px] hover:bg-slate-200/80 text-slate-700 hover:text-slate-900 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-white font-medium cursor-pointer"
           >
-            <Bot className="h-4 w-4 shrink-0" />
+            <Cpu className="h-4 w-4 shrink-0" />
             <span>Agent Builder</span>
           </button>
         </div>

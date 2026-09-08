@@ -26,7 +26,9 @@ interface CustomAgentState {
   fetchAgents: () => Promise<void>;
   setActiveAgent: (agentId: string | null) => void;
   openBuilder: (agent?: CustomAgent) => void;
+  openModal: (agent?: CustomAgent) => void;
   closeBuilder: () => void;
+  closeModal: () => void;
   saveAgent: (agent: Partial<CustomAgent>) => Promise<boolean>;
   deleteAgent: (agentId: string) => Promise<boolean>;
 }
@@ -127,7 +129,19 @@ export const useCustomAgentStore = create<CustomAgentState>((set, get) => ({
       editingAgent: agent || null,
     }),
 
+  openModal: (agent) =>
+    set({
+      showBuilderModal: true,
+      editingAgent: agent || null,
+    }),
+
   closeBuilder: () =>
+    set({
+      showBuilderModal: false,
+      editingAgent: null,
+    }),
+
+  closeModal: () =>
     set({
       showBuilderModal: false,
       editingAgent: null,
