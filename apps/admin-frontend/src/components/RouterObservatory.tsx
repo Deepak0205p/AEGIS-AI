@@ -253,10 +253,6 @@ export function RouterObservatory() {
 
         <div className="relative flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-2 max-w-2xl">
-            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 text-blue-600 dark:text-blue-400 text-xs font-mono font-medium">
-              <Zap className="w-3.5 h-3.5 text-blue-500" />
-              <span>Two-Stage Deterministic &amp; Semantic Router Engine</span>
-            </div>
             <h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-2xl flex items-center gap-2.5">
               <span>Intelligent Intent &amp; Model Routing Observatory</span>
             </h1>
