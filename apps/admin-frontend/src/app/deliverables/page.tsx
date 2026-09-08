@@ -1,10 +1,17 @@
-﻿'use client';
+'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Header } from '@/components/Header';
 import { DeliverablePanel } from '@/components/Deliverables/DeliverablePanel';
+import { useDeliverableStore } from '@/store/useDeliverableStore';
 
 export default function DeliverablesPage() {
+  const fetchDiskDeliverables = useDeliverableStore((s) => s.fetchDiskDeliverables);
+
+  useEffect(() => {
+    fetchDiskDeliverables();
+  }, [fetchDiskDeliverables]);
+
   return (
     <div className="flex flex-col min-h-screen bg-white text-gray-900 font-sans">
       <Header />

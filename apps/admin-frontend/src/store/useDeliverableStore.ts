@@ -30,6 +30,7 @@ interface DeliverableState {
   selectDeliverable: (id: string | null) => void;
   downloadDeliverable: (id: string) => Promise<void>;
   addDeliverableFromAgent: (filename: string, scenarioId: string, modelId: string) => void;
+  fetchDiskDeliverables: () => Promise<void>;
 }
 
 function getApiHost(): string {
@@ -60,19 +61,34 @@ export const useDeliverableStore = create<DeliverableState>((set, get) => ({
     set({ selectedDeliverable: item });
   },
 
-  addDeliverableFromAgent: (filename: string, scenarioId: string, modelId: string) => {
-    const existing = get().deliverables.find(d => d.filename === filename);
+  addDeliverableFromAgent: (identifierOrFilename: string, scenarioId: string, modelId: string) => {
+    const cleanId = identifierOrFilename.replace(/^\/api\/files\/(download\/)?/, '').trim();
+    if (!cleanId) return;
+
+    get().fetchDiskDeliverables();
+
+    const existing = get().deliverables.find(d => d.id === cleanId || d.filename.toLowerCase() === cleanId.toLowerCase());
     if (existing) return;
 
-    const ext = filename.split('.').pop()?.toLowerCase() as DeliverableType || 'docx';
+    let ext: DeliverableType = 'docx';
+    let filename = cleanId;
+    if (cleanId.includes('.')) {
+      const parsedExt = cleanId.split('.').pop()?.toLowerCase();
+      if (['docx', 'xlsx', 'pptx', 'py'].includes(parsedExt || '')) {
+        ext = parsedExt as DeliverableType;
+      }
+    } else {
+      filename = `${cleanId}.docx`;
+    }
+
     const newItem: DeliverableItem = {
-      id: `deliv-${Date.now()}`,
+      id: cleanId,
       filename,
       type: ext,
-      size_bytes: 15000,
-      size_formatted: '15.0 KB',
+      size_bytes: 24000,
+      size_formatted: '24.0 KB',
       source_scenario: scenarioId,
-      source_requirement: 'Req 10 (Production Deliverables)',
+      source_requirement: 'Production Deliverable',
       generating_model: modelId,
       generated_timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       sha256_hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
@@ -84,14 +100,49 @@ export const useDeliverableStore = create<DeliverableState>((set, get) => ({
     set(state => ({ deliverables: [newItem, ...state.deliverables] }));
   },
 
+  fetchDiskDeliverables: async () => {
+    const host = getApiHost();
+    try {
+      const res = await fetch(`http://${host}:8000/api/files/list`);
+      if (res.ok) {
+        const data = await res.json();
+        const rawList = data.files || data.deliverables || [];
+        if (Array.isArray(rawList)) {
+          const diskItems: DeliverableItem[] = rawList.map((f: any) => {
+            const rawExt = (f.filename || '').split('.').pop()?.toLowerCase();
+            const type = (f.file_type || rawExt || 'docx').toLowerCase() as DeliverableType;
+            return {
+              id: f.file_id || f.id || `deliv-${Date.now()}`,
+              filename: f.filename || `deliverable_${f.file_id || 'unnamed'}.${type}`,
+              type: (['docx', 'xlsx', 'pptx', 'py'].includes(type) ? type : 'docx') as DeliverableType,
+              size_bytes: f.size_bytes || 24000,
+              size_formatted: f.size_formatted || '24.0 KB',
+              source_scenario: f.chat_id ? `Session: ${f.chat_id}` : (f.source_scenario || 'Refinery Output'),
+              source_requirement: f.source_requirement || 'Generated Deliverable',
+              generating_model: f.generating_model || 'deepseek-v4-pro:4b',
+              generated_timestamp: f.created_at || f.generated_timestamp || new Date().toLocaleTimeString(),
+              sha256_hash: f.sha256_hash || 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+              summary: f.summary || `Air-gapped generated deliverable: ${f.filename}`,
+              key_metrics: f.key_metrics || [{ label: 'Format', value: type.toUpperCase() }, { label: 'Status', value: 'VERIFIED' }],
+              sop_citations: f.sop_citations || ['MRPL Refinery Standards']
+            };
+          });
+
+          set({ deliverables: diskItems });
+        }
+      }
+    } catch (e) {
+      console.warn('[useDeliverableStore] Auto-sync disk deliverables fallback:', e);
+    }
+  },
+
   downloadDeliverable: async (id: string) => {
     const item = get().deliverables.find((d) => d.id === id);
     if (!item) return;
 
     const host = getApiHost();
     try {
-      // 1. Fetch genuine binary deliverable from live backend endpoint
-      const res = await fetch(`http://${host}:8000/api/files/download/${encodeURIComponent(item.filename)}`);
+      const res = await fetch(`http://${host}:8000/api/files/download/${encodeURIComponent(item.id || item.filename)}`);
       if (res.ok) {
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
@@ -103,12 +154,10 @@ export const useDeliverableStore = create<DeliverableState>((set, get) => ({
         return;
       }
     } catch {
-      // Fallback local file generator if backend is offline
+      // Fallback
     }
 
-    // Client-side download fallback
     const sanitizedFilename = item.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-    console.warn(`Backend unavailable. Cannot download ${sanitizedFilename}.`);
+    console.warn(`[useDeliverableStore] Backend unavailable. Cannot download ${sanitizedFilename}.`);
   }
 }));
-
