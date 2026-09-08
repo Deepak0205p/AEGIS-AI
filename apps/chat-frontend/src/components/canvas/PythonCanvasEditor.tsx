@@ -114,7 +114,7 @@ if __name__ == "__main__":
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleRunCode = async (customStdin?: string) => {
+  const handleRunCode = async (customStdin?: any) => {
     setIsRunning(true);
     const codeToRun = codeRef.current || code;
     setOutputConsole('Executing code in air-gapped Python sandbox...');
@@ -122,13 +122,19 @@ if __name__ == "__main__":
     setGeneratedFiles([]);
 
     try {
-      const inputToSend = customStdin !== undefined ? customStdin : stdinInput;
+      let inputToSend = '';
+      if (typeof customStdin === 'string') {
+        inputToSend = customStdin;
+      } else if (typeof stdinInput === 'string') {
+        inputToSend = stdinInput;
+      }
+      
       const res = await fetch(`${getApiBase()}/api/sandbox/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           code: codeToRun,
-          stdin_input: inputToSend.trim() ? inputToSend : undefined
+          stdin_input: inputToSend && inputToSend.trim() ? inputToSend.trim() : undefined
         }),
       });
 
