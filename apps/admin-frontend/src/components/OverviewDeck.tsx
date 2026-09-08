@@ -86,7 +86,7 @@ export function OverviewDeck({ onNavigate }: OverviewDeckProps) {
           <div className="space-y-1.5">
             
             <h1 className="text-lg font-semibold tracking-tight text-gray-900">
-              REVEAL 2.0 Command Center
+              AEGIS AI Command Center
             </h1>
             <p className="text-xs text-gray-500 max-w-2xl">
               Secure, on-premise industrial AI infrastructure powered by real-time telemetry, isolated runtime execution, and localized vector search.

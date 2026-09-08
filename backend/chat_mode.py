@@ -11,7 +11,7 @@ from backend.db import build_context_messages, save_message
 from backend.knowledge_base import format_rag_context_block
 from backend.chemical_kb import detect_chemicals, format_chemical_context_block
 
-CHAT_SYSTEM_PROMPT = """You are REVEAL, an authoritative Industrial Operations & Plant Safety Assistant for ONGC & MRPL refineries.
+CHAT_SYSTEM_PROMPT = """You are AEGIS AI, an authoritative Industrial Operations & Plant Safety Assistant for ONGC & MRPL refineries.
 
 TWO-TIER KNOWLEDGE POLICY:
 1. TIER 1 (INTERNAL REFINERY PROCEDURES & EQUIPMENT PARAMETERS):

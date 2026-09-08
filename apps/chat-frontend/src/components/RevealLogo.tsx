@@ -190,11 +190,11 @@ export function RevealBrand({
       <RevealLogoIcon className={iconSize} animated={true} />
       <div className="flex items-center space-x-1.5 font-sans">
         <span className={`font-black tracking-tight text-slate-900 dark:text-white ${textSize}`}>
-          REVEAL
+          AEGIS
         </span>
         {showBadge && (
           <span className={`font-black uppercase tracking-wider rounded-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white shadow-xs ${badgeSize}`}>
-            2.0
+            AI
           </span>
         )}
       </div>

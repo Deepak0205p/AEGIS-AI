@@ -5,8 +5,7 @@ import { GeistMono } from 'geist/font/mono';
 import { AuthGuard } from '@/components/AuthGuard';
 
 export const metadata = {
-  title: 'REVEAL 2.0 Admin',
-  
+  title: 'AEGIS AI Admin',
 };
 
 export default function RootLayout({

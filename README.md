@@ -1,4 +1,4 @@
-# 🛡️ REVEAL 2.0: Sovereign Industrial AI Workbench
+# 🛡️ AEGIS AI: Sovereign Industrial AI Workbench
 ### **Air-Gapped, On-Premise Multi-Model Agentic AI System for Confidential Industrial Work**
 
 [![SIH Problem Statement](https://img.shields.io/badge/SIH%202026-PS%20SIH26117-orange.svg?style=for-the-badge&logo=target)](https://sih.gov.in)
@@ -11,12 +11,12 @@
 
 ## 📑 Quick Navigation
 - [📌 Problem Statement (SIH26117)](#-problem-statement-overview-sih26117)
-- [💡 Solution: REVEAL 2.0](#-the-solution-reveal-20)
+- [💡 Solution: AEGIS AI](#-the-solution-aegis-ai)
 - [🛠️ Complete Technology Stack (Tech Stack)](#-complete-technology-stack-tech-stack)
 - [🏗️ System Architecture & Dataflow](#️-system-architecture)
 - [🎯 Industrial Domains & Departmental Coverage](#-supported-industrial-domains--departmental-coverage)
 - [⚡ 6 Core Execution Modes](#-6-execution-modes)
-- [🚀 Quickstart & Installation (1-Click)](#-quickstart--installation-guide)
+- [🚀 Quickstart & Installation (1-1-Click)](#-quickstart--installation-guide)
 - [🌐 Service Ports & Connectivity](#-system-port--service-map)
 - [🧪 Evaluation & Demo Scenarios for Judges](#-demonstration-scenarios-for-sih-evaluation)
 - [📡 API Endpoints Reference](#-api-endpoints-reference)
@@ -48,9 +48,9 @@ Commercial cloud AI solutions (such as ChatGPT, Anthropic Claude, or GitHub Copi
 
 ---
 
-## 💡 The Solution: REVEAL 2.0
+## 💡 The Solution: AEGIS AI
 
-**REVEAL 2.0** (*Refinery Engineering Virtual Expert & Agentic Learner*) is a production-grade, 100% self-hosted, air-gapped agentic AI workbench. It operates entirely on-premise without external network connections, delivering multimodal intelligence, autonomous sandboxed execution, and native enterprise document synthesis.
+**AEGIS AI** is a production-grade, 100% self-hosted, air-gapped agentic AI workbench. It operates entirely on-premise without external network connections, delivering multimodal intelligence, autonomous sandboxed execution, and native enterprise document synthesis.
 
 ### 🌟 Core Architectural Innovations
 1. **Dynamic VRAM Swapping & Paging Engine:** Orchestrates multiple specialized lightweight open-weight models (2B to 4B parameters) inside a **strict 6GB VRAM ceiling**, maintaining sub-second model swapping with zero Out-Of-Memory (OOM) errors.

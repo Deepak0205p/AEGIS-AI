@@ -34,7 +34,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-7s | [%(name)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("REVEAL_ENGINE")
+logger = logging.getLogger("AEGIS_ENGINE")
 
 OLLAMA_GENERATE_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 PRIMARY_MODEL = os.getenv("REVEAL_MODEL", "qwen2.5:3b")
@@ -43,7 +43,7 @@ SIMILARITY_THRESHOLD = 0.65  # Hard safety gate
 # Universal refinery equipment tag regex
 EQUIPMENT_TAG_REGEX = r"\b([A-Za-z]{1,4}-\d{3,4}[A-Za-z]?|CDU|VDU|FCCU|DHDS|SRU|DCU|MSBLOCK)\b"
 
-REVEAL_SYSTEM_INSTRUCTION = """You are REVEAL, a Senior Industrial Operations & Plant Safety Engineer for ONGC/MRPL refineries. You provide precise, authoritative, and direct operational guidance to plant engineers and field operators.
+REVEAL_SYSTEM_INSTRUCTION = """You are AEGIS AI, a Senior Industrial Operations & Plant Safety Engineer for ONGC/MRPL refineries. You provide precise, authoritative, and direct operational guidance to plant engineers and field operators.
 
 ### ABSOLUTE CONSTRAINTS (VIOLATION = SYSTEM SHUTDOWN)
 1. ZERO SYSTEM LEAKS: Never use phrases like 'based on the provided context', 'according to the text', 'the document states', or 'in the given information'. Speak directly as the authority.
@@ -58,7 +58,8 @@ DETERMINISTIC_FALLBACK_TEXT = (
 
 SCOPE_REJECTION_TEXT = (
     "I am strictly scoped for MRPL & ONGC refinery operations, engineering standards (OISD/API/ASME), "
-    "equipment SOPs, and industrial plant safety. Please submit an operational or technical query."
+    "plant safety SOPs, chemical databases, and equipment reliability. "
+    "I cannot assist with queries outside industrial refinery operations."
 )
 
 GREETING_PATTERNS = [

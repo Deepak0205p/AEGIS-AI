@@ -91,13 +91,13 @@ export function Header() {
               <span className="font-mono text-[11px]">Overview</span>
             </Link>
           ) : (
-            <Link href="/" className="h-5 w-5 rounded bg-gray-100 dark:bg-[#171717] border border-gray-200 dark:border-[#333333] flex items-center justify-center font-mono text-[11px] text-gray-900 dark:text-[#ededed] font-semibold">
-              M
+            <Link href="/" className="h-5 w-5 rounded bg-gradient-to-tr from-blue-600 to-indigo-600 border border-blue-400/30 flex items-center justify-center font-mono text-[11px] text-white font-bold shadow-xs">
+              A
             </Link>
           )}
 
           <Link href="/" className="text-xs font-semibold tracking-tight text-gray-900 dark:text-[#ededed] hover:text-gray-700 dark:hover:text-white transition-colors">
-            R E V E A L  2.0  Workbench
+            A E G I S &nbsp; A I &nbsp; Workbench
           </Link>
           <span className="text-gray-300 dark:text-[#333333]">/</span>
           <span className="text-xs font-mono text-gray-500 dark:text-[#888888]">

@@ -84,7 +84,7 @@ RESCAN_PATTERN = re.compile(
 )
 
 # Follow-up question system prompt — uses cached analysis context
-FOLLOWUP_SYSTEM_PROMPT = """You are REVEAL, an authoritative Industrial AI Assistant.
+FOLLOWUP_SYSTEM_PROMPT = """You are AEGIS AI, an authoritative Industrial AI Assistant.
 A previous visual inspection of the user's uploaded image produced the following verified extraction data:
 
 VERIFIED IMAGE EXTRACTION DATA:
@@ -97,7 +97,7 @@ CRITICAL INSTRUCTIONS:
 - Respond in clear, professional Markdown."""
 
 # DeepSeek final response synthesis prompt from vision extraction data
-SYNTHESIS_SYSTEM_PROMPT = """You are REVEAL, an authoritative Industrial AI Assistant.
+SYNTHESIS_SYSTEM_PROMPT = """You are AEGIS AI, an authoritative Industrial AI Assistant.
 The vision inspection system has scanned the user's image and extracted the following verified visual details:
 
 VERIFIED IMAGE EXTRACTION DATA:

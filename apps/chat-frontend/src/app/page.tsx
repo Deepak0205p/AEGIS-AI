@@ -1341,7 +1341,7 @@ export default function GeminiReplicaChatApp() {
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center max-w-3xl mx-auto px-4 text-center space-y-3 sm:space-y-6 w-full my-auto">
               <div className="space-y-2.5 sm:space-y-4 flex flex-col items-center">
-                {/* REVEAL 2.0 Radiant Logo Icon */}
+                {/* AEGIS AI Radiant Logo Icon */}
                 <RevealLogoIcon className="h-12 w-12 sm:h-20 sm:w-20 mb-0.5 sm:mb-1" animated={true} />
 
                 {/* Multicolored Gradient Heading */}
@@ -1349,7 +1349,7 @@ export default function GeminiReplicaChatApp() {
                   Hello, Operations Engineer
                 </h1>
                 <p className="text-xs sm:text-lg font-medium text-slate-500 dark:text-[#8e918f] tracking-tight max-w-md">
-                  REVEAL 2.0 Sovereign Intelligence Platform is ready to assist.
+                  AEGIS AI Sovereign Intelligence Platform is ready to assist.
                 </p>
               </div>
             </div>
@@ -1679,7 +1679,7 @@ export default function GeminiReplicaChatApp() {
           </div>
 
           <div className="text-center text-[9px] sm:text-[10px] text-slate-400 dark:text-[#8e918f] pt-1.5 sm:pt-2 font-sans px-2 leading-tight">
-            REVEAL 2.0 Sovereign AI Platform operates 100% on-premise without external network egress. Verify critical engineering directives.
+            AEGIS AI Sovereign AI Platform operates 100% on-premise without external network egress. Verify critical engineering directives.
           </div>
         </div>
       </>
