@@ -85,6 +85,25 @@ function normalizeDbMessage(msg: any): ChatMessage {
       deliverableIds = typeof msg.deliverables_json === 'string' ? JSON.parse(msg.deliverables_json) : msg.deliverables_json;
     } catch { deliverableIds = []; }
   }
+
+  // Robust fallback: Extract file IDs and download links directly from message markdown content
+  if ((!deliverableIds || deliverableIds.length === 0) && msg.content) {
+    const extracted: string[] = [];
+    // Match /api/files/download/<id> or /api/files/<id>
+    const fileMatches = msg.content.match(/\/api\/files\/(download\/)?([a-zA-Z0-9_-]+(\.[a-zA-Z0-9]+)?)/g);
+    if (fileMatches) {
+      fileMatches.forEach((m: string) => {
+        const clean = m.replace(/\/api\/files\/(download\/)?/, '').trim();
+        if (clean && !extracted.includes(clean)) {
+          extracted.push(clean);
+        }
+      });
+    }
+    if (extracted.length > 0) {
+      deliverableIds = extracted;
+    }
+  }
+
   let attachments = msg.attachments;
   if (!attachments && msg.attachments_json) {
     try {

@@ -365,6 +365,56 @@ export const MarkdownContent = ({ content }: { content: string }) => {
             );
           },
 
+          // Links & File Deliverables
+          a: ({ node, href, children, ...props }: any) => {
+            const linkHref = href || '';
+            const isFileLink = linkHref.includes('/api/files/') || linkHref.startsWith('/api/files/');
+            if (isFileLink) {
+              const fileId = linkHref.replace(/^.*\/api\/files\/(download\/)?/, '').trim();
+              const label = String(children || fileId || 'Open Document');
+              return (
+                <span className="inline-flex items-center gap-1.5 my-1 mx-1 px-2.5 py-1 rounded-xl bg-blue-50/90 dark:bg-[#1a2233] border border-blue-200 dark:border-[#2f3d5a] text-blue-700 dark:text-[#a8c7fa] text-xs font-semibold shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      useCanvasStore.getState().openCanvas(fileId);
+                    }}
+                    className="flex items-center gap-1 hover:underline cursor-pointer font-bold"
+                    title={`Open ${label} in Interactive Live Canvas`}
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-blue-600 dark:text-[#a8c7fa] shrink-0" />
+                    <span>{label}</span>
+                    <span className="px-1 py-0.2 rounded text-[9px] bg-blue-100 dark:bg-[#25324d] text-blue-800 dark:text-[#c2e7ff] uppercase">
+                      Edit Live
+                    </span>
+                  </button>
+                  <a
+                    href={linkHref.startsWith('http') ? linkHref : `${getApiBase()}/api/files/${fileId}`}
+                    download
+                    title={`Download ${label}`}
+                    className="p-0.5 rounded hover:bg-blue-100 dark:hover:bg-[#283754] text-blue-500 dark:text-[#a8c7fa] transition-colors ml-0.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                </span>
+              );
+            }
+            return (
+              <a
+                href={linkHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 dark:text-[#a8c7fa] hover:underline inline-flex items-center gap-0.5 font-medium"
+                {...props}
+              >
+                {children}
+                <ExternalLink className="h-3 w-3 inline-block ml-0.5 opacity-70" />
+              </a>
+            );
+          },
+
           // Strong emphasis
           strong: ({ node, ...props }) => (
             <strong className="font-semibold text-slate-900 dark:text-white" {...props} />

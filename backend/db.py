@@ -108,7 +108,7 @@ def save_message(chat_id: str, role: str, content: str, mode: str = "chat") -> i
 
 
 def get_chat_history(chat_id: str) -> List[Dict[str, Any]]:
-    """Returns all messages for a given chat_id ordered by id."""
+    """Returns all messages for a given chat_id ordered by id, with attached deliverable files."""
     conn = get_db_connection()
     with conn.cursor() as cursor:
         cursor.execute(
@@ -116,18 +116,48 @@ def get_chat_history(chat_id: str) -> List[Dict[str, Any]]:
             (chat_id,)
         )
         rows = cursor.fetchall()
+
+        # Query all files associated with this chat_id
+        cursor.execute(
+            "SELECT file_id, chat_id, filename, file_type, file_path, created_at FROM files WHERE chat_id = %s ORDER BY created_at ASC",
+            (chat_id,)
+        )
+        file_rows = cursor.fetchall()
     conn.close()
-    return [
-        {
+
+    files_list = [dict(f) for f in file_rows]
+
+    result = []
+    for r in rows:
+        msg_content = r["content"] or ""
+        matched_deliv_ids = []
+
+        # 1. Match files whose file_id or filename appears in msg_content
+        for f in files_list:
+            fid = f["file_id"]
+            fname = f["filename"]
+            if fid in msg_content or fname in msg_content or f"/api/files/{fid}" in msg_content or f"/api/files/download/{fid}" in msg_content:
+                if fid not in matched_deliv_ids:
+                    matched_deliv_ids.append(fid)
+
+        # 2. Extract any /api/files/... links from msg_content directly
+        import re
+        extracted = re.findall(r'/api/files/(?:download/)?([a-zA-Z0-9_\-\.]+)', msg_content)
+        for ext_id in extracted:
+            clean = ext_id.strip()
+            if clean and clean not in matched_deliv_ids:
+                matched_deliv_ids.append(clean)
+
+        result.append({
             "id": r["id"],
             "chat_id": r["chat_id"],
             "role": r["role"],
             "content": r["content"],
             "mode": r["mode"],
             "timestamp": str(r["timestamp"]),
-        }
-        for r in rows
-    ]
+            "deliverable_ids": matched_deliv_ids,
+        })
+    return result
 
 
 def get_cached_summary(chat_id: str) -> Optional[Tuple[str, int]]:
