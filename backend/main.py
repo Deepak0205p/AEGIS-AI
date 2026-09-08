@@ -249,6 +249,19 @@ async def generate_chat_events(
         else:
             logger.info(f"[RAG] chat_id={chat_id} SKIPPED reason={rag_trigger}")
 
+    # Event 0: Direct Routing Event frame (updates UI routing badge & trace immediately)
+    routed_by_label = "model_orchestrator" if (trigger_keyword and "model_orchestrator" in trigger_keyword) else (
+        "manual" if trigger_keyword == "manual_override" else "heuristic_regex"
+    )
+    yield {
+        "event": "routing",
+        "domain": route,
+        "model_id": MODEL_NAME,
+        "routed_by": routed_by_label,
+        "confidence": 98,
+        "reason": trigger_keyword,
+    }
+
     # Event 1: Extended meta frame
     yield {
         "route": route,

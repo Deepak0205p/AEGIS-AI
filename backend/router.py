@@ -345,41 +345,113 @@ def route_message(
     return "chat", "default_chat"
 
 
-async def classify_intent_fast(user_message: str) -> Optional[str]:
+async def classify_intent_model(
+    user_message: str,
+    attachments: Optional[List[str]] = None,
+    last_route: Optional[str] = None
+) -> Tuple[str, str, float]:
     """
-    Phase 3: Ultra-fast single-token LLM intent classifier for zero-match ambiguous queries.
-    Uses temperature=0.0 and max_tokens=10 with think=False to classify in ~50-100ms.
+    Intelligent LLM Intent Classifier for Auto Mode.
+    Uses the local sovereign model (deepseek-v4-pro:4b) with json_mode=True and think=False.
+    Accurately classifies across English, Hindi, Hinglish, and technical jargon into one of:
+    - 'code': Programming, scripts, Python/SQL, mathematical/numerical derivations, simulations, plotting charts
+    - 'excel': Spreadsheets, tabular datasets, formulas (SUM, AVERAGE, VLOOKUP), ledgers, tables, rows/columns
+    - 'ppt': Presentation slides, pitch decks, slide overviews, .pptx deliverables
+    - 'docs': Formal Word reports, memos, official notices, letters, incident SOPs, meeting minutes, .docx deliverables
+    - 'ocr': Extracting or reading raw text/numbers/tables from images or scanned documents/receipts
+    - 'vision': Visual inspection, engineering diagrams, P&ID schematics, physical plant defect detection from images
+    - 'chat': General conversation, answering technical plant questions, explaining concepts, troubleshooting, SOP consultation
+    Returns (mode, reason, confidence).
     """
+    import json
     from backend.ollama_client import call_ollama, filter_thinking
 
+    # Build context notes
+    context_notes = []
+    if last_route and last_route not in ("auto", "orchestrator"):
+        context_notes.append(f"Previous interaction mode was '{last_route}'. If this is a follow-up or modification, keep continuity.")
+
+    if attachments:
+        att_kinds = []
+        for a in attachments:
+            a_str = str(a).lower()
+            if a_str.startswith("data:image") or any(a_str.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"]):
+                att_kinds.append("image")
+            elif any(a_str.endswith(ext) for ext in [".xlsx", ".xls", ".csv"]):
+                att_kinds.append("spreadsheet")
+            elif any(a_str.endswith(ext) for ext in [".docx", ".doc", ".pdf"]):
+                att_kinds.append("document")
+            elif any(a_str.endswith(ext) for ext in [".py", ".sql", ".sh"]):
+                att_kinds.append("code file")
+            else:
+                att_kinds.append("file")
+        context_notes.append(f"User provided {len(attachments)} attachment(s): {', '.join(att_kinds)}.")
+
+    context_str = f" Context: {' '.join(context_notes)}" if context_notes else ""
+
+    system_prompt = (
+        "You are the sovereign AI task intent classifier and orchestrator for an industrial engineering workstation.\n"
+        "Analyze the user's input (in English, Hindi, Hinglish, or technical jargon) and identify their execution intent.\n"
+        "Available modes:\n"
+        "- 'code': Writing, running, debugging Python/SQL code, mathematical calculations, scientific simulations, or plotting charts with matplotlib/numpy/pandas.\n"
+        "- 'excel': Creating, formatting, or updating spreadsheets, tabular data, formulas (SUM, AVERAGE, VLOOKUP), ledgers, or .xlsx/.csv files.\n"
+        "- 'ppt': Generating presentation slides, slide decks, pitch decks, or .pptx presentations.\n"
+        "- 'docs': Drafting official Word documents, formal technical reports, memos, SOPs, circulars, letters, meeting minutes, or .docx files.\n"
+        "- 'ocr': Extracting or reading raw text/numbers/tables from scanned documents, receipts, invoices, or images.\n"
+        "- 'vision': Visual inspection, analyzing diagrams/P&ID schematics/blueprints, or detecting physical plant defects in photos.\n"
+        "- 'chat': General conversation, answering technical plant operations questions, explaining concepts, troubleshooting, or SOP consultation.\n\n"
+        "Return ONLY a valid JSON object in this format:\n"
+        '{"mode": "code"|"excel"|"ppt"|"docs"|"ocr"|"vision"|"chat", "confidence": 0.95, "reason": "<short explanation in 1 sentence>"}'
+    )
+
+    user_content = user_message.strip()
+    if not user_content and attachments:
+        user_content = "Analyze the provided attachment."
+    if context_str:
+        user_content = f"{user_content}\n[SYSTEM_CONTEXT]{context_str}"
+
     prompt = [
-        {
-            "role": "system",
-            "content": (
-                "You are an intent routing classifier for an industrial sovereign AI. "
-                "Classify the user's primary request into EXACTLY ONE word from: "
-                "[code, docs, excel, ppt, chat]. "
-                "Rules:\n"
-                "- code: programming, scripts, debugging, algorithms, math computation\n"
-                "- docs: formal Word reports, memos, official notices, letters\n"
-                "- excel: spreadsheets, tabular datasets, accounting, tables with formulas\n"
-                "- ppt: presentation slides, pitch decks\n"
-                "- chat: general conversation, questions about plant equipment, SOPs, explanations\n"
-                "Respond with ONLY the lowercase classification word."
-            ),
-        },
-        {"role": "user", "content": user_message.strip()[:300]},
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content[:600]},
     ]
+
     try:
-        raw_res = await call_ollama(prompt, stream=False, temperature=0.0, max_tokens=8, think=False)
-        cleaned = filter_thinking(str(raw_res)).strip().lower()
-        for candidate in ["code", "excel", "ppt", "docs", "chat"]:
-            if candidate in cleaned:
-                logger.info(f"[FAST_CLASSIFIER] Ambiguous query '{user_message[:40]}' classified as '{candidate}'")
-                return candidate
+        raw_res = await call_ollama(
+            prompt,
+            stream=False,
+            json_mode=True,
+            temperature=0.0,
+            max_tokens=80,
+            think=False
+        )
+        cleaned = filter_thinking(str(raw_res)).strip()
+        data = json.loads(cleaned)
+        mode = str(data.get("mode", "")).strip().lower()
+        reason = str(data.get("reason", "Model detected intent")).strip()
+        confidence = float(data.get("confidence", 0.95))
+
+        valid_modes = {"code", "excel", "ppt", "docs", "ocr", "vision", "chat"}
+        if mode in valid_modes:
+            logger.info(f"[MODEL_ORCHESTRATOR] Query '{user_message[:50]}' -> Mode: '{mode}' ({confidence}) Reason: {reason}")
+            return mode, reason, confidence
+
     except Exception as e:
-        logger.warning(f"[FAST_CLASSIFIER] Fast classification failed: {e}")
-    return None
+        logger.warning(f"[MODEL_ORCHESTRATOR] Model classification failed: {e}")
+
+    # Fallback to fast regex heuristic if model call fails or returns unparseable JSON
+    fb_mode, fb_trigger = route_message(
+        user_message,
+        mode_override="auto",
+        attachments=attachments,
+        last_route=last_route
+    )
+    return fb_mode, f"fallback_heuristic_{fb_trigger}", 0.70
+
+
+async def classify_intent_fast(user_message: str) -> Optional[str]:
+    """Alias to classify_intent_model for backward compatibility."""
+    mode, _, _ = await classify_intent_model(user_message)
+    return mode
 
 
 async def route_message_async(
@@ -390,30 +462,33 @@ async def route_message_async(
     allow_multi: bool = False
 ) -> Tuple[str, Optional[str]]:
     """
-    Asynchronous version of route_message that executes deterministic heuristic checks first,
-    and falls back to fast micro-LLM intent classification if heuristics yield 'default_chat'
-    on multi-word ambiguous prompts.
+    Intelligent Asynchronous Route Dispatcher for Auto Mode.
+    1. Honors explicit manual overrides (code, excel, ppt, docs, vision, ocr, chat).
+    2. Fast-paths trivial 1-word greetings (0ms latency).
+    3. Uses the local sovereign LLM (deepseek-v4-pro:4b) as the primary intelligent orchestrator
+       to understand intent across Hindi, Hinglish, English, and nuanced tasks WITHOUT keywords.
+    4. Falls back gracefully to deterministic heuristics if the model is unreachable.
     """
-    route, trigger = route_message(
+    clean_override = (mode_override or "").strip().lower()
+
+    # 1. Manual user override explicitly selected from UI buttons
+    valid_manual_modes = {"chat", "code", "docs", "excel", "ppt", "vision", "ocr"}
+    if clean_override in valid_manual_modes:
+        logger.info(f"[ROUTER] Route decision: '{clean_override}' via manual mode override")
+        return clean_override, "manual_override"
+
+    # 2. Fast greeting shortcut for common 1-2 word pleasantries (0ms latency)
+    clean_msg = user_message.strip().lower()
+    if not attachments and clean_msg in ("hi", "hello", "hey", "namaste", "halo", "hola", "good morning", "good afternoon", "good evening"):
+        return "chat", "greeting_fast_path"
+
+    # 3. Model-Driven Intent Orchestration (Zero Keywords)
+    mode, reason, confidence = await classify_intent_model(
         user_message,
-        mode_override=mode_override,
         attachments=attachments,
-        last_route=last_route,
-        allow_multi=allow_multi
+        last_route=last_route
     )
-    
-    # If heuristic was decisive or manually overridden, return immediately (0ms overhead)
-    if trigger != "default_chat" or (mode_override and mode_override != "auto"):
-        return route, trigger
-
-    # Only run fast micro-classifier if query is substantive (> 3 words) and lacks SOP tag context
-    words = user_message.strip().split()
-    if len(words) >= 4 and not EQUIPMENT_REGEX_COMPILED.search(user_message):
-        classified_mode = await classify_intent_fast(user_message)
-        if classified_mode and classified_mode in ("code", "docs", "excel", "ppt"):
-            return classified_mode, "fast_llm_classifier"
-
-    return route, trigger
+    return mode, f"model_orchestrator: {reason}"
 
 
 def get_thinking_decision_with_reason(message: str, mode: str) -> Tuple[bool, str]:
