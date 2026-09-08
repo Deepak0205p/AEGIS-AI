@@ -478,8 +478,20 @@ export default function GeminiReplicaChatApp() {
 
   const lastUserMsgRef = useRef<HTMLDivElement>(null);
 
-  // Auto-Scroll to keep latest query & live thinking steps right in comfortable view
+  const userScrolledUpRef = useRef(false);
+
+  // Track if the user manually scrolled up
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // If distance to bottom is more than 120px, the user scrolled up to read earlier content
+    userScrolledUpRef.current = distanceToBottom > 120;
+  }, []);
+
+  // Auto-Scroll to keep latest query & live thinking steps in view only if user has NOT scrolled up
   const scrollToActive = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    if (userScrolledUpRef.current) return;
     if (isStreaming && lastUserMsgRef.current) {
       lastUserMsgRef.current.scrollIntoView({ behavior, block: 'start' });
     } else if (bottomRef.current) {
@@ -487,17 +499,24 @@ export default function GeminiReplicaChatApp() {
     }
   }, [isStreaming]);
 
+  // Reset userScrolledUpRef when streaming starts or new user message arrives
   useEffect(() => {
-    if (hasMessages) {
+    if (!isStreaming) {
+      userScrolledUpRef.current = false;
+    }
+  }, [isStreaming]);
+
+  useEffect(() => {
+    if (hasMessages && !userScrolledUpRef.current) {
       scrollToActive('smooth');
-      const timer = setTimeout(() => scrollToActive('smooth'), 80);
-      const timer2 = setTimeout(() => scrollToActive('smooth'), 250);
+      const timer = setTimeout(() => {
+        if (!userScrolledUpRef.current) scrollToActive('smooth');
+      }, 80);
       return () => {
         clearTimeout(timer);
-        clearTimeout(timer2);
       };
     }
-  }, [messages.length, isStreaming, activeTraceSteps.length, scrollToActive, hasMessages]);
+  }, [messages.length, activeTraceSteps.length, scrollToActive, hasMessages]);
 
   // Cleanup speech recognition on unmount
   useEffect(() => {
@@ -1138,7 +1157,11 @@ export default function GeminiReplicaChatApp() {
             </header>
 
             {/* Conversational Scroll Area */}
-            <div ref={scrollContainerRef} className={`flex-1 min-h-0 px-3 sm:px-6 pt-2 pb-2 flex flex-col z-10 ${hasMessages ? 'overflow-y-auto' : 'overflow-hidden'}`}>
+            <div
+              ref={scrollContainerRef}
+              onScroll={handleScroll}
+              className={`flex-1 min-h-0 px-3 sm:px-6 pt-2 pb-2 flex flex-col z-10 ${hasMessages ? 'overflow-y-auto scroll-smooth' : 'overflow-hidden'}`}
+            >
               {hasMessages ? (
                 <div className="max-w-3xl w-full mx-auto space-y-5 sm:space-y-6 py-3 sm:py-4">
                   {messages.map((msg, idx) => {
