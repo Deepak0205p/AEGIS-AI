@@ -174,7 +174,12 @@ async def call_ollama(
       - "token": str
     """
     target_model = model or (VISION_MODEL_NAME if images else MODEL_NAME)
-    url = f"{OLLAMA_HOST}/api/chat"
+    try:
+        from backend.nodes import get_endpoint_for_model
+        base_host = get_endpoint_for_model(target_model)
+    except Exception:
+        base_host = OLLAMA_HOST
+    url = f"{base_host}/api/chat"
     
     eff_num_predict = max_tokens if (max_tokens is not None and max_tokens > 0) else 2048
     # For multimodal vision/OCR requests, allocate 16384 context to accommodate high-res patch tokens

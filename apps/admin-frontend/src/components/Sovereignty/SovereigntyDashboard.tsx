@@ -6,6 +6,7 @@ import { DeploymentModeSwitcher } from './DeploymentModeSwitcher';
 import { CertificateManagerCard } from './CertificateManagerCard';
 import { ActiveSocketTable } from './ActiveSocketTable';
 import { TamperEvidentLogViewer } from './TamperEvidentLogViewer';
+import { ComputeNodeManager } from '../Models/ComputeNodeManager';
 
 export function SovereigntyDashboard() {
   return (
@@ -18,6 +19,9 @@ export function SovereigntyDashboard() {
 
       {/* Plant PKI & Live CRL Revocation Management */}
       <CertificateManagerCard />
+
+      {/* Multi-Node Compute & Remote Worker Devices Manager */}
+      <ComputeNodeManager />
 
       {/* Active Sockets Live Sniffer Table */}
       <ActiveSocketTable />

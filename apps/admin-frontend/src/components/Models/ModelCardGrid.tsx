@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { ArrowRightLeft, CheckCircle2 } from 'lucide-react';
 
 export function ModelCardGrid() {
-  const { models, activePrimaryId, activeSecondaryId, isSwapping, triggerModelSwap } = useModelStore();
+  const { models, activePrimaryId, activeSecondaryId, isSwapping, triggerModelSwap, nodes, bindModelToNode } = useModelStore();
 
   if (models.length === 0) {
     return (
@@ -92,19 +92,24 @@ export function ModelCardGrid() {
                   </div>
                 </div>
 
-                {/* 1-IP Hybrid Node Binding */}
+                {/* 1-IP Hybrid Node Binding with Selector */}
                 <div className="mt-2.5 flex items-center justify-between px-2.5 py-1.5 rounded bg-gray-50 border border-gray-100 font-mono text-[11px]">
                   <div className="flex items-center space-x-1.5">
                     <div className={`h-1.5 w-1.5 rounded-full ${model.node_ip && model.node_ip !== '127.0.0.1' ? 'bg-blue-600 animate-pulse' : 'bg-emerald-600'}`} />
                     <span className="text-gray-500">Compute Node:</span>
                   </div>
-                  <div className="flex items-center space-x-1">
-                    <span className="text-gray-900 bg-gray-100 px-1.5 py-0.5 rounded border border-gray-200 text-[10px]">
-                      {model.node_ip || '127.0.0.1'}
-                    </span>
-                    <span className="text-[10px] text-gray-400">
-                      {model.node_ip === '127.0.0.1' || !model.node_ip ? '(Local GPU)' : '(LAN Laptop)'}
-                    </span>
+                  <div className="flex items-center space-x-1.5">
+                    <select
+                      value={nodes.find(n => n.host_ip === model.node_ip)?.id || 'node-local'}
+                      onChange={(e) => bindModelToNode(model.id, e.target.value)}
+                      className="text-[10px] bg-white border border-gray-200 rounded px-1.5 py-0.5 text-gray-900 font-mono focus:outline-none focus:border-blue-500"
+                    >
+                      {nodes.map((n) => (
+                        <option key={n.id} value={n.id}>
+                          {n.host_ip}:{n.port} ({n.is_local ? 'Local GPU' : n.device_type})
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               </CardContent>

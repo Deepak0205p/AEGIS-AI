@@ -9,11 +9,13 @@ import { useModelStore } from '@/store/useModelStore';
 export default function ModelsPage() {
   const fetchModels = useModelStore((s) => s.fetchModels);
   const fetchVRAM = useModelStore((s) => s.fetchVRAM);
+  const fetchNodes = useModelStore((s) => s.fetchNodes);
 
   React.useEffect(() => {
     fetchModels();
     fetchVRAM();
-  }, [fetchModels, fetchVRAM]);
+    fetchNodes();
+  }, [fetchModels, fetchVRAM, fetchNodes]);
 
   return (
     <div className="flex flex-col min-h-screen bg-white text-gray-900 font-sans">

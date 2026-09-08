@@ -1155,8 +1155,11 @@ async def get_file_content(file_id: str):
 @app.get("/api/models")
 @app.get("/api/v1/models")
 async def get_models():
-    """Returns the active sovereign models (text + vision)."""
-    return [
+    """Returns the active sovereign models (text + vision) plus any models discovered across connected nodes."""
+    from backend.nodes import get_all_nodes, _model_node_bindings
+    
+    # Base local models
+    base_models = [
         {
             "id": MODEL_NAME,
             "name": MODEL_NAME,
@@ -1168,6 +1171,7 @@ async def get_models():
             "is_primary": True,
             "keep_alive": "300s",
             "status": "active",
+            "node_ip": "127.0.0.1",
             "description": "General text, safety SOP verification, coding, and document generation engine.",
         },
         {
@@ -1181,9 +1185,120 @@ async def get_models():
             "is_primary": False,
             "keep_alive": "300s",
             "status": "standby",
+            "node_ip": "127.0.0.1",
             "description": "Multimodal visual inspection, CAD/P&ID diagrams, and tabular OCR extraction.",
         }
     ]
+    
+    # Inject discovered models from remote nodes if any
+    all_nodes = get_all_nodes()
+    for node in all_nodes:
+        if not node.is_local and node.status == "online":
+            for m_tag in node.discovered_models:
+                # Check if not already in list
+                if not any(m["id"] == m_tag for m in base_models):
+                    base_models.append({
+                        "id": m_tag,
+                        "name": m_tag,
+                        "display_name": f"{m_tag} ({node.name})",
+                        "quantization": "Remote GGUF",
+                        "vram_mb": 4000,
+                        "context_length": NUM_CTX,
+                        "domain": "distributed_worker",
+                        "is_primary": False,
+                        "keep_alive": "300s",
+                        "status": "standby",
+                        "node_ip": node.host_ip,
+                        "description": f"Remote worker model hosted on {node.host_ip}:{node.port} ({node.device_type}).",
+                    })
+
+    # Update node_ip based on bindings
+    for m in base_models:
+        bound_node_id = _model_node_bindings.get(m["id"])
+        if bound_node_id:
+            for n in all_nodes:
+                if n.id == bound_node_id:
+                    m["node_ip"] = n.host_ip
+                    break
+
+    return base_models
+
+
+# --- Compute Node Management Endpoints ---
+
+class AddNodeRequest(BaseModel):
+    name: str
+    host_ip: str
+    port: int = 11434
+    device_type: str = "LAN Worker"
+    models: Optional[List[str]] = None
+
+class TestNodeRequest(BaseModel):
+    host_ip: str
+    port: int = 11434
+
+class BindModelRequest(BaseModel):
+    model_id: str
+    node_id: str
+
+@app.get("/api/v1/nodes")
+async def list_nodes():
+    """Returns all registered local and remote compute nodes."""
+    from backend.nodes import get_all_nodes
+    return [node.dict() for node in get_all_nodes()]
+
+@app.post("/api/v1/nodes/test")
+async def test_node(body: TestNodeRequest):
+    """Tests connection to a remote device running Ollama/vLLM on LAN and discovers models."""
+    from backend.nodes import test_node_connection, is_private_or_loopback_ip
+    if not is_private_or_loopback_ip(body.host_ip):
+        raise HTTPException(
+            status_code=400,
+            detail="Air-Gap Security Violation: Only private RFC-1918 LAN IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x, localhost) are permitted."
+        )
+    result = await test_node_connection(body.host_ip, body.port)
+    return result
+
+@app.post("/api/v1/nodes")
+@app.post("/api/v1/nodes/add")
+async def add_compute_node(body: AddNodeRequest):
+    """Adds a new remote compute worker device to the distributed cluster."""
+    from backend.nodes import add_or_update_node, test_node_connection, is_private_or_loopback_ip
+    if not is_private_or_loopback_ip(body.host_ip):
+        raise HTTPException(
+            status_code=400,
+            detail="Air-Gap Security Violation: External WAN IP blocked. Use local LAN IP."
+        )
+    # Test connection and discover models if not provided
+    test_res = await test_node_connection(body.host_ip, body.port)
+    discovered = body.models or test_res.get("models", [])
+    node = add_or_update_node(
+        name=body.name,
+        host_ip=body.host_ip,
+        port=body.port,
+        device_type=body.device_type,
+        models=discovered
+    )
+    if not test_res.get("online"):
+        node.status = "offline"
+    return node.dict()
+
+@app.delete("/api/v1/nodes/{node_id}")
+async def delete_compute_node(node_id: str):
+    """Removes a worker device from the compute cluster."""
+    from backend.nodes import remove_node
+    success = remove_node(node_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot remove primary local node or node not found.")
+    return {"status": "success", "message": f"Node {node_id} removed."}
+
+@app.post("/api/v1/nodes/bind")
+async def bind_model(body: BindModelRequest):
+    """Binds an LLM model to execute on a specific local or remote compute node."""
+    from backend.nodes import bind_model_to_node
+    bind_model_to_node(body.model_id, body.node_id)
+    return {"status": "success", "message": f"Model {body.model_id} bound to node {body.node_id}."}
+
 
 
 class ModelSwapRequest(BaseModel):

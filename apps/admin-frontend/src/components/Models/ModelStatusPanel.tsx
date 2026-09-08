@@ -6,6 +6,7 @@ import { useModelStore } from '@/store/useModelStore';
 import { VRAMSummaryCard } from './VRAMSummaryCard';
 import { ModelCardGrid } from './ModelCardGrid';
 import { SwapEventLog } from './SwapEventLog';
+import { ComputeNodeManager } from './ComputeNodeManager';
 import {
   ArrowRightLeft,
   RefreshCw,
@@ -96,6 +97,9 @@ export function ModelStatusPanel() {
 
       {/* Dynamic VRAM Summary Gauge */}
       <VRAMSummaryCard />
+
+      {/* Distributed Compute Nodes & Worker Devices Manager */}
+      <ComputeNodeManager />
 
       {/* Model Catalog Grid */}
       <ModelCardGrid />
