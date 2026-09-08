@@ -169,11 +169,11 @@ export function DocumentCanvasPanel() {
         initial={{ x: '100%', opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         exit={{ x: '100%', opacity: 0 }}
-        transition={{ type: 'spring', damping: 26, stiffness: 220 }}
-        className={`fixed md:absolute inset-0 md:inset-y-0 md:right-0 md:left-auto bg-[#ffffff] border-l border-[#cbd5e1] flex flex-col shadow-2xl transition-all duration-300 z-50 md:z-30 ${
+        transition={{ type: 'spring', damping: 28, stiffness: 240 }}
+        className={`fixed md:relative inset-0 md:inset-auto bg-[#ffffff] border-l border-[#cbd5e1] dark:border-white/10 flex flex-col shadow-2xl transition-all duration-300 z-50 md:z-20 h-full overflow-hidden shrink-0 ${
           isExpanded
-            ? 'inset-0 w-full h-full border-l-0'
-            : 'w-full md:w-[60vw] lg:w-[54vw] xl:w-[50vw]'
+            ? 'w-full fixed inset-0 md:absolute z-50 border-l-0'
+            : 'w-full md:w-[50vw] lg:w-[48vw] xl:w-[46vw]'
         }`}
       >
         {/* 1. Canvas Top Header (Clean Light Theme & Mobile Optimized) */}

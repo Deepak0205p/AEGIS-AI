@@ -809,9 +809,16 @@ export default function GeminiReplicaChatApp() {
       />
 
       {/* 2. Main Window (Chat Window or In-Place Artifacts Vault) */}
-      <main className="flex-1 flex flex-col h-full min-h-0 overflow-hidden relative bg-white dark:bg-black">
+      <div className="flex-1 flex h-full min-h-0 overflow-hidden relative bg-white dark:bg-black">
         {/* Dynamic Fluid Animated Aurora Glow (Gemini Atmosphere) */}
         <FluidAuroraGlow />
+
+        {/* Left Chat / Artifacts Workspace Area */}
+        <main className={`flex flex-col h-full min-h-0 overflow-hidden relative transition-all duration-300 ${
+          isCanvasOpen
+            ? 'hidden md:flex flex-1 md:w-[45vw] lg:w-[48vw] xl:w-[50vw]'
+            : 'flex-1 w-full'
+        }`}>
 
         {activeView === 'artifacts' ? (
           /* Dedicated In-Place Artifacts View */
@@ -1677,10 +1684,11 @@ export default function GeminiReplicaChatApp() {
         </div>
       </>
     )}
-
-    {/* 4. Gemini / Claude-Style Interactive Document Canvas Side Panel */}
-    <DocumentCanvasPanel />
   </main>
+
+  {/* 4. Gemini / Claude-Style Interactive Document Canvas Side Panel (Side-by-Side Flex) */}
+  <DocumentCanvasPanel />
+</div>
 
     {/* 3. Enterprise Artifacts & Deliverables Vault Modal Inspector */}
     <ArtifactsModal
