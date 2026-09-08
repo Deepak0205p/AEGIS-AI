@@ -2,7 +2,6 @@
 
 import React from 'react';
 import { SovereigntyBanner } from './SovereigntyBanner';
-import { DeploymentModeSwitcher } from './DeploymentModeSwitcher';
 import { ActiveSocketTable } from './ActiveSocketTable';
 import { TamperEvidentLogViewer } from './TamperEvidentLogViewer';
 import { ComputeNodeManager } from '../Models/ComputeNodeManager';
@@ -12,9 +11,6 @@ export function SovereigntyDashboard() {
     <div className="space-y-4 max-w-7xl mx-auto">
       {/* 3-Tier Traffic Breakdown Summary */}
       <SovereigntyBanner />
-
-      {/* Mode Topology Switcher */}
-      <DeploymentModeSwitcher />
 
       {/* Multi-Node Compute & Remote Worker Devices Manager */}
       <ComputeNodeManager />
