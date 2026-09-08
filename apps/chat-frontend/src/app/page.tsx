@@ -1295,22 +1295,16 @@ export default function GeminiReplicaChatApp() {
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-1.5 px-1 py-0.5 max-h-[60vh] sm:max-h-none overflow-y-auto sm:overflow-x-auto sm:scrollbar-none">
                     {MODEL_ROLES.map((role) => {
                       const isSelected = activeModelRole === role.id;
-                      const isDisabled = role.id === 'vision' || role.id === 'ocr';
                       return (
                         <button
                           key={role.id}
                           type="button"
-                          disabled={isDisabled}
-                          title={isDisabled ? "Coming soon" : undefined}
                           onClick={() => {
-                            if (isDisabled) return;
                             setActiveModelRole(role.id as any);
                             setShowModelBoard(false);
                           }}
                           className={`group relative flex items-center space-x-3 sm:flex-col sm:items-center sm:space-x-0 py-2 px-3 sm:py-1.5 sm:px-2.5 rounded-xl transition-all duration-200 shrink-0 min-h-[44px] ${
-                            isDisabled
-                              ? 'opacity-40 cursor-not-allowed grayscale'
-                              : isSelected
+                            isSelected
                               ? 'bg-blue-50 border border-blue-200 text-blue-700 shadow-xs dark:bg-white/[0.08] dark:border-white/15 dark:text-white cursor-pointer'
                               : 'hover:bg-slate-100 dark:hover:bg-white/[0.03] active:bg-slate-200 dark:active:bg-white/[0.06] border border-transparent opacity-80 hover:opacity-100 hover:scale-105 active:scale-95 cursor-pointer'
                           }`}
