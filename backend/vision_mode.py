@@ -2,7 +2,8 @@
 Vision and OCR Execution Mode Handlers.
 Processes image attachments for visual reasoning, diagram inspection, and OCR extraction.
 Supports multi-image analysis, structured output modes, auto-export to Excel for OCR,
-and smart caching to avoid redundant re-inference on follow-up questions.
+smart caching to avoid redundant re-inference on follow-up questions, and clean VRAM
+model swapping (DeepSeek text LLM <-> Gemma multimodal vision model).
 """
 
 import re
@@ -83,14 +84,30 @@ RESCAN_PATTERN = re.compile(
 )
 
 # Follow-up question system prompt — uses cached analysis context
-FOLLOWUP_SYSTEM_PROMPT = """You are an Industrial AI Assistant answering follow-up questions about a previously analyzed image.
-The image has already been analyzed. Use the analysis below to answer the user's new question accurately.
-Do NOT say "I cannot see the image" — the analysis was done earlier and is provided to you.
+FOLLOWUP_SYSTEM_PROMPT = """You are REVEAL, an authoritative Industrial AI Assistant.
+A previous visual inspection of the user's uploaded image produced the following verified extraction data:
 
-PREVIOUS IMAGE ANALYSIS:
+VERIFIED IMAGE EXTRACTION DATA:
 {cached_analysis}
 
-Answer the user's question based on the above analysis. Be specific and accurate."""
+CRITICAL INSTRUCTIONS:
+- You HAVE full access to the image's extracted content above.
+- Answer the user's question directly and thoroughly based on the verified image data above.
+- NEVER state that you cannot see the image or ask the user to describe the image.
+- Respond in clear, professional Markdown."""
+
+# DeepSeek final response synthesis prompt from vision extraction data
+SYNTHESIS_SYSTEM_PROMPT = """You are REVEAL, an authoritative Industrial AI Assistant.
+The vision inspection system has scanned the user's image and extracted the following verified visual details:
+
+VERIFIED IMAGE EXTRACTION DATA:
+{extracted_data}
+
+CRITICAL INSTRUCTIONS:
+- You HAVE full access to the image's extracted content above.
+- Deliver a comprehensive, direct, and well-structured response to the user's request based on the extracted data above.
+- NEVER state that you cannot view images or ask the user to describe the image.
+- Respond in clear, professional GitHub-flavored Markdown."""
 
 SUFFICIENCY_CHECK_PROMPT = """You are a strict Decision Engine.
 We previously scanned/analyzed an image and got this PREVIOUS ANALYSIS:
@@ -103,46 +120,6 @@ Does this question require re-scanning / re-analyzing the original image because
 
 Reply strictly with a JSON object:
 {{"needs_rescan": true/false, "reason": "<short reason>"}}"""
-
-
-def _compute_image_hash(base64_strings: List[str]) -> str:
-    """Compute a stable content hash from base64-encoded image data."""
-    h = hashlib.sha256()
-    for b64 in sorted(base64_strings):
-        # Hash first 8KB of each image for speed (sufficient for uniqueness)
-        h.update(b64[:8192].encode("utf-8"))
-    return h.hexdigest()
-
-
-async def _check_sufficiency(cached_analysis: str, user_question: str) -> bool:
-    """
-    Uses the text model (gemma4-e4b) to check if the cached analysis
-    contains enough information to answer the user's follow-up question.
-    Returns True if re-scan is needed, False if cache is sufficient.
-    """
-    prompt = SUFFICIENCY_CHECK_PROMPT.format(
-        cached_analysis=cached_analysis,
-        user_question=user_question,
-    )
-    try:
-        result = await call_ollama(
-            messages=[{"role": "user", "content": prompt}],
-            stream=False,
-            temperature=0.0,
-            json_mode=True,
-            model=MODEL_NAME,
-        )
-        parsed = json.loads(result)
-        needs_rescan = parsed.get("needs_rescan", False)
-        reason = parsed.get("reason", "")
-        if isinstance(needs_rescan, str):
-            needs_rescan = needs_rescan.lower() == "true"
-        logger.info(f"[SUFFICIENCY_CHECK] needs_rescan={needs_rescan} reason={reason}")
-        return needs_rescan
-    except Exception as e:
-        logger.warning(f"[SUFFICIENCY_CHECK] Failed to parse response, defaulting to no-rescan: {e}")
-        return False
-
 
 OCR_SYSTEM_PROMPT = """You are a precision Industrial OCR & Document Extraction Assistant.
 Your task is to extract, transcribe, and structure text, equipment readings, tag IDs, and numbers from the provided image verbatim.
@@ -201,7 +178,6 @@ def encode_image_to_base64(file_path: str) -> Optional[str]:
                 try:
                     import pypdf
                     reader = pypdf.PdfReader(str(p))
-                    # Check if pages contain embedded images
                     for page in reader.pages:
                         for img_obj in page.images:
                             img = Image.open(io.BytesIO(img_obj.data)).convert("RGB")
@@ -217,7 +193,6 @@ def encode_image_to_base64(file_path: str) -> Optional[str]:
                 img = Image.open(io.BytesIO(raw_bytes))
                 if img.mode not in ("RGB", "L"):
                     img = img.convert("RGB")
-                original_size = img.size
                 max_dim = 1920
                 ratio = min(max_dim / img.width, max_dim / img.height)
                 if ratio < 1.0:
@@ -229,7 +204,6 @@ def encode_image_to_base64(file_path: str) -> Optional[str]:
                 norm_bytes = buf.getvalue()
                 return base64.b64encode(norm_bytes).decode("utf-8")
             except Exception:
-                # Direct raw bytes fallback
                 return base64.b64encode(raw_bytes).decode("utf-8")
         
         # Fallback: check if it's base64 encoded text
@@ -271,7 +245,6 @@ async def _auto_export_ocr_to_xlsx(ocr_data: Dict, chat_id: str) -> Optional[Dic
     try:
         from backend.deliverables import create_deliverable_file
         
-        # Build a plan from OCR tables
         blocks = []
         for t_idx, table in enumerate(tables):
             headers = table.get("headers", [])
@@ -299,6 +272,44 @@ async def _auto_export_ocr_to_xlsx(ocr_data: Dict, chat_id: str) -> Optional[Dic
     return None
 
 
+def _compute_image_hash(base64_strings: List[str]) -> str:
+    """Compute a stable content hash from base64-encoded image data."""
+    h = hashlib.sha256()
+    for b64 in sorted(base64_strings):
+        h.update(b64[:8192].encode("utf-8"))
+    return h.hexdigest()
+
+
+async def _check_sufficiency(cached_analysis: str, user_question: str) -> bool:
+    """
+    Uses the text model (DeepSeek) to check if the cached analysis
+    contains enough information to answer the user's follow-up question.
+    Returns True if re-scan is needed, False if cache is sufficient.
+    """
+    prompt = SUFFICIENCY_CHECK_PROMPT.format(
+        cached_analysis=cached_analysis,
+        user_question=user_question,
+    )
+    try:
+        result = await call_ollama(
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            temperature=0.0,
+            json_mode=True,
+            model=MODEL_NAME,
+        )
+        parsed = json.loads(result)
+        needs_rescan = parsed.get("needs_rescan", False)
+        reason = parsed.get("reason", "")
+        if isinstance(needs_rescan, str):
+            needs_rescan = needs_rescan.lower() == "true"
+        logger.info(f"[SUFFICIENCY_CHECK] needs_rescan={needs_rescan} reason={reason}")
+        return needs_rescan
+    except Exception as e:
+        logger.warning(f"[SUFFICIENCY_CHECK] Failed to parse response, defaulting to no-rescan: {e}")
+        return False
+
+
 async def _handle_cached_followup(
     chat_id: str,
     user_message: str,
@@ -311,21 +322,21 @@ async def _handle_cached_followup(
     Handles a follow-up question using cached vision/OCR analysis.
     First checks if the cached analysis has sufficient info via sufficiency check.
     If not sufficient and we have cached image bytes, triggers automatic re-scan.
-    Otherwise answers from cache using the text LLM (gemma4-e4b).
+    Otherwise answers from cache using the main text LLM (DeepSeek).
     """
     mode_name = "ocr" if is_ocr else "vision"
     logger.info(f"[{mode_name.upper()}_CACHE_HIT] Checking sufficiency for chat={chat_id}")
 
     # ── Sufficiency Check: Does cached analysis have enough info? ──
-    yield {"token": f"🧠 Checking if previous {mode_name.upper()} analysis has the requested details...\n\n"}
+    yield {"token": f"🧠 Checking cached {mode_name.upper()} analysis...\n\n"}
     needs_rescan = await _check_sufficiency(cached_analysis, user_message)
 
     if needs_rescan and cached_image_b64:
         # ── Auto Re-scan: Cached analysis is insufficient ──
         logger.info(f"[{mode_name.upper()}_AUTO_RESCAN] Cached analysis insufficient, triggering fresh scan")
-        yield {"token": f"🔍 Requested detail not in previous analysis. Running fresh {mode_name.upper()} scan...\n\n"}
+        yield {"token": f"🔍 Requested detail not in previous analysis. Re-scanning image...\n\n"}
 
-        # Swap: unload text model → load vision model (save current user intent to context handoff)
+        # Step 1: Unload DeepSeek -> Load Vision model (Gemma)
         await swap_to_model(
             target_model=VISION_MODEL_NAME,
             unload_model_name=MODEL_NAME,
@@ -334,44 +345,58 @@ async def _handle_cached_followup(
         )
 
         system_prompt = OCR_SYSTEM_PROMPT if is_ocr else VISION_SYSTEM_PROMPT
-        save_message(chat_id, "user", user_message, mode=mode_name)
-        messages = await build_context_messages(chat_id, system_prompt, user_message)
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}]
 
+        # Vision extraction pass
         gen_tokens = []
         token_gen = await call_ollama(
             messages,
-            stream=True,
-            temperature=0.1 if is_ocr else 0.4,
-            think=think,
+            stream=False,
+            temperature=0.1 if is_ocr else 0.3,
+            think=False,
             images=cached_image_b64,
             model=VISION_MODEL_NAME,
         )
+        extracted_content = filter_thinking(str(token_gen))
 
-        async for chunk in token_gen:
+        # Update cache with the fresh extraction
+        image_hash = _compute_image_hash(cached_image_b64)
+        _vision_cache.store(chat_id, image_hash, extracted_content, is_ocr, cached_image_b64)
+
+        # Step 2: Unload Gemma -> Load DeepSeek
+        await swap_to_model(
+            target_model=MODEL_NAME,
+            unload_model_name=VISION_MODEL_NAME,
+            chat_id=chat_id,
+            context_to_transfer=f"Vision/OCR Analysis Output:\n{extracted_content[:1500]}"
+        )
+
+        # Step 3: DeepSeek answers user query with extracted context
+        synthesis_prompt = SYNTHESIS_SYSTEM_PROMPT.format(extracted_data=extracted_content)
+        save_message(chat_id, "user", user_message, mode=mode_name)
+        synthesis_messages = await build_context_messages(chat_id, synthesis_prompt, user_message)
+
+        final_tokens = []
+        token_stream = await call_ollama(
+            synthesis_messages,
+            stream=True,
+            temperature=0.3,
+            think=think,
+            images=None,
+            model=MODEL_NAME,
+        )
+
+        async for chunk in token_stream:
             chunk_type = chunk.get("type", "content")
             token_text = chunk.get("token", "")
             if chunk_type == "thinking":
                 if think:
                     yield {"thinking": token_text, "event": "step", "step_type": "thought", "content": token_text}
             else:
-                gen_tokens.append(token_text)
+                final_tokens.append(token_text)
                 yield {"token": token_text, "event": "step", "step_type": "token", "content": token_text}
 
-        final_content = filter_thinking("".join(gen_tokens))
-
-        # Swap back: unload vision → load text model (save visual findings to context handoff)
-        await swap_to_model(
-            target_model=MODEL_NAME,
-            unload_model_name=VISION_MODEL_NAME,
-            chat_id=chat_id,
-            context_to_transfer=f"Vision/OCR Analysis Output:\n{final_content[:1500]}"
-        )
-
-        # Update cache with the new, more detailed analysis
-        if cached_image_b64:
-            image_hash = _compute_image_hash(cached_image_b64)
-            _vision_cache.store(chat_id, image_hash, final_content, is_ocr, cached_image_b64)
-
+        final_content = filter_thinking("".join(final_tokens))
         save_message(chat_id, "assistant", final_content, mode=mode_name)
         yield {
             "done": True,
@@ -383,24 +408,35 @@ async def _handle_cached_followup(
         }
         return
 
-    # ── Cache Sufficient: Answer via text LLM (gemma4-e4b) ──
-    logger.info(f"[{mode_name.upper()}_CACHE_HIT] Answering follow-up via text LLM for chat={chat_id}")
-    yield {"token": f"⚡ Using cached {mode_name.upper()} analysis (no re-scan needed)...\n\n"}
+    # ── Cache Sufficient: Answer via main text LLM (DeepSeek) with cached analysis ──
+    logger.info(f"[{mode_name.upper()}_CACHE_HIT] Answering follow-up via DeepSeek text LLM for chat={chat_id}")
+    yield {"token": f"⚡ Answering from cached {mode_name.upper()} data (no re-scan needed)...\n\n"}
 
-    # Build system prompt with cached analysis injected
-    system_with_context = FOLLOWUP_SYSTEM_PROMPT.format(cached_analysis=cached_analysis)
-
+    followup_messages = [
+        {
+            "role": "system",
+            "content": (
+                f"{FOLLOWUP_SYSTEM_PROMPT.format(cached_analysis=cached_analysis)}\n\n"
+                f"### VERIFIED IMAGE EXTRACTION DATA (ALREADY SCANNED):\n"
+                f"{cached_analysis}\n\n"
+                f"Use the verified image extraction data above to directly answer the user's follow-up question."
+            )
+        },
+        {
+            "role": "user",
+            "content": user_message
+        }
+    ]
     save_message(chat_id, "user", user_message, mode=mode_name)
-    messages = await build_context_messages(chat_id, system_with_context, user_message)
 
     gen_tokens = []
     token_gen = await call_ollama(
-        messages,
+        followup_messages,
         stream=True,
         temperature=0.3,
         think=think,
         images=None,  # No images — using cached text analysis
-        model=MODEL_NAME,  # Use text model (gemma4-e4b)
+        model=MODEL_NAME,  # Use main text model (DeepSeek)
     )
 
     async for chunk in token_gen:
@@ -434,13 +470,12 @@ async def handle_vision_mode(
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Executes Vision or OCR multimodal analysis with:
-    - Smart caching: reuses previous analysis for follow-up questions on the same image
-    - Multi-image support (encodes all attachments)
-    - Image preprocessing (auto-resize >4MB images)
-    - Structured OCR output (JSON with tables, form fields, equipment tags)
-    - Auto-export OCR tables to XLSX
-    - Confidence scoring
-    - Force re-scan via keywords like "re-scan", "dobara", "phir se", etc.
+    1. Check cache: if image already analyzed in this chat, reuse cache with DeepSeek without loading vision model.
+    2. Model Swap 1: Unload DeepSeek -> Load Gemma (VISION_MODEL_NAME).
+    3. Multimodal Inference: Gemma extracts visual findings, diagram interpretation, or OCR table/text data.
+    4. Store extracted findings in _vision_cache.
+    5. Model Swap 2: Unload Gemma -> Load DeepSeek (MODEL_NAME) with visual findings in context handoff.
+    6. Synthesis: DeepSeek synthesizes and streams the final, authoritative response to the user.
     """
     mode_name = "ocr" if is_ocr else "vision"
     system_prompt = OCR_SYSTEM_PROMPT if is_ocr else VISION_SYSTEM_PROMPT
@@ -455,7 +490,6 @@ async def handle_vision_mode(
                 image_base64_list.append(b64)
 
     # ── Cache Check ──
-    # If we have images, check if we already analyzed them in this chat
     force_rescan = bool(RESCAN_PATTERN.search(user_message))
     if force_rescan:
         logger.info(f"[{mode_name.upper()}_CACHE] Force re-scan requested by user")
@@ -468,7 +502,6 @@ async def handle_vision_mode(
                 f"[{mode_name.upper()}_CACHE] HIT — reusing cached analysis for chat={chat_id} "
                 f"hash={image_hash[:16]}... (age={int(time.time() - cached['timestamp'])}s)"
             )
-            # Serve follow-up via text LLM with cached analysis + sufficiency check
             async for event in _handle_cached_followup(
                 chat_id, user_message, cached["analysis"], cached["is_ocr"], think,
                 cached_image_b64=cached.get("image_b64_list"),
@@ -477,7 +510,6 @@ async def handle_vision_mode(
             return
     elif not image_base64_list:
         # No images attached — check if there's ANY cached analysis for this chat
-        # This handles the case where user sends a text follow-up without re-attaching the image
         for key, entry in list(_vision_cache._store.items()):
             if key.startswith(f"{chat_id}::") and not force_rescan:
                 if (time.time() - entry["timestamp"]) <= VisionCache.DEFAULT_TTL:
@@ -490,16 +522,15 @@ async def handle_vision_mode(
                     ):
                         yield event
                     return
-                break  # Expired — fall through to require re-attachment
+                break
 
     # Invalidate cache if force re-scan
     if force_rescan and image_base64_list:
         image_hash = _compute_image_hash(image_base64_list)
         _vision_cache.invalidate(chat_id, image_hash)
 
-    # ── Fresh Vision/OCR Inference ──
-    # Swap: unload text model → load vision model (save prompt context to handoff buffer)
-    yield {"token": f"🔄 Loading vision model for {mode_name.upper()} analysis...\n\n"}
+    # ── Step 1: Model Swap (Unload DeepSeek -> Load Gemma) ──
+    yield {"token": f"🔄 Unloading DeepSeek & Loading Vision Model ({VISION_MODEL_NAME})...\n\n"}
     await swap_to_model(
         target_model=VISION_MODEL_NAME,
         unload_model_name=MODEL_NAME,
@@ -508,22 +539,121 @@ async def handle_vision_mode(
     )
 
     # Multi-image comparison prompt
+    vision_prompt_text = user_message
     if len(image_base64_list) > 1 and not is_ocr:
-        user_message = f"{user_message}\n\n[{len(image_base64_list)} images provided. Compare and analyze all images, noting differences and similarities.]"
+        vision_prompt_text = f"{user_message}\n\n[{len(image_base64_list)} images provided. Compare and analyze all images, noting differences and similarities.]"
 
+    vision_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": vision_prompt_text}
+    ]
+
+    yield {"token": f"🔍 Reading image features with {VISION_MODEL_NAME}...\n\n"}
+
+    # Run non-streaming or fast extraction via Gemma
+    raw_vision_output = await call_ollama(
+        vision_messages,
+        stream=False,
+        temperature=0.1 if is_ocr else 0.3,
+        think=False,
+        images=image_base64_list if image_base64_list else None,
+        model=VISION_MODEL_NAME,
+    )
+    extracted_visual_data = filter_thinking(str(raw_vision_output))
+    logger.info(f"[{mode_name.upper()}] Vision extraction completed ({len(extracted_visual_data)} chars)")
+
+    # ── OCR Post-Processing & Deliverables ──
+    generated_file = None
+    extra_ocr_info = ""
+    if is_ocr:
+        ocr_data = None
+        try:
+            clean = extracted_visual_data.strip()
+            if clean.startswith("```"):
+                lines = clean.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                clean = "\n".join(lines).strip()
+            ocr_data = json.loads(clean)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        if ocr_data and isinstance(ocr_data, dict):
+            raw_text = ocr_data.get("raw_text", "")
+            if raw_text:
+                ocr_data["raw_text"] = _ocr_post_process(raw_text)
+
+            detected_tags = _detect_equipment_tags(ocr_data.get("raw_text", ""))
+            existing_tags = set(ocr_data.get("equipment_tags", []))
+            ocr_data["equipment_tags"] = list(existing_tags.union(set(detected_tags)))
+
+            xlsx_result = await _auto_export_ocr_to_xlsx(ocr_data, chat_id)
+            if xlsx_result:
+                generated_file = xlsx_result.get("download_url")
+                extra_ocr_info += f"\n\n📊 **Auto-exported {len(ocr_data.get('tables', []))} table(s) to Excel:** [{xlsx_result['filename']}]({xlsx_result['download_url']})"
+
+            if ocr_data.get("equipment_tags"):
+                tags_str = ", ".join(ocr_data["equipment_tags"])
+                extra_ocr_info += f"\n\n🏷️ **Equipment Tags Detected:** {tags_str}"
+        else:
+            extracted_visual_data = _ocr_post_process(extracted_visual_data)
+            detected_tags = _detect_equipment_tags(extracted_visual_data)
+            if detected_tags:
+                tags_str = ", ".join(detected_tags)
+                extra_ocr_info += f"\n\n🏷️ **Equipment Tags Detected:** {tags_str}"
+
+    # Cache the extracted visual data so future questions don't re-scan the image
+    if image_base64_list:
+        image_hash = _compute_image_hash(image_base64_list)
+        _vision_cache.store(chat_id, image_hash, extracted_visual_data, is_ocr, image_base64_list)
+
+    # ── Step 2: Model Swap (Unload Gemma -> Load DeepSeek) ──
+    yield {"token": f"🧠 Passing visual findings to DeepSeek ({MODEL_NAME}) for final answer...\n\n"}
+    await swap_to_model(
+        target_model=MODEL_NAME,
+        unload_model_name=VISION_MODEL_NAME,
+        chat_id=chat_id,
+        context_to_transfer=f"Vision/OCR Analysis Output:\n{extracted_visual_data[:2000]}"
+    )
+
+    # ── Step 3: DeepSeek Answer Synthesis & Stream ──
     save_message(chat_id, "user", user_message, mode=mode_name)
-    messages = await build_context_messages(chat_id, system_prompt, user_message)
-
-    yield {"token": f"Processing {mode_name.upper()} analysis on {len(image_base64_list)} image(s)...\n\n"}
+    
+    # Strip "Analyze attached: filename.png" prefixes from user prompt so DeepSeek focuses on the task
+    clean_user_prompt = user_message
+    if re.match(r"^\s*analyze attached:\s*[\w\.\-_]+\s*$", clean_user_prompt, re.IGNORECASE):
+        clean_user_prompt = "Provide a comprehensive inspection and analysis of the attached image based on the verified extraction data."
+    
+    synthesis_messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are an Industrial Operations & Technical Assistant. "
+                "The user has provided an image that has already been scanned and processed by our visual inspection system. "
+                "Below are the verified extracted visual/OCR details. Use them to answer the user's request directly."
+            )
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Here are the verified inspection details extracted from the image:\n\n"
+                f"\"\"\"\n{extracted_visual_data}\n\"\"\"\n\n"
+                f"User Question/Task: {clean_user_prompt}\n\n"
+                f"Provide a clear, direct, and structured technical answer based on these extracted findings."
+            )
+        }
+    ]
 
     gen_tokens = []
     token_gen = await call_ollama(
-        messages,
+        synthesis_messages,
         stream=True,
-        temperature=0.1 if is_ocr else 0.4,
+        temperature=0.3,
         think=think,
-        images=image_base64_list if image_base64_list else None,
-        model=VISION_MODEL_NAME,
+        images=None,  # DeepSeek is text-only: images are NEVER passed to DeepSeek
+        model=MODEL_NAME,
     )
 
     async for chunk in token_gen:
@@ -537,76 +667,10 @@ async def handle_vision_mode(
             yield {"token": token_text, "event": "step", "step_type": "token", "content": token_text}
 
     final_content = filter_thinking("".join(gen_tokens))
-    
-    # ── OCR Post-Processing ──
-    generated_file = None
-    if is_ocr:
-        # Try to parse structured JSON output
-        ocr_data = None
-        try:
-            # Strip markdown code fencing if present
-            clean = final_content.strip()
-            if clean.startswith("```"):
-                lines = clean.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                clean = "\n".join(lines).strip()
-            ocr_data = json.loads(clean)
-        except (json.JSONDecodeError, ValueError):
-            pass
-        
-        if ocr_data and isinstance(ocr_data, dict):
-            # Clean up raw text
-            raw_text = ocr_data.get("raw_text", "")
-            if raw_text:
-                ocr_data["raw_text"] = _ocr_post_process(raw_text)
-            
-            # Auto-detect equipment tags if model missed them
-            detected_tags = _detect_equipment_tags(ocr_data.get("raw_text", ""))
-            existing_tags = set(ocr_data.get("equipment_tags", []))
-            ocr_data["equipment_tags"] = list(existing_tags.union(set(detected_tags)))
-            
-            # Auto-export tables to XLSX
-            xlsx_result = await _auto_export_ocr_to_xlsx(ocr_data, chat_id)
-            if xlsx_result:
-                generated_file = xlsx_result.get("download_url")
-                export_msg = f"\n\n📊 **Auto-exported {len(ocr_data.get('tables', []))} table(s) to Excel:** [{xlsx_result['filename']}]({xlsx_result['download_url']})"
-                final_content += export_msg
-                yield {"token": export_msg}
-            
-            # Highlight equipment tags in output
-            if ocr_data.get("equipment_tags"):
-                tags_str = ", ".join(ocr_data["equipment_tags"])
-                tag_msg = f"\n\n🏷️ **Equipment Tags Detected:** {tags_str}"
-                final_content += tag_msg
-                yield {"token": tag_msg}
-        else:
-            # Freeform text mode — still apply post-processing
-            final_content = _ocr_post_process(final_content)
-            
-            # Auto-detect equipment tags
-            detected_tags = _detect_equipment_tags(final_content)
-            if detected_tags:
-                tags_str = ", ".join(detected_tags)
-                tag_msg = f"\n\n🏷️ **Equipment Tags Detected:** {tags_str}"
-                final_content += tag_msg
-                yield {"token": tag_msg}
+    if extra_ocr_info:
+        final_content += extra_ocr_info
+        yield {"token": extra_ocr_info}
 
-    # ── Store result in cache for future follow-ups (including image bytes for re-scan) ──
-    if image_base64_list:
-        image_hash = _compute_image_hash(image_base64_list)
-        _vision_cache.store(chat_id, image_hash, final_content, is_ocr, image_base64_list)
-
-    # Swap back: unload vision model → load text model (gemma4-e4b) with visual context handoff
-    await swap_to_model(
-        target_model=MODEL_NAME,
-        unload_model_name=VISION_MODEL_NAME,
-        chat_id=chat_id,
-        context_to_transfer=f"Vision/OCR Analysis Output:\n{final_content[:1500]}"
-    )
-    
     save_message(chat_id, "assistant", final_content, mode=mode_name)
     yield {
         "done": True,

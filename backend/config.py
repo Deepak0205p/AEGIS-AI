@@ -34,7 +34,7 @@ GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 # Model configuration: Exact model tag from `ollama list`
 MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-v4-pro:4b")
-VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME", "gemma4-e4b:latest")
+VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME", "qwen2.5vl:3b")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
 NUM_CTX = int(os.getenv("NUM_CTX", "8192"))
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "60.0"))

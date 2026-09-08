@@ -220,14 +220,30 @@ def route_message(
     if attachments:
         for att in attachments:
             clean_att = str(att).lower().strip()
+            # If attachment is direct base64 image data or data URI
+            if clean_att.startswith("data:image") or len(clean_att) > 100:
+                logger.info("[ROUTER] Route decision: 'vision' via base64 image payload in attachments")
+                return "vision", "attachment_base64_image"
             # Extract extension
             for ext, mapped_mode in ATTACHMENT_EXTENSION_MAP.items():
                 if clean_att.endswith(ext):
                     logger.info(f"[ROUTER] Route decision: '{mapped_mode}' via attachment extension '{ext}' in '{att}'")
                     return mapped_mode, f"attachment_{ext}"
 
+    # Check for image filename / attached indicators in user message text
+    image_ext_in_text = re.search(r"\b\w+\.(png|jpg|jpeg|webp|bmp|tiff|tif)\b", message_text, re.IGNORECASE)
+    if image_ext_in_text:
+        logger.info(f"[ROUTER] Route decision: 'vision' via image filename '{image_ext_in_text.group(0)}' in user message")
+        return "vision", f"text_attachment_{image_ext_in_text.group(1).lower()}"
+
     # 3. Conversation-aware follow-up re-routing
     if last_route:
+        # If last route was vision or ocr and query is asking about the image/content, keep in vision mode to use cache
+        if last_route in ("vision", "ocr"):
+            if not any(re.search(rf"\b{k}\b", message_text, re.IGNORECASE) for k in ["python", "script", "excel", "sheet", "ppt", "slide", "word", "docx"]):
+                logger.info(f"[ROUTER] Route decision: 'vision' via conversation follow-up from last_route='{last_route}'")
+                return "vision", "follow_up_vision_cache"
+
         # Check follow-up conversion/export patterns
         if re.search(r"\b(export|convert|save|put|tabulate|format)\b.*\b(excel|spreadsheet|sheet|csv|table|xlsx)\b", message_text, re.IGNORECASE) or \
            re.search(r"^(now\s+)?(export\s+to\s+excel|put\s+in\s+spreadsheet|make\s+an?\s+excel\s+sheet|save\s+as\s+csv)", message_text, re.IGNORECASE):
