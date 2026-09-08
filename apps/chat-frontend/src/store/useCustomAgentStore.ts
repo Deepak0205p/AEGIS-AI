@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { api } from '@/lib/api';
 
 export interface CustomAgent {
   id: string;
@@ -30,6 +29,16 @@ interface CustomAgentState {
   closeBuilder: () => void;
   saveAgent: (agent: Partial<CustomAgent>) => Promise<boolean>;
   deleteAgent: (agentId: string) => Promise<boolean>;
+}
+
+function getApiHost(): string {
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    if (/^[a-zA-Z0-9.-]+$/.test(hostname)) {
+      return hostname;
+    }
+  }
+  return '127.0.0.1';
 }
 
 const DEFAULT_LOCAL_TEMPLATES: CustomAgent[] = [
@@ -71,12 +80,12 @@ const DEFAULT_LOCAL_TEMPLATES: CustomAgent[] = [
   },
   {
     id: 'template-pid-isa-inspector',
-    name: 'P&ID Instrument & ISA-5.1 Tag Inspector',
-    avatar: '🔬',
-    role: 'Instrumentation & Process Automation Lead',
-    description: 'Extracts and verifies P&ID instrument loop tags (PT, TT, FT, ESDV), loop interlocks, and fail-safe actions.',
-    system_prompt: 'You are the P&ID Instrument & ISA-5.1 Inspector. Your objective is to parse P&ID diagrams, verify tag nomenclatures, and check that emergency shutdown valves (ESDV) are properly specified with fail-closed (FC) safety positions.',
-    workflow_mode: 'direct_fast',
+    name: 'P&ID Instrument & Tag Inspector',
+    avatar: '🔍',
+    role: 'Instrumentation & DCS Specialist',
+    description: 'Extracts and cross-references ISA-5.1 tag identifiers, control loops, and interlocks from piping drawings.',
+    system_prompt: 'You are the P&ID Instrument & ISA-5.1 Tag Inspector. Analyze engineering schematics, extract transmitter/valve tags (FT, PT, TT, LCV), verify loop integrity against safe operating envelopes, and output structured tag registers.',
+    workflow_mode: 'sequential_agentic',
     tools: ['rag', 'deliverables'],
     is_template: true,
     author: 'System Template'
@@ -93,13 +102,17 @@ export const useCustomAgentStore = create<CustomAgentState>((set, get) => ({
 
   fetchAgents: async () => {
     set({ isLoading: true, error: null });
+    const host = getApiHost();
     try {
-      const res = await api.get<any>('/api/v1/agents');
-      if (res && Array.isArray(res.agents) && res.agents.length > 0) {
-        set({ agents: res.agents, isLoading: false });
-      } else {
-        set({ isLoading: false });
+      const res = await fetch(`http://${host}:8000/api/v1/agents`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.agents) && data.agents.length > 0) {
+          set({ agents: data.agents, isLoading: false });
+          return;
+        }
       }
+      set({ isLoading: false });
     } catch {
       // Keep cached / default templates
       set({ isLoading: false });
@@ -137,7 +150,12 @@ export const useCustomAgentStore = create<CustomAgentState>((set, get) => ({
         author: agentData.author || 'Operator',
       };
 
-      await api.post('/api/v1/agents', payload).catch(() => {});
+      const host = getApiHost();
+      await fetch(`http://${host}:8000/api/v1/agents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(() => {});
 
       set((state) => ({
         agents: [payload, ...state.agents.filter((a) => a.id !== id)],
@@ -154,7 +172,10 @@ export const useCustomAgentStore = create<CustomAgentState>((set, get) => ({
 
   deleteAgent: async (agentId) => {
     try {
-      await api.delete(`/api/v1/agents/${agentId}`).catch(() => {});
+      const host = getApiHost();
+      await fetch(`http://${host}:8000/api/v1/agents/${agentId}`, {
+        method: 'DELETE'
+      }).catch(() => {});
       set((state) => ({
         agents: state.agents.filter((a) => a.id !== agentId),
         activeAgentId: state.activeAgentId === agentId ? null : state.activeAgentId,
