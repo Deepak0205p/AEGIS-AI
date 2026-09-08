@@ -188,7 +188,14 @@ async def call_ollama(
     
     # Inject images into the last user message ONLY if target model is the multimodal vision model
     formatted_messages = list(messages)
-    is_vision_target = (target_model == VISION_MODEL_NAME or "vl" in target_model.lower() or "vision" in target_model.lower() or "minicpm" in target_model.lower())
+    is_vision_target = (
+        target_model == VISION_MODEL_NAME
+        or "vl" in target_model.lower()
+        or "vision" in target_model.lower()
+        or "llava" in target_model.lower()
+        or "phi" in target_model.lower()
+        or "minicpm" in target_model.lower()
+    )
     if images and formatted_messages and is_vision_target:
         for idx in range(len(formatted_messages) - 1, -1, -1):
             if formatted_messages[idx].get("role") == "user":
