@@ -19,6 +19,7 @@ import {
   Printer,
   Sparkles,
   FileText,
+  FilePlus,
   AlertCircle,
   AlignLeft,
   AlignCenter,
@@ -710,6 +711,21 @@ export function UniverDocEditor({ deliverable }: UniverDocEditorProps) {
             >
               <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
               <span>Digital Stamp</span>
+            </button>
+
+            <button
+              onClick={() =>
+                insertCustomHtml(`
+                <div class="page-break-divider" style="page-break-after: always; margin: 32px -32px; padding: 12px 0; border-top: 2px dashed #94a3b8; border-bottom: 2px dashed #94a3b8; background: #f8fafc; text-align: center; color: #64748b; font-size: 11px; font-weight: bold; letter-spacing: 1.5px; text-transform: uppercase; user-select: none;">
+                  ──────── 📄 PAGE BREAK / NEW PAGE ────────
+                </div>
+                <p><br></p>
+              `)
+              }
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-[#eff6ff] hover:bg-[#dbeafe] border border-[#bfdbfe] text-[#1d4ed8] font-semibold transition-colors cursor-pointer"
+            >
+              <FilePlus className="h-3.5 w-3.5 text-blue-600" />
+              <span>Insert Page Break</span>
             </button>
 
             <button
