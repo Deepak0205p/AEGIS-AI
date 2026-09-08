@@ -115,26 +115,40 @@ if __name__ == "__main__":
   };
 
   const handleRunCode = async (customStdin?: any) => {
-    setIsRunning(true);
     const codeToRun = codeRef.current || code;
+    
+    // Check if code contains interactive input() and no stdin input is provided yet
+    const hasInputCall = /\binput\s*\(/.test(codeToRun);
+    let inputToSend = '';
+    if (typeof customStdin === 'string') {
+      inputToSend = customStdin;
+    } else if (typeof stdinInput === 'string') {
+      inputToSend = stdinInput;
+    }
+
+    if (hasInputCall && !inputToSend.trim()) {
+      setOutputConsole(
+        `[INTERACTIVE INPUT REQUIRED]\n` +
+        `Your Python script contains an input() prompt.\n` +
+        `Please enter your value in the "STDIN >" box below and click "Send & Run" (or press Enter).`
+      );
+      setRunSuccess(null);
+      setIsRunning(false);
+      return;
+    }
+
+    setIsRunning(true);
     setOutputConsole('Executing code in air-gapped Python sandbox...');
     setRunSuccess(null);
     setGeneratedFiles([]);
 
     try {
-      let inputToSend = '';
-      if (typeof customStdin === 'string') {
-        inputToSend = customStdin;
-      } else if (typeof stdinInput === 'string') {
-        inputToSend = stdinInput;
-      }
-      
       const res = await fetch(`${getApiBase()}/api/sandbox/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           code: codeToRun,
-          stdin_input: inputToSend && inputToSend.trim() ? inputToSend.trim() : undefined
+          stdin_input: inputToSend.trim() ? inputToSend.trim() : undefined
         }),
       });
 
