@@ -70,7 +70,8 @@ def execute_python_sandbox(code: str, job_id: str = None, stdin_input: Optional[
         "isolated": bool,
         "execution_time_sec": float,
         "success": bool,
-        "generated_files": list
+        "generated_files": list,
+        "requires_input": bool
     }
     """
     if not job_id:
@@ -92,8 +93,12 @@ def execute_python_sandbox(code: str, job_id: str = None, stdin_input: Optional[
     
     # Standardize input stream data
     input_data = (stdin_input if stdin_input is not None else "").strip()
-    if input_data and not input_data.endswith("\n"):
-        input_data += "\n"
+    if input_data:
+        if not input_data.endswith("\n"):
+            input_data += "\n"
+    else:
+        # Default mock input for empty stdin to prevent EOFError when script calls input()
+        input_data = "Demo User\n"
 
     if docker_active:
         abs_path = str(job_dir.resolve())
@@ -117,7 +122,7 @@ def execute_python_sandbox(code: str, job_id: str = None, stdin_input: Optional[
         try:
             res = subprocess.run(
                 cmd,
-                input=input_data if input_data else None,
+                input=input_data,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -133,7 +138,7 @@ def execute_python_sandbox(code: str, job_id: str = None, stdin_input: Optional[
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 pass
-            stderr = "Execution timed out (exceeded 15 seconds limit).\nNote: If your script uses input(), provide stdin input or values directly in code."
+            stderr = "Execution timed out (exceeded 15 seconds limit).\nTip: Use the STDIN input box at the bottom to provide inputs."
             exit_code = 124
             isolated = True
         except Exception as e:
@@ -156,7 +161,7 @@ def execute_python_sandbox(code: str, job_id: str = None, stdin_input: Optional[
             res = subprocess.run(
                 [sys.executable, "-u", str(script_path)],
                 cwd=str(job_dir),
-                input=input_data if input_data else "",
+                input=input_data,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -174,7 +179,7 @@ def execute_python_sandbox(code: str, job_id: str = None, stdin_input: Optional[
                     os.kill(res.pid, signal.SIGTERM) if hasattr(res, 'pid') else None
             except Exception:
                 pass
-            stderr = "Execution timed out (exceeded 15 seconds limit).\nNote: If your script asks for interactive input(), provide inputs in the terminal prompt or assign values in code."
+            stderr = "Execution timed out (exceeded 15 seconds limit).\nTip: Use the STDIN input box below to supply input values."
             exit_code = 124
             isolated = False
         except Exception as e:
