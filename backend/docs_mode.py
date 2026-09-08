@@ -11,38 +11,32 @@ from backend.db import build_context_messages, save_message
 from backend.deliverables import create_deliverable_file
 
 DOC_PLANNER_SYSTEM_PROMPT = """You are an expert technical author, executive editor, and enterprise document architect.
-Your objective: Dynamically design and author a comprehensive, fully tailored document (.docx) based on the user's specific request and domain.
+Your objective: Autonomously design and author a comprehensive, fully tailored document (.docx) based on the user's specific request and domain.
 
 AUTONOMOUS DOCUMENT DESIGN PRINCIPLES:
-1. TOTAL STRUCTURAL FREEDOM: Do NOT follow a rigid or canned template. YOU autonomously decide the ideal structure, section hierarchy (H1, H2, H3), depth of prose, number of sections, tables, bullet lists, or callouts best suited to the topic.
+1. TOTAL STRUCTURAL FREEDOM: Do NOT follow a canned template. YOU autonomously decide the ideal structure, section hierarchy (H1, H2, H3), depth of prose, number of sections, tables, bullet lists, or callouts best suited to the topic.
 2. ADAPTIVE FORMATTING:
    - For an SOP or Standard: Write formal procedures, step-by-step numbered steps, safety warnings, and compliance criteria.
-   - For an Inspection / Audit / Technical Report: Structure background, detailed inspection methodology, multi-column measurement tables, findings, root-cause analysis, and prioritized action items.
-   - For a Memo / Business Case / Executive Brief: Use executive summaries, strategic context, risk matrices, and financial/operational metrics.
-   - For a User Guide / Manual / SOP: Structure with prerequisites, step-by-step instructions, troubleshooting tables, and FAQs.
-3. IN-DEPTH, PROFESSIONAL WRITING: Write rich, detailed, articulate prose. Avoid shallow or trivial 1-sentence sections. Provide substantial domain-accurate detail, context, industry metrics, and complete tables.
-4. STRICT TOPIC FIDELITY: Maintain 100% focus on the user's prompt and intent. Never inject unrelated historical conversation fragments unless the user explicitly requested to compile or format them.
+   - For an Inspection / Technical Report: Structure background, inspection methodology, measurement tables, findings, and action items.
+   - For an Essay / Overview / Brief: Use rich narrative prose across well-structured sections and key data points.
+3. IN-DEPTH, PROFESSIONAL WRITING: Write rich, detailed, articulate prose. Provide substantial domain-accurate detail, context, and complete tables.
+4. STRICT TOPIC FIDELITY: Maintain 100% focus on the user's prompt.
 
-OUTPUT SPECIFICATION (JSON ONLY):
-Return your document plan as a single valid JSON object. You can use ANY combination and sequence of blocks (paragraphs, headings of level 1/2/3, bullet lists, tables with any number of headers/rows, and charts):
-
+OUTPUT JSON SCHEMA:
+Return ONLY valid JSON matching this schema:
 {
-  "title": "<Descriptive Document Title>",
-  "filename": "<descriptive_filename.docx>",
+  "title": "Document Title",
+  "filename": "document_name.docx",
   "blocks": [
-    // You freely decide the order, quantity, and content of blocks:
-    // Block Types:
-    // { "type": "heading", "text": "...", "level": 1 | 2 | 3 }
-    // { "type": "paragraph", "text": "Detailed in-depth paragraph..." }
-    // { "type": "bullets", "items": ["Item 1...", "Item 2..."] }
-    // { "type": "table", "rows": [ ["Header 1", "Header 2", ...], ["Val 1", "Val 2", ...] ] }
-    // { "type": "chart", "title": "Chart Title", "chart_type": "bar" | "line", "rows": [ ["Category", "Metric 1", "Metric 2"], ["A", 10, 20], ... ] }
+    { "type": "heading", "text": "Section Title", "level": 1 },
+    { "type": "paragraph", "text": "Comprehensive paragraph text..." },
+    { "type": "bullets", "items": ["Key point 1", "Key point 2"] },
+    { "type": "table", "rows": [["Col 1", "Col 2"], ["Val 1", "Val 2"]] }
   ]
 }
 
 RULES:
-- Return ONLY the raw JSON object. Do not wrap with explanation or markdown outside JSON.
-- Fully populate all text and table cells. Never use placeholders like "[Insert text here]"."""
+- Return ONLY the raw JSON object. Do not include markdown code block backticks, comments, or explanations outside the JSON."""
 
 
 def parse_plan_json(raw_text: str) -> Optional[Dict[str, Any]]:
@@ -141,8 +135,8 @@ async def handle_document_mode(
     
     yield {"token": f"Planning {mode.upper()} structure based on conversation data...\n"}
     
-    # Step 1: Call Ollama with json_mode=True and high token ceiling
-    plan_raw = await call_ollama(messages, stream=False, temperature=0.3, max_tokens=8192, json_mode=True)
+    # Step 1: Call Ollama with json_mode=True and balanced token ceiling
+    plan_raw = await call_ollama(messages, stream=False, temperature=0.3, max_tokens=4096, json_mode=True)
     plan_data = parse_plan_json(str(plan_raw))
     
     # Step 2: Retry once if JSON parse failed
@@ -152,7 +146,7 @@ async def handle_document_mode(
             {"role": "assistant", "content": str(plan_raw)},
             {"role": "user", "content": "Return ONLY valid JSON matching the schema."}
         ]
-        retry_raw = await call_ollama(retry_messages, stream=False, temperature=0.2, max_tokens=8192, json_mode=True)
+        retry_raw = await call_ollama(retry_messages, stream=False, temperature=0.2, max_tokens=4096, json_mode=True)
         plan_data = parse_plan_json(str(retry_raw))
         
     if not plan_data:

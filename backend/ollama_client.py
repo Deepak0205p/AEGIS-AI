@@ -289,7 +289,7 @@ async def _non_stream_ollama(url: str, payload: Dict[str, Any]) -> str:
     """Non-streaming request to Ollama returning full string response."""
     exact_fix = f"run: ollama serve && ollama pull {MODEL_NAME}"
     try:
-        timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
+        timeout = httpx.Timeout(connect=15.0, read=300.0, write=15.0, pool=15.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, json=payload)
             if response.status_code != 200:
