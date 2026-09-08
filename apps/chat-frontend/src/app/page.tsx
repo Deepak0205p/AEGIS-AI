@@ -1277,7 +1277,7 @@ export default function GeminiReplicaChatApp() {
                               </div>
                             )}
 
-                            {/* Action Bar (Copy & Metadata Action Bar) */}
+                            {/* Action Bar (Copy) */}
                             {!isUser && msg.content && (
                               <div className="flex items-center w-full pt-1 text-slate-400 dark:text-[#8e918f]">
                                 <div className="flex items-center space-x-1">
@@ -1288,16 +1288,6 @@ export default function GeminiReplicaChatApp() {
                                     title="Copy response"
                                   >
                                     {copiedId === msg.id ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                                  </button>
-
-                                  <button
-                                    onClick={() => handleRegenerate(idx)}
-                                    disabled={isStreaming}
-                                    aria-label="Redo / Regenerate response"
-                                    className="h-7 w-7 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.06] active:bg-slate-200 dark:active:bg-white/[0.1] flex items-center justify-center text-slate-500 dark:text-[#9aa0a6] hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer disabled:opacity-40"
-                                    title="Redo / Regenerate response"
-                                  >
-                                    <RotateCcw className="h-3.5 w-3.5" />
                                   </button>
                                 </div>
                               </div>
