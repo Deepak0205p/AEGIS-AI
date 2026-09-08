@@ -8,7 +8,7 @@ os_overhead_mb: 400
 kv_cache_headroom_mb: 600
 
 default_primary_model_id: "gemma4-e4b"
-default_secondary_model_id: "gemma4:e4b"
+default_secondary_model_id: "qwen2.5vl:3b"
 default_embedding_model_id: "gemma4-e4b"
 
 models:

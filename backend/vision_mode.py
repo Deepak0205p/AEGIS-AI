@@ -609,9 +609,10 @@ async def handle_vision_mode(
     # ── Direct Stream from Vision Model (Zero-Loss Grounded Generation) ──
     save_message(chat_id, "user", user_message, mode=mode_name)
     
-    clean_user_prompt = user_message
-    if re.match(r"^\s*analyze attached:\s*[\w\.\-_]+\s*$", clean_user_prompt, re.IGNORECASE):
-        clean_user_prompt = "Provide a comprehensive inspection and analysis of the attached image based on visible features."
+    # Handle empty or attachment-only user prompts
+    clean_user_prompt = user_message.strip() if user_message else ""
+    if not clean_user_prompt or re.match(r"^\s*(analyze attached:?|inspect attached:?|attached:?|image:?)\s*[\w\.\-_,\s]*$", clean_user_prompt, re.IGNORECASE):
+        clean_user_prompt = "Examine this image in full detail. Identify and describe all visible components, equipment tags, process flows, vessels, instruments, and readings."
 
     vision_messages = [
         {"role": "system", "content": system_prompt},
