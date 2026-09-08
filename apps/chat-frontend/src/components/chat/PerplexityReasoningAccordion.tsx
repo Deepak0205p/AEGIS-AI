@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { ChevronDown, ChevronUp, Sparkles, CheckCircle2, Clock } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { ChevronDown, ChevronUp, Sparkles, CheckCircle2, Clock, BrainCircuit, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export interface TraceStep {
@@ -19,36 +19,77 @@ interface Props {
 export function PerplexityReasoningAccordion({ steps, isStreaming = false }: Props) {
   const [isOpen, setIsOpen] = useState(isStreaming);
 
-  if (!steps || steps.length === 0) return null;
+  // Filter out raw token fragments or join coherent thoughts
+  const { combinedText, parsedSteps, secondsElapsed } = useMemo(() => {
+    if (!steps || steps.length === 0) {
+      return { combinedText: '', parsedSteps: [], secondsElapsed: 0 };
+    }
 
-  const totalSteps = steps.length;
-  const lastStep = steps[steps.length - 1];
+    // Combine raw token chunks into unified narrative text
+    const fullText = steps
+      .map((s) => s.content)
+      .join('')
+      .replace(/<think>|<\/think>/gi, '')
+      .trim();
+
+    // Parse into distinct reasoning paragraphs / steps
+    const paragraphs = fullText
+      .split(/\n\s*\n+/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+
+    // If text didn't have double newlines, split by sentences or keep full blocks
+    const formattedSteps: string[] = [];
+    if (paragraphs.length > 0) {
+      paragraphs.forEach((p) => {
+        // Clean markdown headers or bullet noise if any
+        const cleaned = p.replace(/^[\*\-\#\d\.\s]+/, '').trim();
+        if (cleaned.length > 0) {
+          formattedSteps.push(p);
+        }
+      });
+    }
+
+    const totalMs = steps.reduce((acc, curr) => acc + (curr.duration_ms || 0), 0);
+    const secs = totalMs > 0 ? Math.round(totalMs / 100) / 10 : Math.max(1, Math.round(steps.length * 0.08 * 10) / 10);
+
+    return {
+      combinedText: fullText,
+      parsedSteps: formattedSteps.length > 0 ? formattedSteps : [fullText],
+      secondsElapsed: secs,
+    };
+  }, [steps]);
+
+  if (!steps || steps.length === 0 || !combinedText) return null;
 
   return (
-    <div className="w-full mb-2 rounded-xl border border-blue-500/20 bg-blue-50/50 dark:bg-[#121624]/60 overflow-hidden text-xs transition-all">
+    <div className="w-full mb-3 rounded-2xl border border-slate-200/80 bg-slate-50/70 dark:border-white/[0.08] dark:bg-[#12141c]/80 backdrop-blur-sm overflow-hidden text-xs transition-all shadow-xs">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-3.5 py-2.5 flex items-center justify-between text-left hover:bg-blue-100/50 dark:hover:bg-white/[0.04] transition-colors"
+        className="w-full px-4 py-2.5 flex items-center justify-between text-left hover:bg-slate-100/70 dark:hover:bg-white/[0.03] transition-colors cursor-pointer"
       >
-        <div className="flex items-center space-x-2 min-w-0">
-          <div className="h-4 w-4 rounded-full bg-blue-500/10 dark:bg-blue-400/20 flex items-center justify-center shrink-0">
+        <div className="flex items-center space-x-2.5 min-w-0">
+          <div className="h-5 w-5 rounded-full bg-blue-500/10 dark:bg-blue-400/15 flex items-center justify-center shrink-0 border border-blue-500/20">
             {isStreaming ? (
-              <div className="h-2 w-2 rounded-full bg-blue-600 dark:bg-blue-400 animate-ping" />
+              <Activity className="h-3 w-3 text-blue-600 dark:text-blue-400 animate-pulse" />
             ) : (
-              <Sparkles className="h-2.5 w-2.5 text-blue-600 dark:text-blue-400" />
+              <BrainCircuit className="h-3 w-3 text-blue-600 dark:text-blue-400" />
             )}
           </div>
-          <span className="font-semibold text-blue-700 dark:text-blue-300">
-            {isStreaming ? 'Thinking & Reasoning...' : `Thought for ${totalSteps} step${totalSteps > 1 ? 's' : ''}`}
-          </span>
-          {isStreaming && lastStep && (
-            <span className="text-slate-500 dark:text-slate-400 truncate text-[11px] hidden sm:inline">
-              — {lastStep.content}
+          <div className="flex items-center space-x-2 truncate">
+            <span className="font-semibold text-slate-800 dark:text-slate-200 tracking-tight">
+              {isStreaming ? 'Thinking Process' : `Thought for ${secondsElapsed}s`}
             </span>
-          )}
+            {isStreaming && (
+              <span className="flex items-center space-x-1 text-[11px] text-blue-600 dark:text-blue-400 font-medium">
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-600 dark:bg-blue-400 animate-ping" />
+                <span className="truncate">Analyzing query & synthesizing operational reasoning...</span>
+              </span>
+            )}
+          </div>
         </div>
-        <div className="flex items-center space-x-1.5 shrink-0 text-slate-400 dark:text-slate-500">
-          <span className="text-[11px]">{isOpen ? 'Hide' : 'View'}</span>
+        <div className="flex items-center space-x-1.5 shrink-0 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
+          <span className="text-[11px] font-medium">{isOpen ? 'Hide' : 'View steps'}</span>
           {isOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
         </div>
       </button>
@@ -59,29 +100,24 @@ export function PerplexityReasoningAccordion({ steps, isStreaming = false }: Pro
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.2 }}
-            className="px-3.5 pb-3 pt-1 border-t border-blue-500/10 space-y-2"
+            transition={{ duration: 0.22, ease: 'easeInOut' }}
+            className="px-4 pb-3.5 pt-2 border-t border-slate-200/60 dark:border-white/[0.06] space-y-2.5 bg-white/40 dark:bg-black/20"
           >
-            {steps.map((step, idx) => {
-              const isCurrent = isStreaming && idx === steps.length - 1;
+            {parsedSteps.map((paragraph, idx) => {
+              const isLast = idx === parsedSteps.length - 1;
               return (
-                <div key={step.id || idx} className="flex items-start space-x-2 text-slate-600 dark:text-slate-300">
-                  <div className="mt-0.5 shrink-0">
-                    {isCurrent ? (
-                      <div className="h-3 w-3 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+                <div key={idx} className="flex items-start space-x-2.5 text-slate-600 dark:text-slate-300 text-[12px] leading-relaxed">
+                  <div className="mt-1 shrink-0">
+                    {isStreaming && isLast ? (
+                      <div className="h-2.5 w-2.5 rounded-full bg-blue-500 animate-ping" />
                     ) : (
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                      <div className="h-1.5 w-1.5 rounded-full bg-slate-400 dark:bg-slate-500" />
                     )}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={`leading-relaxed ${isCurrent ? 'text-blue-600 dark:text-blue-400 font-medium' : ''}`}>
-                      {step.content}
+                  <div className="flex-1 min-w-0 font-normal select-text">
+                    <p className={`whitespace-pre-wrap ${isStreaming && isLast ? 'text-slate-800 dark:text-slate-200 font-medium' : 'text-slate-600 dark:text-slate-400'}`}>
+                      {paragraph}
                     </p>
-                    {step.duration_ms !== undefined && step.duration_ms > 0 && (
-                      <span className="text-[10px] text-slate-400 flex items-center gap-0.5 mt-0.5">
-                        <Clock className="h-2.5 w-2.5" /> {step.duration_ms}ms
-                      </span>
-                    )}
                   </div>
                 </div>
               );
@@ -92,3 +128,4 @@ export function PerplexityReasoningAccordion({ steps, isStreaming = false }: Pro
     </div>
   );
 }
+
