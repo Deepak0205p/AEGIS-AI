@@ -443,6 +443,7 @@ export default function GeminiReplicaChatApp() {
   const {
     sessions,
     activeSessionId,
+    messages,
     isStreaming,
     regeneratingMsgId,
     currentInput,
@@ -459,10 +460,10 @@ export default function GeminiReplicaChatApp() {
 
   // Sync initialSessionId from dynamic route /chat/[id]
   useEffect(() => {
-    if (initialSessionId && initialSessionId !== activeSessionId) {
+    if (initialSessionId) {
       selectSession(initialSessionId);
     }
-  }, [initialSessionId, activeSessionId, selectSession]);
+  }, [initialSessionId, selectSession]);
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
@@ -473,9 +474,7 @@ export default function GeminiReplicaChatApp() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const activeSession = sessions.find((s) => s.id === activeSessionId) || sessions[0];
-  const messages = activeSession ? activeSession.messages : [];
-  const hasMessages = messages.length > 0;
+  const hasMessages = Array.isArray(messages) && messages.length > 0;
 
   const lastUserMsgRef = useRef<HTMLDivElement>(null);
 

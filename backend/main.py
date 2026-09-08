@@ -432,8 +432,8 @@ async def websocket_chat_stream(websocket: WebSocket):
 
             attachments = data.get("attachments") or data.get("files")
             user_msg = (data.get("message") or data.get("prompt") or "").strip()
-            requested_mode = data.get("mode") or "auto"
-            chat_id = data.get("chat_id") or f"chat_{uuid.uuid4().hex[:10]}"
+            requested_mode = data.get("mode") or data.get("role") or "auto"
+            chat_id = data.get("chat_id") or data.get("session_id") or f"chat_{uuid.uuid4().hex[:10]}"
             agent_id = data.get("agent_id")
 
             if not user_msg and attachments:

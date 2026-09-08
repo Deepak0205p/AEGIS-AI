@@ -141,14 +141,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         set({ sessions: mysqlSessions });
 
-        // If no active session set, pick the first from MySQL
+        // If no active session set, pick the first from MySQL and fetch its full messages
         const currentActive = get().activeSessionId;
-        if ((!currentActive || !mysqlSessions.some(s => s.id === currentActive)) && mysqlSessions.length > 0) {
+        if (!currentActive && mysqlSessions.length > 0) {
           const first = mysqlSessions[0];
-          set({
-            activeSessionId: first.id,
-            messages: first.messages || []
-          });
+          await get().fetchSessionById(first.id);
+        } else if (currentActive) {
+          await get().fetchSessionById(currentActive);
         }
       }
     } catch (err) {
@@ -248,17 +247,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectSession: async (id: string) => {
-    const sess = get().sessions.find((s) => s.id === id);
-    if (sess && sess.messages.length > 0) {
-      set({
-        activeSessionId: id,
-        messages: sess.messages,
-        activeTraceSteps: [],
-        isStreaming: false
-      });
-    } else {
-      await get().fetchSessionById(id);
-    }
+    set({
+      activeSessionId: id,
+      activeTraceSteps: [],
+      isStreaming: false
+    });
+    await get().fetchSessionById(id);
   },
 
   deleteSession: async (id: string) => {
