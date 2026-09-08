@@ -177,12 +177,14 @@ async def call_ollama(
     url = f"{OLLAMA_HOST}/api/chat"
     
     eff_num_predict = max_tokens if (max_tokens is not None and max_tokens > 0) else 2048
+    # For multimodal vision/OCR requests, allocate 16384 context to accommodate high-res patch tokens
+    eff_num_ctx = 16384 if images else NUM_CTX
     options: Dict[str, Any] = {
         "temperature": float(temperature),
         "top_p": DEFAULT_TOP_P,
         "top_k": DEFAULT_TOP_K,
         "repeat_penalty": DEFAULT_REPEAT_PENALTY,
-        "num_ctx": NUM_CTX,
+        "num_ctx": eff_num_ctx,
         "num_predict": eff_num_predict,
     }
     
