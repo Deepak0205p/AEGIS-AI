@@ -1117,23 +1117,6 @@ export default function GeminiReplicaChatApp() {
                               }
                               isStreaming={true}
                             />
-
-                            {/* In-Place Live Response Card */}
-                            <div className="w-full rounded-2xl sm:rounded-3xl bg-white border border-slate-200/90 shadow-[0_2px_16px_rgba(0,0,0,0.03),0_8px_32px_rgba(0,0,0,0.03)] dark:bg-[#101116] dark:border-white/[0.08] dark:shadow-[0_4px_32px_rgba(0,0,0,0.6)] p-5 sm:p-6 transition-all relative overflow-hidden space-y-3">
-                              <div className="absolute top-0 inset-x-0 h-[1.5px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent" />
-                              
-                              <div className="flex items-center space-x-2.5 text-xs text-blue-600 dark:text-blue-400 font-medium">
-                                <div className="h-2 w-2 rounded-full bg-blue-600 dark:bg-blue-400 animate-ping shrink-0" />
-                                <span>Reworking response in real-time...</span>
-                              </div>
-
-                              {/* Smooth Pulsing Placeholder Lines */}
-                              <div className="space-y-2.5 pt-1 animate-pulse opacity-60">
-                                <div className="h-3 bg-slate-200 dark:bg-white/10 rounded-full w-4/5" />
-                                <div className="h-3 bg-slate-200 dark:bg-white/10 rounded-full w-2/3" />
-                                <div className="h-3 bg-slate-200 dark:bg-white/10 rounded-full w-1/2" />
-                              </div>
-                            </div>
                           </div>
                         ) : (
                           <div className={`flex flex-col space-y-1.5 max-w-[88%] sm:max-w-3xl ${
@@ -1258,23 +1241,6 @@ export default function GeminiReplicaChatApp() {
                           }
                           isStreaming={true}
                         />
-
-                        {/* Live In-Progress Response Card */}
-                        <div className="w-full rounded-2xl sm:rounded-3xl bg-white border border-slate-200/90 shadow-[0_2px_16px_rgba(0,0,0,0.03),0_8px_32px_rgba(0,0,0,0.03)] dark:bg-[#101116] dark:border-white/[0.08] dark:shadow-[0_4px_32px_rgba(0,0,0,0.6)] p-5 sm:p-6 transition-all relative overflow-hidden space-y-3">
-                          <div className="absolute top-0 inset-x-0 h-[1.5px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent" />
-                          
-                          <div className="flex items-center space-x-2.5 text-xs text-blue-600 dark:text-blue-400 font-medium">
-                            <div className="h-2 w-2 rounded-full bg-blue-600 dark:bg-blue-400 animate-ping shrink-0" />
-                            <span>Synthesizing response in real-time...</span>
-                          </div>
-
-                          {/* Smooth Pulsing Placeholder Lines */}
-                          <div className="space-y-2.5 pt-1 animate-pulse opacity-60">
-                            <div className="h-3 bg-slate-200 dark:bg-white/10 rounded-full w-4/5" />
-                            <div className="h-3 bg-slate-200 dark:bg-white/10 rounded-full w-2/3" />
-                            <div className="h-3 bg-slate-200 dark:bg-white/10 rounded-full w-1/2" />
-                          </div>
-                        </div>
                       </div>
                     </motion.div>
                   )}
