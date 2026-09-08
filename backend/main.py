@@ -381,13 +381,15 @@ async def chat_endpoint(request_body: ChatRequest):
        - then:    {"token": "..."} repeatedly
        - final:   {"done": true, "generated_file": "<url or null>", "run_output": "<string or null>"}
     """
-    user_msg = (request_body.message or "").strip()
-    if not user_msg:
+    attachments = request_body.attachments
+    user_msg = (request_body.message or request_body.prompt or "").strip()
+    if not user_msg and attachments:
+        user_msg = "Analyze the attached image and describe what you see."
+    elif not user_msg:
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
         
     chat_id = request_body.chat_id or f"chat_{uuid.uuid4().hex[:10]}"
     requested_mode = request_body.mode or "auto"
-    attachments = request_body.attachments
 
     async def sse_event_generator():
         async for event in generate_chat_events(user_msg, requested_mode, chat_id, attachments=attachments):
@@ -399,20 +401,20 @@ async def chat_endpoint(request_body: ChatRequest):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
+            "Content-Type": "text/event-stream",
+        },
     )
 
 
 @app.websocket("/api/chat/stream")
 async def websocket_chat_stream(websocket: WebSocket):
     """
-    WebSocket streaming endpoint for real-time bidirectional agent interaction:
-    Client sends: {"message": str, "mode": str, "chat_id": str} (or prompt/role/session_id)
-    Server sends: {"route": "..."} -> {"token": "..."} repeatedly -> {"done": true, ...}
+    WebSocket endpoint for real-time token and reasoning stream.
+    Payload: {"message": str, "mode": Optional[str], "chat_id": Optional[str], "attachments": Optional[List[str]]}
     """
     await websocket.accept()
     logger.info("[WS] Client connected to /api/chat/stream")
+
     try:
         while True:
             raw_data = await websocket.receive_text()
@@ -423,14 +425,16 @@ async def websocket_chat_stream(websocket: WebSocket):
                 await websocket.send_json({"error": "Malformed JSON payload", "done": True})
                 continue
 
+            attachments = data.get("attachments") or data.get("files")
             user_msg = (data.get("message") or data.get("prompt") or "").strip()
-            if not user_msg:
+            if not user_msg and attachments:
+                user_msg = "Analyze the attached image and describe what you see."
+            elif not user_msg:
                 await websocket.send_json({"error": "Empty message", "done": True})
                 continue
 
             chat_id = data.get("chat_id") or data.get("session_id") or f"chat_{uuid.uuid4().hex[:10]}"
             requested_mode = data.get("mode") or data.get("role") or "auto"
-            attachments = data.get("attachments") or data.get("files")
 
             logger.info(f"[WS STREAM] chat_id={chat_id} mode={requested_mode} prompt={user_msg[:60]!r}")
             async for event in generate_chat_events(user_msg, requested_mode, chat_id, attachments=attachments):

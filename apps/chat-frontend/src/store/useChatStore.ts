@@ -13,6 +13,13 @@ export interface TraceStep {
   timestamp: string;
 }
 
+export interface ChatAttachment {
+  name: string;
+  base64: string;
+  type?: string;
+  size?: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'agent' | 'system';
@@ -23,6 +30,7 @@ export interface ChatMessage {
   confidence?: number;
   trace_steps?: TraceStep[];
   deliverable_ids?: string[];
+  attachments?: ChatAttachment[];
 }
 
 export interface ConversationSession {
@@ -77,6 +85,12 @@ function normalizeDbMessage(msg: any): ChatMessage {
       deliverableIds = typeof msg.deliverables_json === 'string' ? JSON.parse(msg.deliverables_json) : msg.deliverables_json;
     } catch { deliverableIds = []; }
   }
+  let attachments = msg.attachments;
+  if (!attachments && msg.attachments_json) {
+    try {
+      attachments = typeof msg.attachments_json === 'string' ? JSON.parse(msg.attachments_json) : msg.attachments_json;
+    } catch { attachments = []; }
+  }
   return {
     id: msg.id,
     role: msg.role,
@@ -87,6 +101,7 @@ function normalizeDbMessage(msg: any): ChatMessage {
     confidence: msg.confidence,
     trace_steps: traceSteps || [],
     deliverable_ids: deliverableIds || [],
+    attachments: attachments || [],
   };
 }
 

@@ -157,63 +157,86 @@ def encode_image_to_base64(file_path: str) -> Optional[str]:
     """
     Encodes an image or PDF file to a base64 string for multimodal inference.
     Supports PNG, JPG, JPEG, TIFF, BMP, WEBP, and single/multi-page PDFs.
+    Automatically normalizes minimum dimensions (>= 56x56) for Qwen2.5-VL patch encoder.
     """
     try:
         if not file_path:
             return None
-        # Check if already a raw or prefixed base64 string
-        if file_path.startswith("data:image"):
-            return file_path.split(",", 1)[-1]
-        
-        # Check if valid file path
-        p = Path(file_path)
-        if p.exists() and p.is_file():
-            from PIL import Image
-            import io
-            
-            ext = p.suffix.lower()
-            
-            # Handle PDF document pages
-            if ext == ".pdf":
-                try:
-                    import pypdf
-                    reader = pypdf.PdfReader(str(p))
-                    for page in reader.pages:
-                        for img_obj in page.images:
-                            img = Image.open(io.BytesIO(img_obj.data)).convert("RGB")
-                            buf = io.BytesIO()
-                            img.save(buf, format="JPEG", quality=90)
-                            return base64.b64encode(buf.getvalue()).decode("utf-8")
-                except Exception as pdf_err:
-                    logger.warning(f"[VISION/OCR] PDF image extraction fallback for {p.name}: {pdf_err}")
-            
-            # Standard image handling with RGB normalization & smart resizing
-            raw_bytes = p.read_bytes()
+
+        from PIL import Image
+        import io
+
+        # Check if already a raw or data-prefixed base64 string
+        clean_b64 = None
+        if str(file_path).startswith("data:image"):
+            clean_b64 = file_path.split(",", 1)[-1].strip()
+        elif len(str(file_path)) > 50:
+            clean_b64 = str(file_path).strip()
+
+        if clean_b64:
             try:
+                raw_bytes = base64.b64decode(clean_b64)
                 img = Image.open(io.BytesIO(raw_bytes))
                 if img.mode not in ("RGB", "L"):
                     img = img.convert("RGB")
+                # Ensure minimum 56x56 dimensions for VL patch embeddings
+                if img.width < 56 or img.height < 56:
+                    img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
                 max_dim = 1920
                 ratio = min(max_dim / img.width, max_dim / img.height)
                 if ratio < 1.0:
                     new_size = (int(img.width * ratio), int(img.height * ratio))
                     img = img.resize(new_size, Image.LANCZOS)
-                
                 buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=88)
-                norm_bytes = buf.getvalue()
-                return base64.b64encode(norm_bytes).decode("utf-8")
+                img.save(buf, format="JPEG", quality=90)
+                return base64.b64encode(buf.getvalue()).decode("utf-8")
             except Exception:
-                return base64.b64encode(raw_bytes).decode("utf-8")
-        
-        # Fallback: check if it's base64 encoded text
-        try:
-            base64.b64decode(file_path, validate=True)
-            return file_path
-        except Exception:
-            pass
+                return clean_b64
+
+        # Check if valid file path (only for reasonable path lengths)
+        if len(str(file_path)) < 260:
+            p = Path(file_path)
+            if p.exists() and p.is_file():
+                ext = p.suffix.lower()
+                
+                # Handle PDF document pages
+                if ext == ".pdf":
+                    try:
+                        import pypdf
+                        reader = pypdf.PdfReader(str(p))
+                        for page in reader.pages:
+                            for img_obj in page.images:
+                                img = Image.open(io.BytesIO(img_obj.data)).convert("RGB")
+                                if img.width < 56 or img.height < 56:
+                                    img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
+                                buf = io.BytesIO()
+                                img.save(buf, format="JPEG", quality=90)
+                                return base64.b64encode(buf.getvalue()).decode("utf-8")
+                    except Exception as pdf_err:
+                        logger.warning(f"[VISION/OCR] PDF image extraction fallback for {p.name}: {pdf_err}")
+                
+                # Standard image handling with RGB normalization & smart resizing
+                raw_bytes = p.read_bytes()
+                try:
+                    img = Image.open(io.BytesIO(raw_bytes))
+                    if img.mode not in ("RGB", "L"):
+                        img = img.convert("RGB")
+                    if img.width < 56 or img.height < 56:
+                        img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
+                    max_dim = 1920
+                    ratio = min(max_dim / img.width, max_dim / img.height)
+                    if ratio < 1.0:
+                        new_size = (int(img.width * ratio), int(img.height * ratio))
+                        img = img.resize(new_size, Image.LANCZOS)
+                    
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=90)
+                    norm_bytes = buf.getvalue()
+                    return base64.b64encode(norm_bytes).decode("utf-8")
+                except Exception:
+                    return base64.b64encode(raw_bytes).decode("utf-8")
     except Exception as e:
-        logger.warning(f"[VISION] Failed to encode image {file_path}: {e}")
+        logger.warning(f"[VISION] Failed to encode image '{str(file_path)[:40]}...': {e}")
     return None
 
 

@@ -374,8 +374,8 @@ async def classify_intent_model(
     if attachments:
         att_kinds = []
         for a in attachments:
-            a_str = str(a).lower()
-            if a_str.startswith("data:image") or any(a_str.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"]):
+            a_str = str(a).lower().strip()
+            if a_str.startswith("data:image") or len(a_str) > 100 or any(a_str.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"]):
                 att_kinds.append("image")
             elif any(a_str.endswith(ext) for ext in [".xlsx", ".xls", ".csv"]):
                 att_kinds.append("spreadsheet")
@@ -471,6 +471,7 @@ async def route_message_async(
     5. Falls back gracefully to deterministic heuristics if the model is unreachable.
     """
     clean_override = (mode_override or "").strip().lower()
+    clean_msg = user_message.strip().lower()
 
     # 1. Manual user override explicitly selected from UI buttons
     valid_manual_modes = {"chat", "code", "docs", "excel", "ppt", "vision", "ocr"}
@@ -478,19 +479,48 @@ async def route_message_async(
         logger.info(f"[ROUTER] Route decision: '{clean_override}' via manual mode override")
         return clean_override, "manual_override"
 
-    # 2. Fast greeting shortcut for common 1-2 word pleasantries (0ms latency)
-    clean_msg = user_message.strip().lower()
+    # 2. Fast-path attachment routing: Images must be processed by multimodal vision model
+    if attachments:
+        has_image = any(
+            str(a).startswith("data:image")
+            or len(str(a)) > 50
+            or str(a).startswith("iVBORw0")
+            or str(a).startswith("/9j/")
+            or str(a).startswith("R0lGOD")
+            or str(a).startswith("UklGR")
+            or any(str(a).lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"])
+            for a in attachments
+        )
+        if has_image:
+            # Check if user specifically requested OCR text extraction
+            if re.search(r"\b(ocr|extract text|read text|transcribe|get text|text nikal|extract table)\b", clean_msg, re.IGNORECASE):
+                logger.info("[ROUTER] Route decision: 'ocr' via image attachment + OCR extraction request")
+                return "ocr", "attachment_image_ocr"
+            logger.info("[ROUTER] Route decision: 'vision' via image attachment")
+            return "vision", "attachment_image_vision"
+
+        has_spreadsheet = any(any(str(a).lower().endswith(ext) for ext in [".xlsx", ".xls", ".csv"]) for a in attachments)
+        if has_spreadsheet:
+            logger.info("[ROUTER] Route decision: 'excel' via spreadsheet attachment")
+            return "excel", "attachment_spreadsheet"
+
+        has_doc = any(any(str(a).lower().endswith(ext) for ext in [".docx", ".doc", ".pdf"]) for a in attachments)
+        if has_doc:
+            logger.info("[ROUTER] Route decision: 'docs' via document attachment")
+            return "docs", "attachment_doc"
+
+    # 3. Fast greeting shortcut for common 1-2 word pleasantries (0ms latency)
     if not attachments and clean_msg in ("hi", "hello", "hey", "namaste", "halo", "hola", "good morning", "good afternoon", "good evening"):
         return "chat", "greeting_fast_path"
 
-    # 3. Fast-path for emails, leave requests, and messages (must render as readable chat text, NOT Word .docx)
+    # 4. Fast-path for emails, leave requests, and messages (must render as readable chat text, NOT Word .docx)
     is_email = bool(re.search(r"\b(email|mail|e-mail|leave application|leave request|resignation)\b", clean_msg, re.IGNORECASE))
     explicit_word_doc = bool(re.search(r"\b(word document|docx|\.docx|word file|downloadable doc)\b", clean_msg, re.IGNORECASE))
     if is_email and not explicit_word_doc and not attachments:
         logger.info("[ROUTER] Route decision: 'chat' for email/correspondence communication draft")
         return "chat", "email_draft_chat"
 
-    # 4. Model-Driven Intent Orchestration (Zero Keywords)
+    # 5. Model-Driven Intent Orchestration (Zero Keywords)
     mode, reason, confidence = await classify_intent_model(
         user_message,
         attachments=attachments,

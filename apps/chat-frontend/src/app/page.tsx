@@ -682,6 +682,7 @@ export default function GeminiReplicaChatApp() {
     const attachmentSummary = pendingAttachments.map(a => a.name).join(', ');
     const displayPrompt = prompt || (attachmentSummary ? `Analyze attached: ${attachmentSummary}` : '');
 
+    const currentAttachments = [...pendingAttachments];
     setCurrentInput('');
     setPendingAttachments([]);
     if (textareaRef.current) {
@@ -690,7 +691,8 @@ export default function GeminiReplicaChatApp() {
     addMessage({
       id: `usr-${Date.now()}`,
       role: 'user',
-      content: displayPrompt,
+      content: prompt,
+      attachments: currentAttachments,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
 
@@ -1161,8 +1163,68 @@ export default function GeminiReplicaChatApp() {
 
                             {/* Message Body Bubble / Gemini Card Container */}
                             {isUser ? (
-                              <div className="px-4 py-3 rounded-2xl sm:rounded-3xl bg-slate-100/90 text-slate-900 border border-slate-200/90 shadow-2xs dark:bg-[#1c1d22] dark:text-[#e5e7eb] dark:border-white/[0.08] text-[14.5px] sm:text-[15px] leading-relaxed whitespace-pre-wrap select-text break-words">
-                                {msg.content}
+                              <div className="flex flex-col items-end space-y-2 max-w-full">
+                                {/* Gemini-Style Uploaded Image / Attachment Preview Thumbnails */}
+                                {msg.attachments && msg.attachments.length > 0 && (
+                                  <div className="flex flex-wrap gap-2 justify-end mb-0.5">
+                                    {msg.attachments.map((att, attIdx) => {
+                                      const isImg =
+                                        att.type?.startsWith('image/') ||
+                                        att.base64?.startsWith('data:image/') ||
+                                        /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(att.name || '');
+                                      const imgSrc = att.base64?.startsWith('data:')
+                                        ? att.base64
+                                        : `data:${att.type || 'image/png'};base64,${att.base64}`;
+
+                                      return isImg ? (
+                                        <div
+                                          key={attIdx}
+                                          className="relative group rounded-2xl overflow-hidden border border-slate-200/90 dark:border-white/10 shadow-xs bg-slate-100 dark:bg-[#1c1d22] cursor-pointer transition-all duration-200 hover:shadow-md hover:scale-[1.02]"
+                                          title={`Click to view full image (${att.name || 'image'})`}
+                                          onClick={() => {
+                                            const viewer = window.open('', '_blank');
+                                            if (viewer) {
+                                              viewer.document.write(`
+                                                <html>
+                                                  <head><title>${att.name || 'Image Preview'}</title></head>
+                                                  <body style="margin:0;background:#0d0e12;display:flex;align-items:center;justify-content:center;min-height:100vh;">
+                                                    <img src="${imgSrc}" style="max-width:95vw;max-height:95vh;object-fit:contain;border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,0.6);" />
+                                                  </body>
+                                                </html>
+                                              `);
+                                            }
+                                          }}
+                                        >
+                                          <img
+                                            src={imgSrc}
+                                            alt={att.name || `Attachment ${attIdx + 1}`}
+                                            className="object-cover w-auto h-28 max-w-[200px] rounded-2xl"
+                                          />
+                                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center pointer-events-none">
+                                            <span className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/70 text-white text-[10px] font-medium px-2 py-0.5 rounded-full backdrop-blur-xs flex items-center gap-1">
+                                              <Eye className="w-2.5 h-2.5" /> View
+                                            </span>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <div
+                                          key={attIdx}
+                                          className="flex items-center space-x-2 px-3 py-2 rounded-xl bg-slate-100 dark:bg-[#1c1d22] border border-slate-200/90 dark:border-white/10 text-xs text-slate-700 dark:text-slate-300"
+                                        >
+                                          <Paperclip className="w-3.5 h-3.5 text-slate-400" />
+                                          <span className="truncate max-w-[160px] font-medium">{att.name}</span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+
+                                {/* Message Text Bubble */}
+                                {msg.content && msg.content.trim().length > 0 && (
+                                  <div className="px-4 py-3 rounded-2xl sm:rounded-3xl bg-slate-100/90 text-slate-900 border border-slate-200/90 shadow-2xs dark:bg-[#1c1d22] dark:text-[#e5e7eb] dark:border-white/[0.08] text-[14.5px] sm:text-[15px] leading-relaxed whitespace-pre-wrap select-text break-words">
+                                    {msg.content}
+                                  </div>
+                                )}
                               </div>
                             ) : (
                               <div className="w-full rounded-2xl sm:rounded-3xl bg-white border border-slate-200/90 shadow-[0_2px_16px_rgba(0,0,0,0.03),0_8px_32px_rgba(0,0,0,0.03)] dark:bg-[#101116] dark:border-white/[0.08] dark:shadow-[0_4px_32px_rgba(0,0,0,0.6)] p-5 sm:p-6 transition-all relative overflow-hidden space-y-3">
