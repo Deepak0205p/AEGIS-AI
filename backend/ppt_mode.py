@@ -54,31 +54,31 @@ PRESENTATION SCHEMA:
     },
     {
       "type": "heading",
-      "text": "System Performance & Metrics",
-      "notes": "Walk through quantitative metrics and unit comparisons."
+      "text": "<Quantitative Metrics / Analysis Slide Title>",
+      "notes": "<Talking points for walking through these metrics>"
     },
     {
       "type": "table",
-      "title": "Unit Reliability & Performance Metrics",
+      "title": "<Dataset Title relevant to topic>",
       "rows": [
-        ["Asset Tag", "Operational Status", "Efficiency (%)", "MTBF (Hours)"],
-        ["CDU-101", "Online", 96.4, 4200],
-        ["VDU-201", "Online", 94.1, 3850],
-        ["FCCU-301", "Maintenance", 88.7, 2900]
+        ["<Metric / Category>", "<Status>", "<Value / Target>", "<Score / Trend>"],
+        ["<Item 1>", "Optimal", 96.5, "On Track"],
+        ["<Item 2>", "Normal", 92.0, "Stable"],
+        ["<Item 3>", "Attention", 78.4, "Review"]
       ],
-      "notes": "Discuss how CDU-101 leads operational efficiency while FCCU-301 undergoes scheduled overhaul."
+      "notes": "<Speaker notes highlighting primary takeaways>"
     },
     {
       "type": "heading",
-      "text": "Risk Mitigation & Action Plan",
-      "notes": "Detail immediate milestones and accountability matrix."
+      "text": "<Next Steps & Action Plan>",
+      "notes": "<Speaker notes on timeline and accountability>"
     },
     {
       "type": "bullets",
       "items": [
-        "Phase 1: Vibration and thermographic inspection across all primary pumps",
-        "Phase 2: Automated PLC trip parameter recalibration and verification",
-        "Phase 3: Shift supervisor standard operating procedure refresher training"
+        "<Immediate milestone or action item 1 tailored to topic>",
+        "<Strategic initiative or process improvement 2 tailored to topic>",
+        "<Review cadence or compliance checkpoint 3 tailored to topic>"
       ]
     }
   ]

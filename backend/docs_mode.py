@@ -26,46 +26,45 @@ DOCUMENT SCHEMA:
   "blocks": [
     {
       "type": "heading",
-      "text": "Executive Summary",
+      "text": "<Relevant Section Heading 1>",
       "level": 1
     },
     {
       "type": "paragraph",
-      "text": "Detailed, thorough paragraph explaining the objective, scope, background, and operational context with actual data."
+      "text": "<Comprehensive, detailed paragraph explaining the objective, background, or analysis relevant to the topic.>"
     },
     {
       "type": "bullets",
       "items": [
-        "Key operational parameter or requirement 1 with exact values",
-        "Key operational parameter or requirement 2 with exact values",
-        "Key operational parameter or requirement 3 with exact values"
+        "<Key point or specification 1 tailored specifically to the requested topic>",
+        "<Key point or specification 2 tailored specifically to the requested topic>",
+        "<Key point or specification 3 tailored specifically to the requested topic>"
       ]
     },
     {
       "type": "heading",
-      "text": "Technical Specifications & Parameters",
+      "text": "<Relevant Section Heading 2>",
       "level": 1
     },
     {
       "type": "table",
       "rows": [
-        ["Parameter / Component", "Design Spec", "Operating Range", "Status"],
-        ["Operating Pressure", "15.2 bar", "14.0 - 16.5 bar", "Normal"],
-        ["Process Temperature", "240 °C", "220 - 260 °C", "Normal"],
-        ["Flow Rate", "450 m3/h", "400 - 500 m3/h", "Optimal"]
+        ["<Header 1>", "<Header 2>", "<Header 3>", "<Header 4>"],
+        ["<Data Row 1 Col 1>", "<Data Row 1 Col 2>", "<Data Row 1 Col 3>", "<Data Row 1 Col 4>"],
+        ["<Data Row 2 Col 1>", "<Data Row 2 Col 2>", "<Data Row 2 Col 3>", "<Data Row 2 Col 4>"],
+        ["<Data Row 3 Col 1>", "<Data Row 3 Col 2>", "<Data Row 3 Col 3>", "<Data Row 3 Col 4>"]
       ]
     },
     {
       "type": "heading",
-      "text": "Standard Operating & Safety Procedures",
+      "text": "<Relevant Section Heading 3>",
       "level": 1
     },
     {
       "type": "bullets",
       "items": [
-        "Pre-start inspection of all isolation valves and pressure relief devices",
-        "Continuous monitoring of differential pressure and seal flush systems",
-        "Emergency shutdown protocol execution upon high vibration alarm"
+        "<Procedure or recommendation step 1 tailored to the topic>",
+        "<Procedure or recommendation step 2 tailored to the topic>"
       ]
     }
   ]

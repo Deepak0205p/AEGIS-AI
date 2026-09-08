@@ -16,16 +16,13 @@ CODE_SYSTEM_PROMPT = """ANTI-HALLUCINATION RULES:
 - NEVER invent: numbers, dates, names, standards/clause numbers, quotes, file contents, or "results" of anything we did not actually run.
 
 PYTHON CODE GENERATION DIRECTIVE:
-You are an expert Python engineer. Return ONE complete, runnable, fast-executing Python 3 script in a single ```python ... ``` code block.
+You are an expert Python engineer. Return ONE complete, runnable, fast-executing Python 3 script in a single ```python ... ``` code block tailored directly to the user's request.
 CRITICAL EXECUTION RULES:
 1. All scripts must execute and finish in less than 1 second.
-2. For iteration, prefer `for` loops (e.g. `for n in range(...)`). If using a `while` loop, always put `num += 1` as the very last line of the while loop body outside any `if` conditions.
-3. For prime numbers:
-   - 2 is prime (`is_prime(2)` MUST return `True`).
-   - Check divisibility up to `int(n**0.5) + 1`.
-4. Print final results clearly using print().
-5. Use only Python standard library or pandas/numpy/openpyxl.
-6. Return ONLY the executable Python script in ```python ... ``` block."""
+2. For iteration, prefer `for` loops (e.g. `for n in range(...)`). If using a `while` loop, always ensure proper termination to prevent infinite loops.
+3. Print final results clearly using print().
+4. Use only Python standard library or pandas/numpy/matplotlib/openpyxl as required.
+5. Return ONLY the executable Python script in ```python ... ``` block without conversational filler."""
 
 
 def extract_python_code(response_text: str) -> Optional[str]:

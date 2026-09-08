@@ -32,61 +32,57 @@ For SINGLE-SHEET spreadsheets:
     {
       "type": "table",
       "rows": [
-        ["Equipment ID", "Unit Location", "Flow Rate (m3/h)", "Pressure (bar)", "Vibration (mm/s)", "Status"],
-        ["P-101A", "Crude Unit", 450, 14.5, 2.1, "Normal"],
-        ["P-101B", "Crude Unit", 430, 14.2, 2.4, "Normal"],
-        ["P-102A", "Vacuum Unit", 380, 18.0, 5.8, "Warning"],
-        ["P-102B", "Vacuum Unit", 390, 17.8, 2.2, "Normal"],
-        ["P-103", "Hydrocracker", 520, 24.5, 3.1, "Normal"]
+        ["<Column 1 Header>", "<Column 2 Header>", "<Column 3 Header (Metric)>", "<Status / Category>"],
+        ["<Item 1>", "<Category A>", 145.5, "Active"],
+        ["<Item 2>", "<Category A>", 210.0, "Active"],
+        ["<Item 3>", "<Category B>", 320.8, "Review"],
+        ["<Item 4>", "<Category B>", 180.2, "Active"]
       ],
       "highlight_rules": [
-        {"column": 5, "condition": "greater_than", "value": 4.5, "color": "FF4444"}
+        {"column": 3, "condition": "greater_than", "value": 300, "color": "FF4444"}
       ]
     },
     {
       "type": "chart",
-      "title": "Equipment Vibration Analysis",
+      "title": "<Chart Title relevant to the dataset>",
       "rows": [
-        ["Pump", "Vibration"],
-        ["P-101A", 2.1],
-        ["P-101B", 2.4],
-        ["P-102A", 5.8],
-        ["P-102B", 2.2],
-        ["P-103", 3.1]
+        ["<Category Header>", "<Metric Header>"],
+        ["<Item 1>", 145.5],
+        ["<Item 2>", 210.0],
+        ["<Item 3>", 320.8],
+        ["<Item 4>", 180.2]
       ]
     }
   ]
 }
 
-For MULTI-SHEET spreadsheets (e.g., multi-unit tracking, budget, or logs):
+For MULTI-SHEET spreadsheets:
 {
   "title": "<Workbook Title>",
   "filename": "<safe_descriptive_filename.xlsx>",
   "sheets": [
     {
-      "name": "Equipment Status",
+      "name": "<Sheet 1 Name>",
       "blocks": [
         {
           "type": "table",
           "rows": [
-            ["Asset Tag", "Type", "Capacity", "Operating Pressure", "Health Index"],
-            ["TK-101", "Storage Tank", 50000, 1.2, 98],
-            ["HEX-201", "Heat Exchanger", 1200, 15.0, 92],
-            ["P-301", "Feed Pump", 450, 22.0, 85]
+            ["<Col 1 Header>", "<Col 2 Header>", "<Col 3 Header>", "<Col 4 Header>"],
+            ["<Data 1A>", "<Data 1B>", 1500, "Approved"],
+            ["<Data 2A>", "<Data 2B>", 3200, "Pending"]
           ]
         }
       ]
     },
     {
-      "name": "Maintenance Log",
+      "name": "<Sheet 2 Name>",
       "blocks": [
         {
           "type": "table",
           "rows": [
-            ["Task ID", "Asset", "Maintenance Type", "Cost ($)", "Technician"],
-            ["M-8801", "TK-101", "Ultrasonic Thickness Test", 1500, "NDT Team A"],
-            ["M-8802", "HEX-201", "Tube Cleaning", 3200, "Mech Team B"],
-            ["M-8803", "P-301", "Mechanical Seal Replacement", 4800, "Reliability Lead"]
+            ["<Col 1 Header>", "<Col 2 Header>", "<Col 3 Header>", "<Col 4 Header>"],
+            ["<Data 3A>", "<Data 3B>", 450, "Complete"],
+            ["<Data 4A>", "<Data 4B>", 620, "In Progress"]
           ]
         }
       ]
