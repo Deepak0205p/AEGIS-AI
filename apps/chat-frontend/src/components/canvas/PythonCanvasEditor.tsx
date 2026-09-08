@@ -87,36 +87,48 @@ if __name__ == "__main__":
 `;
 
   const [code, setCode] = useState(initialCode);
+  const codeRef = React.useRef(initialCode);
 
   useEffect(() => {
-    if (editedContent[deliverable.id]?.code) {
-      setCode(editedContent[deliverable.id].code);
+    const storeCode = editedContent[deliverable.id]?.code;
+    if (storeCode !== undefined) {
+      setCode(storeCode);
+      codeRef.current = storeCode;
+    } else if ((deliverable as any).code) {
+      setCode((deliverable as any).code);
+      codeRef.current = (deliverable as any).code;
     }
-  }, [deliverable.id, editedContent]);
+  }, [deliverable.id]);
 
   const handleCodeChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setCode(val);
+    codeRef.current = val;
     updateEditedContent(deliverable.id, { code: val });
   };
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(code);
+    navigator.clipboard.writeText(codeRef.current);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleRunCode = async () => {
+  const handleRunCode = async (customStdin?: string) => {
     setIsRunning(true);
-    setOutputConsole('Executing script in air-gapped Python sandbox...');
+    const codeToRun = codeRef.current || code;
+    setOutputConsole('Executing code in air-gapped Python sandbox...');
     setRunSuccess(null);
     setGeneratedFiles([]);
 
     try {
+      const inputToSend = customStdin !== undefined ? customStdin : stdinInput;
       const res = await fetch(`${getApiBase()}/api/sandbox/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, stdin_input: stdinInput || undefined }),
+        body: JSON.stringify({
+          code: codeToRun,
+          stdin_input: inputToSend.trim() ? inputToSend : undefined
+        }),
       });
 
       if (!res.ok) {
