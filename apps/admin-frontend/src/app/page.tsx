@@ -18,7 +18,8 @@ import {
   FileText, 
   MessageSquare, 
   Users,
-  ArrowRight
+  ArrowRight,
+  Download
 } from 'lucide-react';
 
 const subsystemTiles = [
