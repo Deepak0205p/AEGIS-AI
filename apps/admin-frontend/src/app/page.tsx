@@ -29,16 +29,16 @@ const subsystemTiles = [
     description: 'Interactive route tester (<2ms Regex vs <25ms BGE-small semantic fallback).'
   },
   {
-    title: 'RAG Knowledge & Converter',
+    title: 'RAG Knowledge Base',
     href: '/rag',
     icon: Database,
-    description: 'Upload SOP/MOP to build ChromaDB embeddings + universal document format converter.'
+    description: 'Direct SOP/MOP document vectorization & ChromaDB semantic search inspector.'
   },
   {
-    title: 'OCR Hub',
-    href: '/ocr',
-    icon: UploadCloud,
-    description: 'Offline PaddleOCR & Tesseract pipeline with ISA 5.1 P&ID tag extraction.'
+    title: 'Document Converter',
+    href: '/converter',
+    icon: Download,
+    description: 'Lossless air-gapped conversion between PDF, Word (.docx), Excel (.xlsx), and PowerPoint (.pptx).'
   },
   {
     title: 'Sovereignty Watchdog',
@@ -83,7 +83,7 @@ export default function WorkbenchHomePage() {
           const mapping: Record<string, string> = {
             router: '/router',
             rag: '/rag',
-            upload: '/ocr',
+            converter: '/converter',
             sovereignty: '/sovereignty',
             deliverables: '/deliverables',
             chat: '/chat'

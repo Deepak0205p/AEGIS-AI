@@ -12,10 +12,6 @@ import {
   Bookmark,
   Layers,
   HardDrive,
-  FileCode,
-  Download,
-  FileSpreadsheet,
-  Presentation,
   ShieldCheck,
   AlertCircle,
   Lock,
@@ -59,17 +55,11 @@ export function RagObservatory() {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Single Ingest State (Legacy Tab)
+  // Single Ingest State
   const [selectedCategory, setSelectedCategory] = useState('sop_mops');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isIngestingSingle, setIsIngestingSingle] = useState(false);
   const [ingestStatus, setIngestStatus] = useState<any>(null);
-
-  // Document Conversion State
-  const [convertFile, setConvertFile] = useState<File | null>(null);
-  const [targetFormat, setTargetFormat] = useState('docx');
-  const [isConverting, setIsConverting] = useState(false);
-  const [convertStatus, setConvertStatus] = useState<string | null>(null);
 
   // Search State
   const [searchQuery, setSearchQuery] = useState('');
@@ -77,31 +67,9 @@ export function RagObservatory() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
 
-  // Sub-Tab Selection State
-  const [activeTab, setActiveTab] = useState<'ingest' | 'converter'>('ingest');
-
   useEffect(() => {
     fetchVectorStats();
   }, [fetchVectorStats]);
-
-  useEffect(() => {
-    const syncFromHash = () => {
-      const hash = window.location.hash.toLowerCase().replace('#', '');
-      if (hash === 'converter' || hash === 'format-converter') {
-        setActiveTab('converter');
-      } else if (hash === 'ingest' || hash === 'rag-ingest') {
-        setActiveTab('ingest');
-      }
-    };
-    syncFromHash();
-    window.addEventListener('hashchange', syncFromHash);
-    return () => window.removeEventListener('hashchange', syncFromHash);
-  }, []);
-
-  const changeTab = (tab: 'ingest' | 'converter') => {
-    setActiveTab(tab);
-    window.location.hash = tab === 'converter' ? 'converter' : 'ingest';
-  };
 
   const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -154,35 +122,6 @@ export function RagObservatory() {
     }
   };
 
-  const handleConvertDocument = async () => {
-    if (!convertFile) return;
-    setIsConverting(true);
-    setConvertStatus(null);
-    await new Promise((r) => setTimeout(r, 1200));
-
-    try {
-      const blob = new Blob([`MRPL Sovereign Converted Document: ${convertFile.name}`], {
-        type: 'application/octet-stream',
-      });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const baseName =
-        convertFile.name.substring(0, convertFile.name.lastIndexOf('.')) || convertFile.name;
-      a.download = `${baseName}_converted.${targetFormat}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-
-      setConvertStatus('Conversion complete! File download initiated.');
-    } catch (err: any) {
-      setConvertStatus(`Error converting: ${err.message}`);
-    } finally {
-      setIsConverting(false);
-    }
-  };
-
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
@@ -218,10 +157,11 @@ export function RagObservatory() {
             </div>
             <div>
               <h1 className="text-sm font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                <span>Knowledge Base Retrieval &amp; Vector Monitor</span>
-                
+                <span>RAG Knowledge Base &amp; Vector Store</span>
               </h1>
-              
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Grounded industrial operational manuals, SOPs, and OISD/API technical references.
+              </p>
             </div>
           </div>
 
@@ -233,7 +173,7 @@ export function RagObservatory() {
                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-md shadow-blue-950/40 transition-all cursor-pointer"
               >
                 <PlusCircle className="w-4 h-4" />
-                <span>Create RAG</span>
+                <span>Vectorize Documents</span>
               </button>
             ) : (
               <div
@@ -254,7 +194,6 @@ export function RagObservatory() {
             <div className="text-lg font-bold font-mono text-cyan-600 dark:text-cyan-400">
               {vectorStats.totalChunks.toLocaleString()}
             </div>
-            
           </div>
 
           <div className="p-3 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/70 space-y-1">
@@ -262,7 +201,6 @@ export function RagObservatory() {
             <div className="text-lg font-bold font-mono text-emerald-600 dark:text-emerald-400">
               {vectorStats.documentCount} Documents
             </div>
-            
           </div>
 
           <div className="p-3 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/70 space-y-1">
@@ -270,7 +208,6 @@ export function RagObservatory() {
             <div className="text-xs font-bold font-mono text-gray-900 dark:text-gray-200 truncate">
               BGE-M3 (1024-dim)
             </div>
-            
           </div>
 
           <div className="p-3 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/70 space-y-1">
@@ -278,289 +215,180 @@ export function RagObservatory() {
             <div className="text-xs font-mono text-gray-900 dark:text-gray-200">
               {vectorStats.lastIndexed}
             </div>
-            
           </div>
         </div>
       </div>
 
-      {/* 2. SUB-TAB NAVIGATION STRIP */}
-      <div className="flex items-center gap-2 border-b border-gray-200 dark:border-gray-800 pb-2 font-mono">
-        <button
-          type="button"
-          onClick={() => changeTab('ingest')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-md text-xs font-medium transition-all ${
-            activeTab === 'ingest'
-              ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/60 shadow-sm font-semibold'
-              : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
-          }`}
-        >
-          <UploadCloud className="w-3.5 h-3.5" />
-          <span>RAG &amp; Vector creation</span>
-          
-        </button>
-
-        <button
-          type="button"
-          onClick={() => changeTab('converter')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-md text-xs font-medium transition-all ${
-            activeTab === 'converter'
-              ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 shadow-sm font-semibold'
-              : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
-          }`}
-        >
-          <Download className="w-3.5 h-3.5" />
-          <span>Document Converter</span>
-          
-        </button>
-      </div>
-
-      {/* 3. SECTION 1: INGESTION & SEMANTIC SEARCH */}
-      {activeTab === 'ingest' && (
-        <div className="space-y-4">
-          {/* Ingest Single SOP Card */}
-          <div className="bg-white dark:bg-[#11141c] border border-gray-200 dark:border-[#262c3a] rounded-xl p-5 shadow-sm space-y-4">
-            <div className="flex items-center justify-between border-b border-gray-100 dark:border-gray-800 pb-3">
-              <h3 className="text-xs font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                <UploadCloud className="w-3.5 h-3.5 text-blue-600" />
-                <span>Vectorization </span>
-              </h3>
-              
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label className="text-xs text-gray-500 dark:text-gray-400 font-mono">Domain</label>
-                <CustomDropdown
-                  value={selectedCategory}
-                  onChange={(val) => setSelectedCategory(val)}
-                  size="sm"
-                  options={[
-                    { value: 'sop_mops', label: 'Refinery SOPs & MOPs (Operations)' },
-                    { value: 'security_policies', label: 'Security Policies & Statutory Compliance' },
-                    { value: 'mrpl_engineering', label: 'MRPL Technical Engineering Standards' },
-                    { value: 'ongc_compliance', label: 'ONGC Corporate Compliance Standards' },
-                  ]}
-                  buttonClassName="w-full rounded-lg bg-gray-50 dark:bg-[#0c0e14] border-gray-200 dark:border-gray-800 text-xs font-mono"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs text-gray-500 dark:text-gray-400 font-mono">Select Document</label>
-                <input
-                  type="file"
-                  accept=".pdf,.docx,.txt,.md"
-                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                  className="w-full text-xs text-gray-500 font-mono file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-gray-100 dark:file:bg-gray-800 file:text-gray-900 dark:file:text-gray-200 hover:file:bg-gray-200 cursor-pointer"
-                />
-              </div>
-            </div>
-
-            <button
-              onClick={handleSingleIngest}
-              disabled={!uploadFile || isIngestingSingle}
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer font-mono"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isIngestingSingle ? 'animate-spin' : ''}`} />
-              <span>{isIngestingSingle ? 'Vectorizing Clauses...' : 'Vectorize'}</span>
-            </button>
-
-            {ingestStatus && (
-              <div
-                className={`p-3 rounded-lg border text-xs font-mono space-y-1 ${
-                  ingestStatus.status === 'success'
-                    ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60'
-                    : 'bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/60'
-                }`}
-              >
-                <div className="font-semibold flex items-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>{ingestStatus.message}</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Semantic Search Tester */}
-          <div className="bg-white dark:bg-[#11141c] border border-gray-200 dark:border-[#262c3a] rounded-xl p-5 shadow-sm space-y-4">
+      {/* 2. SECTION: INGESTION & SEMANTIC SEARCH */}
+      <div className="space-y-4">
+        {/* Ingest Single SOP Card */}
+        <div className="bg-white dark:bg-[#11141c] border border-gray-200 dark:border-[#262c3a] rounded-xl p-5 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-gray-100 dark:border-gray-800 pb-3">
             <h3 className="text-xs font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-              <Search className="w-3.5 h-3.5 text-blue-500" />
-              <span>RAG Knowledge Base</span>
+              <UploadCloud className="w-3.5 h-3.5 text-blue-600" />
+              <span>Direct Document Ingestion &amp; Vectorization</span>
             </h3>
+          </div>
 
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                className="flex-1 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-200 dark:border-gray-800 p-2.5 text-xs text-gray-900 dark:text-gray-100 font-mono focus:outline-none focus:border-cyan-500"
-                placeholder="Type query (e.g. furnace shutdown, pump vibration, hot work permit) to search vector store..."
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-mono">Domain Taxonomy</label>
+              <CustomDropdown
+                value={selectedCategory}
+                onChange={(val) => setSelectedCategory(val)}
+                size="sm"
+                options={[
+                  { value: 'sop_mops', label: 'Refinery SOPs & MOPs (Operations)' },
+                  { value: 'security_policies', label: 'Security Policies & Statutory Compliance' },
+                  { value: 'mrpl_engineering', label: 'MRPL Technical Engineering Standards' },
+                  { value: 'ongc_compliance', label: 'ONGC Corporate Compliance Standards' },
+                ]}
+                buttonClassName="w-full rounded-lg bg-gray-50 dark:bg-[#0c0e14] border-gray-200 dark:border-gray-800 text-xs font-mono"
               />
-              <button
-                onClick={handleSearch}
-                disabled={isSearching || !searchQuery.trim()}
-                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer font-mono"
-              >
-                <Search className="w-3.5 h-3.5" />
-                <span>{isSearching ? 'Querying...' : 'Search'}</span>
-              </button>
             </div>
 
-            {hasSearched && (
-              <div className="space-y-2 pt-1">
-                {searchResults.length === 0 ? (
-                  <div className="p-4 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-200 dark:border-gray-800 text-center text-xs text-gray-400 font-mono">
-                    No matching document clauses found in ChromaDB for "{searchQuery}".
-                  </div>
-                ) : (
-                  searchResults.map((res, i) => (
-                    <div
-                      key={res.id || i}
-                      className="p-3.5 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-200 dark:border-gray-800 space-y-1.5 font-mono"
-                    >
-                      <div className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-2">
-                          <Bookmark className="w-3.5 h-3.5 text-blue-500" />
-                          <span className="font-semibold text-gray-900 dark:text-gray-100">{res.document}</span>
-                          <span className="text-gray-500 text-[11px]">{res.clause}</span>
-                        </div>
-                        <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-800/50">
-                          Score: {(res.similarityScore * 100).toFixed(1)}%
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed pl-5">
-                        "{res.content}"
-                      </p>
-                    </div>
-                  ))
-                )}
+            <div className="space-y-1">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-mono">Select Document (.pdf, .docx, .txt, .md)</label>
+              <input
+                type="file"
+                accept=".pdf,.docx,.txt,.md"
+                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                className="w-full text-xs text-gray-500 font-mono file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-gray-100 dark:file:bg-gray-800 file:text-gray-900 dark:file:text-gray-200 hover:file:bg-gray-200 cursor-pointer"
+              />
+            </div>
+          </div>
+
+          <button
+            onClick={handleSingleIngest}
+            disabled={!uploadFile || isIngestingSingle}
+            className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer font-mono"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isIngestingSingle ? 'animate-spin' : ''}`} />
+            <span>{isIngestingSingle ? 'Vectorizing Clauses...' : 'Vectorize into ChromaDB'}</span>
+          </button>
+
+          {ingestStatus && (
+            <div
+              className={`p-3 rounded-lg border text-xs font-mono space-y-1 ${
+                ingestStatus.status === 'success'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60'
+                  : 'bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/60'
+              }`}
+            >
+              <div className="font-semibold flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                <span>{ingestStatus.message}</span>
               </div>
-            )}
-          </div>
-
-          {/* Ingested Master Documents Inventory */}
-          <div className="bg-white dark:bg-[#11141c] border border-gray-200 dark:border-[#262c3a] rounded-xl p-5 shadow-sm space-y-3">
-            <div className="flex items-center justify-between border-b border-gray-100 dark:border-gray-800 pb-2.5">
-              <h3 className="text-xs font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                <FileText className="w-3.5 h-3.5 text-cyan-500" />
-                <span>Ingested Documents &amp; Manuals</span>
-              </h3>
-              <span className="text-[10px] font-mono text-gray-500">
-                {documentsList.length} SOPs Active
-              </span>
             </div>
-
-            <div className="border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden font-mono">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-gray-50 dark:bg-[#090b10] border-b border-gray-200 dark:border-gray-800 text-gray-500 text-[10px]">
-                  <tr>
-                    <th className="py-2 px-3">SOP Manual Name</th>
-                    <th className="py-2 px-3">Category</th>
-                    <th className="py-2 px-3">Indexed Chunks</th>
-                    <th className="py-2 px-3 text-right">Size</th>
-                    <th className="py-2 px-3 text-right">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 text-[11px]">
-                  {documentsList.map((doc) => (
-                    <tr key={doc.id} className="hover:bg-gray-50 dark:hover:bg-[#151924]">
-                      <td className="py-2 px-3 font-medium text-gray-900 dark:text-gray-100">
-                        {doc.name}
-                      </td>
-                      <td className="py-2 px-3 text-gray-500">{doc.category}</td>
-                      <td className="py-2 px-3 text-cyan-600 dark:text-cyan-400 font-semibold">
-                        {doc.chunks} chunks
-                      </td>
-                      <td className="py-2 px-3 text-right text-gray-400">{doc.sizeKb} KB</td>
-                      <td className="py-2 px-3 text-right">
-                        
-                          
-                          <span>GROUNDED</span>
-                        
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          )}
         </div>
-      )}
 
-      {/* 4. SECTION 2: UNIVERSAL DOCUMENT FORMAT CONVERTER */}
-      {activeTab === 'converter' && (
-        <div className="space-y-4">
-          <div className="bg-white dark:bg-[#11141c] border border-gray-200 dark:border-[#262c3a] rounded-xl p-5 shadow-sm space-y-4 font-mono">
-            <div className="flex items-center justify-between border-b border-gray-100 dark:border-gray-800 pb-3">
-              <h3 className="text-xs font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                <Download className="w-3.5 h-3.5 text-emerald-500" />
-                <span>Document Converter</span>
-              </h3>
-              
-            </div>
+        {/* Semantic Search Tester */}
+        <div className="bg-white dark:bg-[#11141c] border border-gray-200 dark:border-[#262c3a] rounded-xl p-5 shadow-sm space-y-4">
+          <h3 className="text-xs font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+            <Search className="w-3.5 h-3.5 text-blue-500" />
+            <span>ChromaDB Semantic Vector Search Inspector</span>
+          </h3>
 
-            <div className="space-y-4 max-w-2xl">
-              <div className="space-y-1.5">
-                <label className="text-xs text-gray-400">Input Document</label>
-                <input
-                  type="file"
-                  accept=".pdf,.docx,.txt,.csv,.xlsx,.pptx"
-                  onChange={(e) => setConvertFile(e.target.files?.[0] || null)}
-                  className="w-full text-xs text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:bg-gray-100 dark:file:bg-gray-800 file:text-gray-200 cursor-pointer"
-                />
-              </div>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+              className="flex-1 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-200 dark:border-gray-800 p-2.5 text-xs text-gray-900 dark:text-gray-100 font-mono focus:outline-none focus:border-cyan-500"
+              placeholder="Type query (e.g. furnace shutdown, pump vibration, hot work permit) to search vector store..."
+            />
+            <button
+              onClick={handleSearch}
+              disabled={isSearching || !searchQuery.trim()}
+              className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer font-mono"
+            >
+              <Search className="w-3.5 h-3.5" />
+              <span>{isSearching ? 'Querying...' : 'Search'}</span>
+            </button>
+          </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs text-gray-400">Target Export Format</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {[
-                    { id: 'docx', label: 'Word (.docx)', icon: FileText },
-                    { id: 'xlsx', label: 'Excel (.xlsx)', icon: FileSpreadsheet },
-                    { id: 'pptx', label: 'PowerPoint (.pptx)', icon: Presentation },
-                    { id: 'txt', label: 'Text (.txt)', icon: FileCode },
-                  ].map((fmt) => {
-                    const Icon = fmt.icon;
-                    const isSel = targetFormat === fmt.id;
-                    return (
-                      <button
-                        key={fmt.id}
-                        type="button"
-                        onClick={() => setTargetFormat(fmt.id)}
-                        className={`p-3 rounded-lg border text-center flex flex-col items-center gap-1.5 transition-all ${
-                          isSel
-                            ? 'bg-emerald-950/30 border-emerald-500 text-emerald-300 font-semibold'
-                            : 'bg-white dark:bg-[#0c0e14] border-gray-200 dark:border-gray-800 text-gray-400 hover:border-gray-700'
-                        }`}
-                      >
-                        <Icon className={`w-4 h-4 ${isSel ? 'text-emerald-400' : 'text-gray-500'}`} />
-                        <span className="text-xs">{fmt.id.toUpperCase()}</span>
-                      </button>
-                    );
-                  })}
+          {hasSearched && (
+            <div className="space-y-2 pt-1">
+              {searchResults.length === 0 ? (
+                <div className="p-4 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-200 dark:border-gray-800 text-center text-xs text-gray-400 font-mono">
+                  No matching document clauses found in ChromaDB for "{searchQuery}".
                 </div>
-              </div>
-
-              <button
-                onClick={handleConvertDocument}
-                disabled={!convertFile || isConverting}
-                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-50 text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>{isConverting ? 'Converting Document...' : 'Download'}</span>
-              </button>
-
-              {convertStatus && (
-                <div className="p-3 rounded-lg bg-emerald-950/30 border border-emerald-800/60 text-xs text-emerald-300 flex items-center gap-2">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>{convertStatus}</span>
-                </div>
+              ) : (
+                searchResults.map((res, i) => (
+                  <div
+                    key={res.id || i}
+                    className="p-3.5 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-200 dark:border-gray-800 space-y-1.5 font-mono"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <Bookmark className="w-3.5 h-3.5 text-blue-500" />
+                        <span className="font-semibold text-gray-900 dark:text-gray-100">{res.document}</span>
+                        <span className="text-gray-500 text-[11px]">{res.clause}</span>
+                      </div>
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-800/50">
+                        Score: {(res.similarityScore * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed pl-5">
+                      "{res.content}"
+                    </p>
+                  </div>
+                ))
               )}
             </div>
+          )}
+        </div>
+
+        {/* Ingested Master Documents Inventory */}
+        <div className="bg-white dark:bg-[#11141c] border border-gray-200 dark:border-[#262c3a] rounded-xl p-5 shadow-sm space-y-3">
+          <div className="flex items-center justify-between border-b border-gray-100 dark:border-gray-800 pb-2.5">
+            <h3 className="text-xs font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+              <FileText className="w-3.5 h-3.5 text-cyan-500" />
+              <span>Ingested SOP Manuals &amp; Technical Policies</span>
+            </h3>
+            <span className="text-[10px] font-mono text-gray-500">
+              {documentsList.length} SOPs Active
+            </span>
+          </div>
+
+          <div className="border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden font-mono">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-gray-50 dark:bg-[#090b10] border-b border-gray-200 dark:border-gray-800 text-gray-500 text-[10px]">
+                <tr>
+                  <th className="py-2 px-3">SOP Manual Name</th>
+                  <th className="py-2 px-3">Category</th>
+                  <th className="py-2 px-3">Indexed Chunks</th>
+                  <th className="py-2 px-3 text-right">Size</th>
+                  <th className="py-2 px-3 text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 text-[11px]">
+                {documentsList.map((doc) => (
+                  <tr key={doc.id} className="hover:bg-gray-50 dark:hover:bg-[#151924]">
+                    <td className="py-2 px-3 font-medium text-gray-900 dark:text-gray-100">
+                      {doc.name}
+                    </td>
+                    <td className="py-2 px-3 text-gray-500">{doc.category}</td>
+                    <td className="py-2 px-3 text-cyan-600 dark:text-cyan-400 font-semibold">
+                      {doc.chunks} chunks
+                    </td>
+                    <td className="py-2 px-3 text-right text-gray-400">{doc.sizeKb} KB</td>
+                    <td className="py-2 px-3 text-right">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                        GROUNDED
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
-      )}
+      </div>
 
-      {/* 5. MASTER SOP INGESTION MODAL */}
+      {/* 3. MASTER SOP INGESTION MODAL */}
       <AnimatePresence>
         {showIngestModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
@@ -573,7 +401,7 @@ export function RagObservatory() {
               <div className="flex items-center justify-between border-b border-gray-100 dark:border-gray-800 pb-3">
                 <div className="flex items-center gap-2 text-cyan-600 dark:text-cyan-400 font-semibold text-sm">
                   <Sliders className="w-4 h-4" />
-                  <span>RAG &amp; Vector creation</span>
+                  <span>Batch Document Vectorization</span>
                 </div>
                 {!isReindexing && (
                   <button
@@ -623,8 +451,8 @@ export function RagObservatory() {
                     ) : (
                       <div className="space-y-1 text-gray-400">
                         <UploadCloud className="w-6 h-6 mx-auto text-gray-500" />
-                        <div className="font-semibold text-black">Drag &amp; Drop</div>
-                        
+                        <div className="font-semibold text-gray-900 dark:text-gray-200">Drag &amp; Drop SOP Documents Here</div>
+                        <div className="text-[10px]">PDF, DOCX, TXT (Auto Clause Chunking)</div>
                       </div>
                     )}
                   </div>
@@ -656,8 +484,6 @@ export function RagObservatory() {
                         <option value={200}>200 Tokens</option>
                       </select>
                     </div>
-
-                    
                   </div>
                 </div>
               )}
@@ -694,7 +520,7 @@ export function RagObservatory() {
                     <button
                       type="button"
                       onClick={() => setShowIngestModal(false)}
-                      className="px-3.5 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 font-mono text-xs"
+                      className="px-3.5 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 font-mono text-xs cursor-pointer"
                     >
                       Cancel
                     </button>
@@ -704,7 +530,6 @@ export function RagObservatory() {
                       onClick={handleStartReindex}
                       className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-semibold font-mono text-xs disabled:opacity-50 flex items-center gap-1.5 cursor-pointer shadow-md shadow-cyan-950/40"
                     >
-                      
                       <span>Start Vectorization</span>
                     </button>
                   </>
