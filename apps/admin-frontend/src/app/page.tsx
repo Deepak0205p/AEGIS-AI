@@ -35,12 +35,6 @@ const subsystemTiles = [
     description: 'Interactive route tester (<2ms Regex vs <25ms BGE-small semantic fallback).'
   },
   {
-    title: 'Code Sandbox',
-    href: '/sandbox',
-    icon: Box,
-    description: 'Isolated python:3.11 container runner with --network none and AST security filter.'
-  },
-  {
     title: 'RAG Knowledge & Converter',
     href: '/rag',
     icon: Database,
@@ -95,7 +89,6 @@ export default function WorkbenchHomePage() {
           const mapping: Record<string, string> = {
             models: '/models',
             router: '/router',
-            sandbox: '/sandbox',
             rag: '/rag',
             upload: '/ocr',
             sovereignty: '/sovereignty',
