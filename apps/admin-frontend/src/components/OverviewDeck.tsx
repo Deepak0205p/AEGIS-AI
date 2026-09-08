@@ -103,7 +103,7 @@ export function OverviewDeck({ onNavigate }: OverviewDeckProps) {
         {/* Metric 1: Dedicated GPU VRAM (Only if dedicated GPU is available) */}
         {vram.gpu_available && (
           <div 
-            onClick={() => onNavigate('models')}
+            onClick={() => onNavigate('sovereignty')}
             className="rounded-md bg-gray-50 border border-gray-200 p-4 hover:border-gray-300 transition-all cursor-pointer group"
           >
             <div className="flex items-center justify-between text-xs text-gray-500">
@@ -133,7 +133,7 @@ export function OverviewDeck({ onNavigate }: OverviewDeckProps) {
 
         {/* Metric 2: Host System RAM */}
         <div 
-          onClick={() => onNavigate('models')}
+          onClick={() => onNavigate('sovereignty')}
           className="rounded-md bg-gray-50 border border-gray-200 p-4 hover:border-gray-300 transition-all cursor-pointer group"
         >
           <div className="flex items-center justify-between text-xs text-gray-500">

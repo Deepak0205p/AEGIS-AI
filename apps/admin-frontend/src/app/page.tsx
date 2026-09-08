@@ -23,12 +23,6 @@ import {
 
 const subsystemTiles = [
   {
-    title: 'Models & VRAM Memory',
-    href: '/models',
-    icon: Cpu,
-    description: 'Dynamic dual-slot LRU VRAM memory manager, active GGUF models, and swap logs.'
-  },
-  {
     title: 'Two-Stage Query Router',
     href: '/router',
     icon: GitFork,
@@ -87,7 +81,6 @@ export default function WorkbenchHomePage() {
         {/* Executive Overview Deck */}
         <OverviewDeck onNavigate={(tab) => {
           const mapping: Record<string, string> = {
-            models: '/models',
             router: '/router',
             rag: '/rag',
             upload: '/ocr',
