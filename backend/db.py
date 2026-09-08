@@ -295,6 +295,14 @@ async def build_context_messages(
     if summary_text:
         effective_system_prompt += f"\n\n[Earlier Conversation Context Summary]:\n{summary_text}"
 
+    # Inject authoritative live system date and time
+    try:
+        from backend.custom_agents import get_system_temporal_context_block
+        temporal_block = get_system_temporal_context_block()
+        effective_system_prompt = f"{temporal_block}\n\n{effective_system_prompt}"
+    except Exception as temp_err:
+        logger.warning(f"[CONTEXT] Temporal context injection warning: {temp_err}")
+
     # Check for temporary cross-model handoff context buffer
     try:
         from backend.context_handoff import context_handoff

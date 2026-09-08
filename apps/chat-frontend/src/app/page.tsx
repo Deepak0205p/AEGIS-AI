@@ -55,6 +55,10 @@ import { useSidebarStore } from '@/store/useSidebarStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { PerplexityReasoningAccordion } from '@/components/chat/PerplexityReasoningAccordion';
 import { MarkdownContent } from '@/components/MarkdownContent';
+import { useCustomAgentStore } from '@/store/useCustomAgentStore';
+import { CustomAgentModal } from '@/components/agents/CustomAgentModal';
+import { ActiveAgentBadge } from '@/components/agents/ActiveAgentBadge';
+import { Bot } from 'lucide-react';
 
 // Ultra-Modern Fluent / Glowing Brand 3D-Style Icon Components
 function ExcelIcon({ className = "h-7 w-7" }: { className?: string }) {
@@ -696,7 +700,8 @@ export default function GeminiReplicaChatApp() {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
 
-    socketManager.sendChatTask(displayPrompt, attachmentPayload, activeModelRole);
+    const activeAgentId = useCustomAgentStore.getState().activeAgentId;
+    socketManager.sendChatTask(displayPrompt, attachmentPayload, activeModelRole, activeAgentId || undefined);
     if (typeof window !== 'undefined' && window.location.pathname === '/') {
       const currentActiveId = useChatStore.getState().activeSessionId;
       if (currentActiveId) {
@@ -759,6 +764,7 @@ export default function GeminiReplicaChatApp() {
     filterType,
     setFilterType
   } = useDeliverableStore();
+  const { openModal: openAgentModal } = useCustomAgentStore();
   const { openCanvas, isOpen: isCanvasOpen } = useCanvasStore();
 
   const MODEL_ROLES = [
@@ -775,6 +781,7 @@ export default function GeminiReplicaChatApp() {
   useEffect(() => {
     initAuth();
     useDeliverableStore.getState().fetchDiskDeliverables();
+    useCustomAgentStore.getState().fetchAgents();
   }, [initAuth]);
 
   useEffect(() => {
@@ -1101,7 +1108,16 @@ export default function GeminiReplicaChatApp() {
                 </button>
                 <RevealBrand size="sm" />
               </div>
-              <div className="flex items-center space-x-1">
+              <div className="flex items-center space-x-1.5">
+                <button
+                  onClick={openAgentModal}
+                  aria-label="Custom Agents"
+                  className="flex items-center space-x-1 px-2.5 py-1.5 rounded-full bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:hover:bg-blue-500/20 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30 text-[11px] font-bold transition-all active:scale-95 cursor-pointer"
+                  title="Custom AI Agents Builder"
+                >
+                  <Bot className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+                  <span>Agents</span>
+                </button>
                 <button
                   onClick={cycleTheme}
                   aria-label="Toggle theme"
@@ -1365,6 +1381,9 @@ export default function GeminiReplicaChatApp() {
             accept=".pdf,.png,.jpg,.jpeg"
             className="hidden"
           />
+
+          {/* Active Custom Agent Badge with 1-Click Persona Switcher */}
+          <ActiveAgentBadge />
 
           {/* Model Selection Board Popover Menu - Ultra-Compact, Mobile-Scrollable & Premium */}
           <AnimatePresence>
@@ -1701,6 +1720,9 @@ export default function GeminiReplicaChatApp() {
       isOpen={showSearchModal}
       onClose={() => setShowSearchModal(false)}
     />
+
+    {/* 5. Custom Agent Builder & Agentic Workflow Modal */}
+    <CustomAgentModal />
   </div>
   );
 }

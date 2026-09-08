@@ -105,7 +105,8 @@ class WebSocketClientManager {
     role?: string,
     force_refresh: boolean = false,
     session_id?: string,
-    history?: { role: string; content: string }[]
+    history?: { role: string; content: string }[],
+    agent_id?: string
   ) {
     const wsUrl = `${this.getWsBaseUrl()}/api/chat/stream`;
 
@@ -147,7 +148,8 @@ class WebSocketClientManager {
           role,
           force_refresh,
           session_id: activeSessionId,
-          history: chatHistory
+          history: chatHistory,
+          agent_id: agent_id
         }));
       };
 

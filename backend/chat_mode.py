@@ -41,27 +41,46 @@ async def handle_chat_mode(
     think: bool = False,
     rag_chunks: Optional[List[Dict[str, Any]]] = None,
     rag_status: str = "skipped",
+    agent_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
-    Executes grounded generation with Two-Tier policy and Chemical DB injection:
+    Executes grounded generation with Two-Tier policy, Chemical DB injection, and Custom Agent personas:
     - think: bool (whether to emit thinking frames)
     - rag_chunks: list of retrieved SOP chunks or None
     - rag_status: 'hit' | 'miss' | 'skipped'
+    - agent_id: Optional custom agent id
     """
     # Detect chemical mentions
     detected_chemicals = detect_chemicals(user_message)
     chem_names = [c["name"] for c in detected_chemicals]
 
     logger.info(
-        f"[CHAT_MODE] chat_id={chat_id} think={think} rag_status={rag_status} "
+        f"[CHAT_MODE] chat_id={chat_id} agent_id={agent_id} think={think} rag_status={rag_status} "
         f"chunks_count={len(rag_chunks or [])} chemicals_detected={chem_names}"
     )
 
     # Save user message to database
     save_message(chat_id, "user", user_message, mode="chat")
 
-    # Construct effective system prompt with Chemical DB & RAG grounding
+    # Construct effective system prompt with Custom Agent persona, Chemical DB & RAG grounding
     effective_system = CHAT_SYSTEM_PROMPT
+
+    if agent_id:
+        try:
+            from backend.custom_agents import get_agent_by_id
+            custom_agent = get_agent_by_id(agent_id)
+            if custom_agent:
+                effective_system = (
+                    f"=== ACTIVE CUSTOM AGENT: {custom_agent.name} ({custom_agent.role}) ===\n"
+                    f"{custom_agent.system_prompt}\n"
+                    f"Workflow Mode: {custom_agent.workflow_mode}\n"
+                    f"Enabled Tools: {', '.join(custom_agent.tools)}\n"
+                    "=========================================================\n\n"
+                    f"{CHAT_SYSTEM_PROMPT}"
+                )
+                logger.info(f"[CHAT_MODE] Injected custom agent persona '{custom_agent.name}' into system prompt")
+        except Exception as ag_err:
+            logger.warning(f"[CHAT_MODE] Custom agent injection warning: {ag_err}")
 
     # 1. Chemical DB Context Injection
     if detected_chemicals:

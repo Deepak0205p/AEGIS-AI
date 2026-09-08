@@ -18,13 +18,15 @@ import {
   Trash2,
   X,
   LogOut,
-  UserCheck
+  UserCheck,
+  Bot
 } from 'lucide-react';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useChatStore } from '@/store/useChatStore';
 import { useDeliverableStore } from '@/store/useDeliverableStore';
 import { useThemeStore } from '@/store/useThemeStore';
 import { useSidebarStore } from '@/store/useSidebarStore';
+import { useCustomAgentStore } from '@/store/useCustomAgentStore';
 import { RevealBrand, RevealLogoIcon } from '@/components/RevealLogo';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 
@@ -206,6 +208,16 @@ export function AppSidebar({ onOpenSearchModal, activePage = 'chat' }: AppSideba
           </Link>
         </SidebarTooltip>
 
+        <SidebarTooltip text="Custom AI Agents">
+          <button
+            onClick={() => useCustomAgentStore.getState().openModal()}
+            aria-label="Custom AI Agents"
+            className="h-10 w-10 flex items-center justify-center rounded-full hover:bg-slate-200 text-slate-700 hover:text-blue-600 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-[#a8c7fa] transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer"
+          >
+            <Bot className="h-4 w-4" />
+          </button>
+        </SidebarTooltip>
+
         <SidebarTooltip text="Artifacts">
           <Link href="/artifacts" aria-label="Artifacts" className={`relative h-10 w-10 flex items-center justify-center rounded-full transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer ${isArtifactsActive ? 'bg-blue-50 text-blue-700 dark:bg-[#1e1f20] dark:text-[#a8c7fa]' : 'hover:bg-slate-200 text-slate-700 hover:text-slate-900 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-white'}`}>
             <FileText className="h-4 w-4" />
@@ -304,6 +316,21 @@ export function AppSidebar({ onOpenSearchModal, activePage = 'chat' }: AppSideba
             <FileText className="h-4 w-4 shrink-0" />
             <span>Artifacts</span>
           </Link>
+          <button
+            onClick={() => {
+              useCustomAgentStore.getState().openModal();
+              if (typeof window !== 'undefined' && window.innerWidth < 768) closeSidebar();
+            }}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-colors min-h-[38px] hover:bg-slate-200/80 text-slate-700 hover:text-blue-600 dark:hover:bg-[#1e1f20] dark:text-[#c4c7c5] dark:hover:text-[#a8c7fa] font-medium cursor-pointer"
+          >
+            <div className="flex items-center space-x-3">
+              <Bot className="h-4 w-4 shrink-0 text-blue-600 dark:text-[#a8c7fa]" />
+              <span>Custom AI Agents</span>
+            </div>
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300">
+              Builder
+            </span>
+          </button>
         </div>
 
         {/* Recent Chats — Grouped */}

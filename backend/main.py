@@ -123,6 +123,7 @@ class ChatRequest(BaseModel):
     mode: Optional[str] = Field("auto", description="Execution mode: auto | chat | code | docs | excel | ppt")
     chat_id: Optional[str] = Field(None, description="Unique conversation session ID")
     attachments: Optional[List[str]] = Field(default=None, description="List of uploaded filenames or file paths")
+    agent_id: Optional[str] = Field(default=None, description="Optional custom agent ID for persona execution")
 
 
 # --- API Endpoints ---
@@ -162,7 +163,8 @@ async def generate_chat_events(
     user_msg: str,
     requested_mode: str,
     chat_id: str,
-    attachments: Optional[List[str]] = None
+    attachments: Optional[List[str]] = None,
+    agent_id: Optional[str] = None
 ):
     """
     Core execution pipeline shared across POST /api/chat and WS /api/chat/stream.
@@ -305,6 +307,7 @@ async def generate_chat_events(
                 think=think_decision,
                 rag_chunks=rag_chunks,
                 rag_status=rag_status,
+                agent_id=agent_id
             )
 
         async for event in handler:
@@ -391,9 +394,10 @@ async def chat_endpoint(request_body: ChatRequest):
         
     chat_id = request_body.chat_id or f"chat_{uuid.uuid4().hex[:10]}"
     requested_mode = request_body.mode or "auto"
+    agent_id = request_body.agent_id
 
     async def sse_event_generator():
-        async for event in generate_chat_events(user_msg, requested_mode, chat_id, attachments=attachments):
+        async for event in generate_chat_events(user_msg, requested_mode, chat_id, attachments=attachments, agent_id=agent_id):
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
@@ -411,7 +415,7 @@ async def chat_endpoint(request_body: ChatRequest):
 async def websocket_chat_stream(websocket: WebSocket):
     """
     WebSocket endpoint for real-time token and reasoning stream.
-    Payload: {"message": str, "mode": Optional[str], "chat_id": Optional[str], "attachments": Optional[List[str]]}
+    Payload: {"message": str, "mode": Optional[str], "chat_id": Optional[str], "attachments": Optional[List[str]], "agent_id": Optional[str]}
     """
     await websocket.accept()
     logger.info("[WS] Client connected to /api/chat/stream")
@@ -428,17 +432,18 @@ async def websocket_chat_stream(websocket: WebSocket):
 
             attachments = data.get("attachments") or data.get("files")
             user_msg = (data.get("message") or data.get("prompt") or "").strip()
+            requested_mode = data.get("mode") or "auto"
+            chat_id = data.get("chat_id") or f"chat_{uuid.uuid4().hex[:10]}"
+            agent_id = data.get("agent_id")
+
             if not user_msg and attachments:
                 user_msg = "Analyze the attached image and describe what you see."
             elif not user_msg:
                 await websocket.send_json({"error": "Empty message", "done": True})
                 continue
 
-            chat_id = data.get("chat_id") or data.get("session_id") or f"chat_{uuid.uuid4().hex[:10]}"
-            requested_mode = data.get("mode") or data.get("role") or "auto"
-
             logger.info(f"[WS STREAM] chat_id={chat_id} mode={requested_mode} prompt={user_msg[:60]!r}")
-            async for event in generate_chat_events(user_msg, requested_mode, chat_id, attachments=attachments):
+            async for event in generate_chat_events(user_msg, requested_mode, chat_id, attachments=attachments, agent_id=agent_id):
                 await websocket.send_json(event)
     except WebSocketDisconnect:
         logger.info("[WS] Client disconnected from /api/chat/stream")
@@ -1773,7 +1778,7 @@ async def get_sovereignty_logs():
 async def export_sovereignty_audit():
     """Exports complete air-gap audit cryptographic certificate."""
     return {
-        "certificate_title": "MRPL Sovereign AI Workbench - Air-Gap Cryptographic Audit Certificate",
+        "certificate_title": "AEGIS AI Sovereign AI Workbench - Air-Gap Cryptographic Audit Certificate",
         "institution": "Mangalore Refinery and Petrochemicals Limited (MRPL)",
         "timestamp_generated_utc": datetime.utcnow().isoformat() + "Z",
         "air_gap_verdict": "100% AIR-GAPPED & SOVEREIGN",
@@ -1784,6 +1789,50 @@ async def export_sovereignty_audit():
             "root_hash": "c8f2a64016b801a61c379768652d87e0251141df90fe954a7f0e6ce7ecf97e33"
         }
     }
+
+
+# =====================================================================
+# CUSTOM AGENTS API ENDPOINTS
+# =====================================================================
+from backend.custom_agents import (
+    CustomAgent,
+    get_all_agents,
+    get_agent_by_id,
+    create_or_update_agent,
+    delete_agent
+)
+
+@app.get("/api/v1/agents")
+@app.get("/api/agents")
+async def list_custom_agents():
+    """Returns all available custom agent templates and operator-created agents."""
+    agents = get_all_agents()
+    return {"status": "SUCCESS", "count": len(agents), "agents": [a.dict() for a in agents]}
+
+@app.get("/api/v1/agents/{agent_id}")
+@app.get("/api/agents/{agent_id}")
+async def get_single_agent(agent_id: str):
+    """Returns specific custom agent by id."""
+    agent = get_agent_by_id(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {"status": "SUCCESS", "agent": agent.dict()}
+
+@app.post("/api/v1/agents")
+@app.post("/api/agents")
+async def save_custom_agent(body: CustomAgent):
+    """Creates or updates a custom agent definition."""
+    saved = create_or_update_agent(body)
+    return {"status": "SUCCESS", "agent": saved.dict()}
+
+@app.delete("/api/v1/agents/{agent_id}")
+@app.delete("/api/agents/{agent_id}")
+async def remove_custom_agent(agent_id: str):
+    """Deletes custom agent."""
+    success = delete_agent(agent_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {"status": "SUCCESS", "deleted_id": agent_id}
 
 
 if __name__ == "__main__":
