@@ -102,11 +102,21 @@ def parse_plan_json(raw_text: str) -> Optional[Dict[str, Any]]:
         block_matches = re.finditer(r'\{\s*"type"\s*:\s*"([^"]+)"\s*,\s*"text"\s*:\s*"([^"]+)"(?:\s*,\s*"level"\s*:\s*(\d+))?\s*\}', raw)
         for bm in block_matches:
             b_type = bm.group(1)
-            b_text = bm.group(2)
+            b_text = bm.group(2).strip()
             b_level = int(bm.group(3)) if bm.group(3) else 1
-            blocks.append({"type": b_type, "text": b_text, "level": b_level})
+            if b_text:
+                blocks.append({"type": b_type, "text": b_text, "level": b_level})
         if blocks:
-            logger.info(f"[DOCS_MODE] Extracted {len(blocks)} JSON blocks from partial output")
+            # If the last paragraph was cut off mid-sentence (no terminal punctuation), clean it or trim to last period
+            if blocks[-1].get("type") == "paragraph":
+                last_txt = blocks[-1]["text"]
+                if not last_txt.endswith(('.', '!', '?', '"', "'")):
+                    last_period = max(last_txt.rfind('. '), last_txt.rfind('.\n'), last_txt.rfind('.'))
+                    if last_period > 20:
+                        blocks[-1]["text"] = last_txt[:last_period + 1]
+                    else:
+                        blocks[-1]["text"] = last_txt + "..."
+            logger.info(f"[DOCS_MODE] Extracted {len(blocks)} clean JSON blocks from output")
             clean_filename = re.sub(r'[^a-zA-Z0-9_-]', '_', doc_title.lower())[:30] + ".docx"
             return {"title": doc_title, "filename": clean_filename, "blocks": blocks}
     except Exception:
@@ -122,6 +132,18 @@ def parse_plan_json(raw_text: str) -> Optional[Dict[str, Any]]:
             line_s = line.strip()
             if not line_s:
                 continue
+            if line_s in ("{", "}", "[", "]", "},", "],") or line_s.startswith('"blocks":') or line_s.startswith('"filename":'):
+                continue
+            if line_s.startswith('"title":'):
+                t_m = re.search(r'"title"\s*:\s*"([^"]+)"', line_s)
+                if t_m:
+                    doc_title = t_m.group(1)
+                continue
+            if line_s.startswith('"text":'):
+                t_m = re.search(r'"text"\s*:\s*"([^"]+)"', line_s)
+                if t_m:
+                    blocks.append({"type": "paragraph", "text": t_m.group(1)})
+                continue
             if line_s.startswith("#"):
                 lvl = min(3, len(line_s) - len(line_s.lstrip("#")))
                 heading_text = line_s.lstrip("# ").strip()
@@ -131,7 +153,6 @@ def parse_plan_json(raw_text: str) -> Optional[Dict[str, Any]]:
             elif line_s.startswith(("-", "*", "•")):
                 blocks.append({"type": "bullets", "items": [line_s.lstrip("-*• ").strip()]})
             elif line_s.startswith("|") and "|" in line_s[1:]:
-                # Parse markdown table line
                 cols = [c.strip() for c in line_s.split("|")[1:-1]]
                 if cols and not all(set(c).issubset({'-', ':', ' '}) for c in cols):
                     if blocks and blocks[-1].get("type") == "table":
@@ -141,6 +162,13 @@ def parse_plan_json(raw_text: str) -> Optional[Dict[str, Any]]:
             else:
                 blocks.append({"type": "paragraph", "text": line_s})
         if blocks:
+            # Clean cut off end text
+            if blocks[-1].get("type") == "paragraph":
+                last_txt = blocks[-1]["text"]
+                if not last_txt.endswith(('.', '!', '?', '"', "'")):
+                    last_period = max(last_txt.rfind('. '), last_txt.rfind('.'))
+                    if last_period > 20:
+                        blocks[-1]["text"] = last_txt[:last_period + 1]
             logger.info(f"[DOCS_MODE] Converted markdown/prose output into {len(blocks)} structured document blocks")
             clean_filename = re.sub(r'[^a-zA-Z0-9_-]', '_', doc_title.lower())[:30] + ".docx"
             return {"title": doc_title, "filename": clean_filename, "blocks": blocks}
@@ -156,7 +184,7 @@ async def handle_document_mode(
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Executes Document / Excel / PPT mode:
-    1. Plan with fast non-thinking inference (think=False, json_mode=True)
+    1. Plan with fast non-thinking inference (think=False, json_mode=True, max_tokens=6144)
     2. Check for explicit NEEDS_INPUT blocks -> ask question and pause if so
     3. Generate genuine binary deliverable with Python
     4. Stream progress and emit final file download link.
@@ -169,12 +197,12 @@ async def handle_document_mode(
     
     yield {"token": f"Planning {mode.upper()} structure based on conversation data...\n"}
     
-    # Step 1: Call Ollama with think=False to avoid 5-minute thinking loops on JSON tasks
+    # Step 1: Call Ollama with 6144 max tokens so large essays complete with full conclusion
     try:
-        plan_raw = await call_ollama(messages, stream=False, temperature=0.3, max_tokens=3072, think=False, json_mode=True)
+        plan_raw = await call_ollama(messages, stream=False, temperature=0.3, max_tokens=6144, think=False, json_mode=True)
     except Exception as e:
         logger.warning(f"[DOCS_MODE] First pass failed: {e}. Retrying without json_mode...")
-        plan_raw = await call_ollama(messages, stream=False, temperature=0.3, max_tokens=3072, think=False, json_mode=False)
+        plan_raw = await call_ollama(messages, stream=False, temperature=0.3, max_tokens=6144, think=False, json_mode=False)
 
     plan_data = parse_plan_json(str(plan_raw))
     
@@ -182,10 +210,10 @@ async def handle_document_mode(
     if not plan_data:
         yield {"token": "[Structuring document content...]\n"}
         retry_messages = messages + [
-            {"role": "user", "content": "Format the above document structure as clear sections with headings (#, ##), paragraphs, bullet points, and tables."}
+            {"role": "user", "content": "Format the above document structure as clear complete sections with headings (#, ##), paragraphs, bullet points, and a final conclusion."}
         ]
         try:
-            retry_raw = await call_ollama(retry_messages, stream=False, temperature=0.3, max_tokens=3072, think=False, json_mode=False)
+            retry_raw = await call_ollama(retry_messages, stream=False, temperature=0.3, max_tokens=6144, think=False, json_mode=False)
             plan_data = parse_plan_json(str(retry_raw))
         except Exception as e:
             logger.error(f"[DOCS_MODE] Retry failed: {e}")
