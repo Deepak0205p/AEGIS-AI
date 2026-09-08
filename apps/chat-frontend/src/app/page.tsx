@@ -38,7 +38,9 @@ import {
   Search,
   Sun,
   Moon,
-  RotateCcw
+  RotateCcw,
+  X,
+  Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDeliverableStore } from '@/store/useDeliverableStore';
@@ -622,23 +624,77 @@ export default function GeminiReplicaChatApp() {
     }
   }, [currentInput]);
 
+  const [pendingAttachments, setPendingAttachments] = useState<Array<{ name: string; base64: string; type: string; size: number }>>([]);
+
+  const attachFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64Content = result.includes(',') ? result.split(',')[1] : result;
+      setPendingAttachments((prev) => [
+        ...prev,
+        {
+          name: file.name || `clipboard_item_${Date.now()}.${file.type.split('/')[1] || 'png'}`,
+          base64: base64Content,
+          type: file.type,
+          size: file.size,
+        }
+      ]);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    let foundFile = false;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) {
+          attachFile(file);
+          foundFile = true;
+        }
+      }
+    }
+    if (foundFile) {
+      e.preventDefault();
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+    for (let i = 0; i < files.length; i++) {
+      attachFile(files[i]);
+    }
+  };
+
   const handleSend = (textToSend?: string) => {
     const rawInput = typeof textToSend === 'string' ? textToSend : (typeof currentInput === 'string' ? currentInput : '');
     const prompt = rawInput.trim();
-    if (!prompt || isStreaming) return;
+    if ((!prompt && pendingAttachments.length === 0) || isStreaming) return;
+
+    const attachmentPayload = pendingAttachments.map(a => a.base64);
+    const attachmentSummary = pendingAttachments.map(a => a.name).join(', ');
+    const displayPrompt = prompt || (attachmentSummary ? `Analyze attached: ${attachmentSummary}` : '');
 
     setCurrentInput('');
+    setPendingAttachments([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
     addMessage({
       id: `usr-${Date.now()}`,
       role: 'user',
-      content: prompt,
+      content: displayPrompt,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
 
-    socketManager.sendChatTask(prompt, [], activeModelRole);
+    socketManager.sendChatTask(displayPrompt, attachmentPayload, activeModelRole);
     if (typeof window !== 'undefined' && window.location.pathname === '/') {
       const currentActiveId = useChatStore.getState().activeSessionId;
       if (currentActiveId) {
@@ -677,32 +733,8 @@ export default function GeminiReplicaChatApp() {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
-    const port = typeof window !== 'undefined' ? window.location.port : '8000';
-    // If running on unified port 8000 (production static mount) or port 3000 with Next.js rewrite proxy, use relative '/api'
-    // Otherwise fallback to explicit http://<host>:8000
-    const apiBase = (port === '8000' || port === '3000' || port === '') ? '' : `http://${host}:8000`;
-    const formData = new FormData();
-    formData.append('file', file);
-
-    addMessage({
-      id: `usr-${Date.now()}`,
-      role: 'user',
-      content: `Uploaded attachment: ${file.name} (${(file.size / 1024).toFixed(1)} KB). Please analyze this document.`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    });
-
-    try {
-      const res = await fetch(`${apiBase}/api/upload`, {
-        method: 'POST',
-        body: formData
-      });
-      const data = await res.json();
-      socketManager.sendChatTask(`Analyze uploaded document ${file.name}: ${JSON.stringify(data.findings || [])}`, [], activeModelRole);
-    } catch {
-      socketManager.sendChatTask(`Analyze inspection report ${file.name}`, [], activeModelRole);
-    }
+    attachFile(file);
+    if (e.target) e.target.value = '';
   };
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -1332,7 +1364,45 @@ export default function GeminiReplicaChatApp() {
           </AnimatePresence>
 
           {/* Authentic Gemini/Claude Stacked Pill Container */}
-          <div className="relative flex flex-col bg-white border border-slate-300 focus-within:border-blue-500 shadow-lg dark:bg-[#0d0d0e] dark:border-[#222225] dark:focus-within:border-[#38383e] dark:shadow-[0_8px_32px_rgba(0,0,0,0.8)] rounded-[24px] sm:rounded-[28px] p-2.5 sm:p-3 transition-all duration-200 z-30">
+          <div 
+            onDrop={handleDrop}
+            onDragOver={(e) => e.preventDefault()}
+            className="relative flex flex-col bg-white border border-slate-300 focus-within:border-blue-500 shadow-lg dark:bg-[#0d0d0e] dark:border-[#222225] dark:focus-within:border-[#38383e] dark:shadow-[0_8px_32px_rgba(0,0,0,0.8)] rounded-[24px] sm:rounded-[28px] p-2.5 sm:p-3 transition-all duration-200 z-30"
+          >
+            {/* Pending Attachments Chip Preview Tray */}
+            {pendingAttachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 px-2 pt-1 pb-2 border-b border-slate-100 dark:border-white/[0.06] mb-1.5">
+                {pendingAttachments.map((att, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center space-x-2 pl-2.5 pr-1.5 py-1 rounded-xl bg-blue-50 border border-blue-200 dark:bg-blue-500/10 dark:border-blue-500/20 text-xs text-blue-900 dark:text-blue-300 shadow-2xs group"
+                  >
+                    <div className="h-4 w-4 rounded flex items-center justify-center shrink-0">
+                      {att.type.startsWith('image/') ? (
+                        <ImageIcon className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+                      ) : (
+                        <FileText className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+                      )}
+                    </div>
+                    <span className="font-medium text-[11px] truncate max-w-[140px]" title={att.name}>
+                      {att.name}
+                    </span>
+                    <span className="text-[10px] opacity-60 font-mono">
+                      {(att.size / 1024).toFixed(0)}KB
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPendingAttachments(prev => prev.filter((_, i) => i !== idx))}
+                      className="h-4 w-4 rounded-full hover:bg-blue-200/60 dark:hover:bg-white/10 flex items-center justify-center text-blue-700 dark:text-blue-300 transition-colors"
+                      title="Remove attachment"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Top Tier: Growing Textarea Area */}
             <div className="relative w-full px-1 pt-0.5 pb-1 sm:pb-2 flex items-center">
               {/* Animated Voice Waves Visualizer when listening and input is empty */}
@@ -1363,6 +1433,7 @@ export default function GeminiReplicaChatApp() {
                 ref={textareaRef}
                 value={currentInput}
                 onChange={(e) => setCurrentInput(e.target.value)}
+                onPaste={handlePaste}
                 onFocus={() => {
                   setTimeout(() => {
                     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1378,7 +1449,9 @@ export default function GeminiReplicaChatApp() {
                 placeholder={
                   isListening
                     ? ""
-                    : `Ask ${MODEL_ROLES.find(r => r.id === activeModelRole)?.label} or query refinery operating standards...`
+                    : pendingAttachments.length > 0
+                    ? `Add instructions for ${pendingAttachments.length} attachment(s) or press Enter...`
+                    : `Ask ${MODEL_ROLES.find(r => r.id === activeModelRole)?.label} or paste file / screenshot...`
                 }
                 className="w-full bg-transparent text-[15px] sm:text-[15px] text-slate-900 placeholder-slate-400 dark:text-[#e3e3e3] dark:placeholder-[#8e918f] outline-none font-sans resize-none leading-relaxed overflow-y-auto block min-h-[32px] max-h-[160px] sm:max-h-[200px]"
                 style={{ height: '32px' }}
@@ -1531,10 +1604,10 @@ export default function GeminiReplicaChatApp() {
                 ) : (
                   <button
                     onClick={() => handleSend()}
-                    disabled={!(typeof currentInput === 'string' && currentInput.trim().length > 0)}
+                    disabled={!( (typeof currentInput === 'string' && currentInput.trim().length > 0) || pendingAttachments.length > 0 )}
                     aria-label="Send message"
                     className={`h-10 w-10 sm:h-9 sm:w-9 rounded-full flex items-center justify-center transition-all duration-200 shadow-sm cursor-pointer ${
-                      typeof currentInput === 'string' && currentInput.trim().length > 0
+                      (typeof currentInput === 'string' && currentInput.trim().length > 0) || pendingAttachments.length > 0
                         ? 'bg-blue-600 text-white hover:bg-blue-700 dark:bg-white dark:text-black dark:hover:bg-[#f1f3f4]'
                         : 'bg-slate-100 text-slate-400 dark:bg-[#1e1f20] dark:text-[#717478]'
                     }`}
