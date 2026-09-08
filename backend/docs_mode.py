@@ -10,72 +10,39 @@ from backend.ollama_client import call_ollama
 from backend.db import build_context_messages, save_message
 from backend.deliverables import create_deliverable_file
 
-DOC_PLANNER_SYSTEM_PROMPT = """You are an expert document architect and technical writer for an industrial enterprise platform.
-Your task is to create a complete, comprehensive, and highly professional document plan in JSON format strictly addressing the user's current request.
+DOC_PLANNER_SYSTEM_PROMPT = """You are an expert technical author, executive editor, and enterprise document architect.
+Your objective: Dynamically design and author a comprehensive, fully tailored document (.docx) based on the user's specific request and domain.
 
-CRITICAL TOPIC RELEVANCE & DATA INTEGRITY INSTRUCTIONS:
-- STRICT SUBJECT FOCUS: The document MUST be 100% focused on the user's CURRENT prompt and subject matter. Never mix in unrelated topics, previous unrelated discussions (e.g. crude oil, pump tags, HR forms), or historical context unless the user specifically asked to format, export, or continue that exact topic.
-- CARRY-OVER RULE: ONLY extract parameters, tables, or text from prior messages if the user's current request explicitly says to "put the above in a document", "export this", or continues the SAME topic.
-- If the current prompt introduces a new topic, generate a fresh, authoritative, domain-accurate document plan tailored specifically to this new topic.
-- DO NOT generate empty structures or generic placeholder templates. Populate every block with rich, real, professional text and tables relevant to the topic.
+AUTONOMOUS DOCUMENT DESIGN PRINCIPLES:
+1. TOTAL STRUCTURAL FREEDOM: Do NOT follow a rigid or canned template. YOU autonomously decide the ideal structure, section hierarchy (H1, H2, H3), depth of prose, number of sections, tables, bullet lists, or callouts best suited to the topic.
+2. ADAPTIVE FORMATTING:
+   - For an SOP or Standard: Write formal procedures, step-by-step numbered steps, safety warnings, and compliance criteria.
+   - For an Inspection / Audit / Technical Report: Structure background, detailed inspection methodology, multi-column measurement tables, findings, root-cause analysis, and prioritized action items.
+   - For a Memo / Business Case / Executive Brief: Use executive summaries, strategic context, risk matrices, and financial/operational metrics.
+   - For a User Guide / Manual / SOP: Structure with prerequisites, step-by-step instructions, troubleshooting tables, and FAQs.
+3. IN-DEPTH, PROFESSIONAL WRITING: Write rich, detailed, articulate prose. Avoid shallow or trivial 1-sentence sections. Provide substantial domain-accurate detail, context, industry metrics, and complete tables.
+4. STRICT TOPIC FIDELITY: Maintain 100% focus on the user's prompt and intent. Never inject unrelated historical conversation fragments unless the user explicitly requested to compile or format them.
 
-DOCUMENT SCHEMA:
+OUTPUT SPECIFICATION (JSON ONLY):
+Return your document plan as a single valid JSON object. You can use ANY combination and sequence of blocks (paragraphs, headings of level 1/2/3, bullet lists, tables with any number of headers/rows, and charts):
+
 {
-  "title": "<Professional Document Title>",
-  "filename": "<safe_descriptive_filename.docx>",
+  "title": "<Descriptive Document Title>",
+  "filename": "<descriptive_filename.docx>",
   "blocks": [
-    {
-      "type": "heading",
-      "text": "<Relevant Section Heading 1>",
-      "level": 1
-    },
-    {
-      "type": "paragraph",
-      "text": "<Comprehensive, detailed paragraph explaining the objective, background, or analysis relevant to the topic.>"
-    },
-    {
-      "type": "bullets",
-      "items": [
-        "<Key point or specification 1 tailored specifically to the requested topic>",
-        "<Key point or specification 2 tailored specifically to the requested topic>",
-        "<Key point or specification 3 tailored specifically to the requested topic>"
-      ]
-    },
-    {
-      "type": "heading",
-      "text": "<Relevant Section Heading 2>",
-      "level": 1
-    },
-    {
-      "type": "table",
-      "rows": [
-        ["<Header 1>", "<Header 2>", "<Header 3>", "<Header 4>"],
-        ["<Data Row 1 Col 1>", "<Data Row 1 Col 2>", "<Data Row 1 Col 3>", "<Data Row 1 Col 4>"],
-        ["<Data Row 2 Col 1>", "<Data Row 2 Col 2>", "<Data Row 2 Col 3>", "<Data Row 2 Col 4>"],
-        ["<Data Row 3 Col 1>", "<Data Row 3 Col 2>", "<Data Row 3 Col 3>", "<Data Row 3 Col 4>"]
-      ]
-    },
-    {
-      "type": "heading",
-      "text": "<Relevant Section Heading 3>",
-      "level": 1
-    },
-    {
-      "type": "bullets",
-      "items": [
-        "<Procedure or recommendation step 1 tailored to the topic>",
-        "<Procedure or recommendation step 2 tailored to the topic>"
-      ]
-    }
+    // You freely decide the order, quantity, and content of blocks:
+    // Block Types:
+    // { "type": "heading", "text": "...", "level": 1 | 2 | 3 }
+    // { "type": "paragraph", "text": "Detailed in-depth paragraph..." }
+    // { "type": "bullets", "items": ["Item 1...", "Item 2..."] }
+    // { "type": "table", "rows": [ ["Header 1", "Header 2", ...], ["Val 1", "Val 2", ...] ] }
+    // { "type": "chart", "title": "Chart Title", "chart_type": "bar" | "line", "rows": [ ["Category", "Metric 1", "Metric 2"], ["A", 10, 20], ... ] }
   ]
 }
 
 RULES:
-1. Always generate a COMPLETE, rich document with multi-paragraph content, comprehensive multi-row tables, and clear headings.
-2. STRICT TOPIC COHERENCE: Only carry over prior conversation data if directly relevant to the current user query. Never bleed unrelated topics into a document.
-3. Populate realistic, domain-accurate engineering/operational data, metrics, standards, and procedures when supplemental details are needed.
-4. Use a mix of headings, paragraphs, bullet lists, and tables to make the document rich and well-structured.
-5. Output ONLY valid, parseable JSON. Do not include markdown commentary or reasoning outside the JSON."""
+- Return ONLY the raw JSON object. Do not wrap with explanation or markdown outside JSON.
+- Fully populate all text and table cells. Never use placeholders like "[Insert text here]"."""
 
 
 def parse_plan_json(raw_text: str) -> Optional[Dict[str, Any]]:
