@@ -250,19 +250,22 @@ def build_docx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
             level = b.get("level", 1)
             level = min(3, max(1, level))
             
-            # Auto-number headings
+            # Clean leading number prefixes if already present in text (e.g., "3. Title" or "0.3 Title")
+            cleaned_heading = re.sub(r'^\d+(\.\d+)*\s*[:\.\-]?\s*', '', text).strip()
+            
+            # Auto-number headings cleanly
             if level == 1:
                 h1_counter += 1
                 h2_counter = 0
                 h3_counter = 0
-                numbered_text = f"{h1_counter}. {text}"
+                numbered_text = f"{h1_counter}. {cleaned_heading}"
             elif level == 2:
                 h2_counter += 1
                 h3_counter = 0
-                numbered_text = f"{h1_counter}.{h2_counter} {text}"
+                numbered_text = f"{h1_counter}.{h2_counter} {cleaned_heading}"
             else:
                 h3_counter += 1
-                numbered_text = f"{h1_counter}.{h2_counter}.{h3_counter} {text}"
+                numbered_text = f"{h1_counter}.{h2_counter}.{h3_counter} {cleaned_heading}"
             
             doc.add_heading(numbered_text, level=level)
             
