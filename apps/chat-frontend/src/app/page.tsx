@@ -1269,39 +1269,88 @@ export default function GeminiReplicaChatApp() {
                               if (allIds.length === 0) return null;
 
                               return (
-                                <div className="pt-2 flex flex-wrap gap-2 w-full">
+                                <div className="pt-2.5 flex flex-wrap gap-2.5 w-full">
                                   {allIds.map((deliv) => {
                                     const cleanId = deliv.replace(/^\/api\/files\/(download\/)?/, '').trim();
                                     const matchedDeliv = deliverables.find(
                                       (d) => d.id === cleanId || d.filename.toLowerCase() === cleanId.toLowerCase()
                                     );
                                     const displayName = matchedDeliv?.filename || (cleanId.includes('.') ? cleanId : `${cleanId}.docx`);
+                                    const rawExt = displayName.split('.').pop()?.toLowerCase() || 'docx';
                                     const downloadUrl = `/api/files/${cleanId}`;
+
+                                    // Dynamic badge color per file extension
+                                    const isSheet = ['xlsx', 'xls', 'csv'].includes(rawExt);
+                                    const isSlide = ['pptx', 'ppt'].includes(rawExt);
+                                    const isCode = ['py', 'sql', 'ts', 'js', 'json', 'sh'].includes(rawExt);
+
+                                    const themeStyle = isSheet
+                                      ? {
+                                          border: 'border-emerald-500/30 hover:border-emerald-500/60 dark:border-emerald-500/20 dark:hover:border-emerald-500/50',
+                                          iconColor: 'text-emerald-600 dark:text-emerald-400',
+                                          badge: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30',
+                                          glow: 'hover:shadow-emerald-500/10'
+                                        }
+                                      : isSlide
+                                      ? {
+                                          border: 'border-orange-500/30 hover:border-orange-500/60 dark:border-orange-500/20 dark:hover:border-orange-500/50',
+                                          iconColor: 'text-orange-600 dark:text-orange-400',
+                                          badge: 'bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/30',
+                                          glow: 'hover:shadow-orange-500/10'
+                                        }
+                                      : isCode
+                                      ? {
+                                          border: 'border-amber-500/30 hover:border-amber-500/60 dark:border-amber-500/20 dark:hover:border-amber-500/50',
+                                          iconColor: 'text-amber-600 dark:text-amber-400',
+                                          badge: 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30',
+                                          glow: 'hover:shadow-amber-500/10'
+                                        }
+                                      : {
+                                          border: 'border-blue-500/30 hover:border-blue-500/60 dark:border-blue-500/20 dark:hover:border-blue-500/50',
+                                          iconColor: 'text-blue-600 dark:text-[#a8c7fa]',
+                                          badge: 'bg-blue-500/10 text-blue-700 dark:text-[#a8c7fa] border-blue-500/30',
+                                          glow: 'hover:shadow-blue-500/10'
+                                        };
 
                                     return (
                                       <div
                                         key={cleanId}
-                                        className="flex items-center space-x-2 px-3 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-xs text-slate-900 font-medium transition-all group shadow-xs dark:bg-[#121215] dark:hover:bg-[#19191e] dark:border-[#2a2a32] dark:text-[#e3e3e3] w-full sm:w-auto"
+                                        className={`inline-flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-2xl bg-white dark:bg-[#12141a] border ${themeStyle.border} shadow-sm ${themeStyle.glow} transition-all duration-200 group w-full sm:w-auto hover:scale-[1.01]`}
                                       >
+                                        {/* Clickable Area to Open Live Workspace */}
                                         <button
                                           type="button"
                                           onClick={() => openCanvas(matchedDeliv || cleanId)}
-                                          className="flex items-center space-x-2 text-left truncate flex-1 hover:text-blue-600 dark:hover:text-[#a8c7fa] transition-colors cursor-pointer"
-                                          title="Open & Edit Live in Interactive Workspace"
+                                          className="flex items-center gap-2.5 text-left cursor-pointer min-w-0"
+                                          title={`Open & Edit ${displayName} Live in Canvas`}
                                         >
-                                          <Sparkles className="h-4 w-4 text-blue-600 dark:text-[#a8c7fa] shrink-0" />
-                                          <span className="truncate max-w-[200px] font-bold">{displayName}</span>
-                                          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-blue-50 text-blue-700 border border-blue-200 dark:bg-[#1c2230] dark:text-[#a8c7fa] dark:border-[#2f3d5a]">
-                                            Edit Live
-                                          </span>
+                                          <div className="h-7 w-7 rounded-lg bg-slate-100 dark:bg-white/[0.06] flex items-center justify-center shrink-0">
+                                            <Sparkles className={`h-4 w-4 ${themeStyle.iconColor} transition-transform group-hover:rotate-12`} />
+                                          </div>
+                                          <div className="flex flex-col min-w-0">
+                                            <div className="flex items-center gap-1.5">
+                                              <span className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate max-w-[220px]">
+                                                {displayName}
+                                              </span>
+                                              <span className={`px-1.5 py-0.2 rounded-md text-[9px] font-mono font-semibold uppercase border ${themeStyle.badge}`}>
+                                                {rawExt}
+                                              </span>
+                                            </div>
+                                            <span className="text-[10px] text-slate-500 dark:text-slate-400 group-hover:text-blue-600 dark:group-hover:text-[#a8c7fa] transition-colors font-medium">
+                                              Click to Edit in Workspace →
+                                            </span>
+                                          </div>
                                         </button>
+
+                                        {/* Direct Quick Download Icon */}
                                         <a
                                           href={downloadUrl}
                                           download
                                           title={`Download ${displayName}`}
-                                          className="p-1 rounded hover:bg-slate-100 dark:hover:bg-[#282834] text-slate-400 dark:text-[#8e918f] hover:text-slate-800 dark:hover:text-[#e3e3e3] transition-colors ml-1"
+                                          className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.08] text-slate-400 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors shrink-0 ml-1"
+                                          onClick={(e) => e.stopPropagation()}
                                         >
-                                          <Download className="h-3.5 w-3.5" />
+                                          <Download className="h-4 w-4" />
                                         </a>
                                       </div>
                                     );
