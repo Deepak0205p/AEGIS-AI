@@ -74,13 +74,7 @@ export function ModelStatusPanel() {
                 </option>
               ))
             ) : (
-              <>
-                <option value="qwen2.5-coder-3b">Code Engine (Qwen 2.5 3B)</option>
-                <option value="qwen2-vl-2b">Vision Engine (Qwen 2 VL 2B)</option>
-                <option value="llama-3.2-3b">General Engine (Llama 3.2 3B)</option>
-                <option value="qwen2.5-7b-instruct-q4_k_m">Process Eng 7B</option>
-                <option value="deepseek-r1-distill-qwen-7b-q4_k_m">DeepSeek R1 7B</option>
-              </>
+              <option value="qwen2.5vl:3b">Sovereign Multimodal (qwen2.5vl:3b)</option>
             )}
           </select>
 

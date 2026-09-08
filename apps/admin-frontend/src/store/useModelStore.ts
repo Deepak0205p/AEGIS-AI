@@ -123,9 +123,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
       vram_used_mb: 4200,
     }
   ],
-  activeModel: 'deepseek-v4-pro-qwen3.5-4b',
-  activePrimaryId: 'deepseek-v4-pro-qwen3.5-4b',
-  activeSecondaryId: null,
+  activeModel: 'deepseek-v4-pro:4b',
+  activePrimaryId: 'deepseek-v4-pro:4b',
+  activeSecondaryId: 'qwen2.5vl:3b',
   backendType: 'OLLaMA',
   vram: {
     gpu_available: false,
