@@ -192,6 +192,7 @@ async def call_ollama(
         target_model == VISION_MODEL_NAME
         or "vl" in target_model.lower()
         or "vision" in target_model.lower()
+        or "gemma" in target_model.lower()
         or "llava" in target_model.lower()
         or "phi" in target_model.lower()
         or "minicpm" in target_model.lower()
