@@ -17,16 +17,16 @@ export function ActiveSocketTable() {
   );
 
   return (
-    <Card className="border-gray-200 bg-gray-100">
-      <CardHeader className="py-3 px-4 border-b border-gray-200">
+    <Card className="border-gray-200 dark:border-[#262c3a] bg-white dark:bg-[#11141c] shadow-sm">
+      <CardHeader className="py-3 px-4 border-b border-gray-100 dark:border-gray-800">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center space-x-2">
-            <Network className="h-4 w-4 text-blue-600" />
-            <CardTitle className="text-xs font-semibold text-gray-900">
-              Active Socket Connection Sniffer (psutil Daemon)
+            <Network className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            <CardTitle className="text-xs font-semibold text-gray-900 dark:text-gray-100">
+              Project Socket Sniffer &amp; Air-Gap Guard (psutil Daemon)
             </CardTitle>
-            <Badge variant="outline" className="font-mono text-[10px]">
-              {sockets.length} open sockets audited
+            <Badge variant="active" className="font-mono text-[10px]">
+              {sockets.length} Project Sockets Filtered
             </Badge>
           </div>
 
@@ -35,15 +35,15 @@ export function ActiveSocketTable() {
               <Search className="h-3 w-3 absolute left-2.5 top-2 text-gray-400" />
               <input
                 type="text"
-                placeholder="Filter sockets / IPs..."
+                placeholder="Filter project services / IPs..."
                 value={filterQuery}
                 onChange={(e) => setFilterQuery(e.target.value)}
-                className="h-7 pl-7 pr-2.5 rounded bg-gray-50 border border-gray-200 text-[11px] text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-blue-600"
+                className="h-7 pl-7 pr-2.5 rounded bg-gray-50 dark:bg-[#0c0e14] border border-gray-200 dark:border-gray-700 text-[11px] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:border-blue-600"
               />
             </div>
-            <span className="text-[11px] font-mono text-emerald-600 flex items-center">
+            <span className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400 flex items-center">
               <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-              All Permitted
+              WAN Auto-Block Active
             </span>
           </div>
         </div>
