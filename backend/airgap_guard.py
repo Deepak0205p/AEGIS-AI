@@ -16,9 +16,9 @@ import ipaddress
 import time
 from typing import List, Dict, Any, Optional
 
-PROJECT_PORTS = {8000, 3000, 3001, 3306, 11434, 5000, 8080}
+PROJECT_PORTS = {8000, 3000, 3001, 3306, 11434, 5000, 8080, 2375, 2376}
 PROJECT_PROCESS_KEYWORDS = [
-    "python", "uvicorn", "node", "next", "mysqld", "ollama", "xampp", "cmd.exe", "powershell"
+    "python", "uvicorn", "node", "next", "mysqld", "ollama", "xampp", "docker", "dockerd", "containerd", "cmd.exe", "powershell"
 ]
 
 # Tracked project PIDs
@@ -33,7 +33,7 @@ def is_project_socket(conn, current_pid: int) -> bool:
     """
     Returns True if connection belongs strictly to our project stack:
     - Port matches 8000 (Backend), 3000 (Chat UI), 3001 (Admin UI), 3306 (MySQL), 11434 (Ollama)
-    - Or PID belongs to python/node/mysqld/ollama processes in our tree
+    - Or PID belongs to python/node/mysqld/ollama/docker processes in our tree
     """
     lport = conn.laddr.port if conn.laddr else 0
     rport = conn.raddr.port if conn.raddr else 0
@@ -49,7 +49,7 @@ def is_project_socket(conn, current_pid: int) -> bool:
             pname = proc.name().lower()
             if any(k in pname for k in PROJECT_PROCESS_KEYWORDS):
                 cmdline = " ".join(proc.cmdline()).lower()
-                if any(k in cmdline for k in ["sih", "hackthon", "main.py", "uvicorn", "ollama", "mysql", "next"]):
+                if any(k in cmdline for k in ["sih", "hackthon", "main.py", "uvicorn", "ollama", "mysql", "next", "docker", "sandbox"]):
                     _project_pids.add(conn.pid)
                     return True
         except Exception:
@@ -72,8 +72,10 @@ def get_friendly_service_name(conn, proc_name: str) -> str:
         return "XAMPP MySQL Sovereignty DB (:3306)"
     elif lport == 11434 or rport == 11434:
         return "Ollama Local LLM Daemon (:11434)"
+    elif "docker" in proc_name.lower() or "containerd" in proc_name.lower():
+        return "Docker Container / Python Sandbox Worker"
     elif "python" in proc_name.lower():
-        return "Python Sandbox / Backend Worker"
+        return "Docker / Python Sandbox Worker"
     elif "node" in proc_name.lower():
         return "Frontend Node.js Service"
     return f"Project Service ({proc_name})"
