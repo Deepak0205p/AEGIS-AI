@@ -47,6 +47,22 @@ const ROLES = [
   { id: 'AUDITOR_VIEWER', label: 'Auditor Viewer (Read-only Air-Gap Inspect)', color: 'border-gray-300 text-gray-700 bg-gray-50 dark:bg-gray-800 dark:text-gray-300' },
 ];
 
+const DEPARTMENTS = [
+  'Refinery Operations (CDU / VDU / FCCU)',
+  'Mechanical Maintenance & Reliability',
+  'Inspection & NDT (Asset Integrity)',
+  'Health, Safety & Environment (HSE)',
+  'Crude Distillation Unit (CDU)',
+  'Fluid Catalytic Cracking (FCCU)',
+  'Flare & Utility Section',
+  'Executive HSE & CISO',
+  'Technical Services & Process Engineering',
+  'Electrical & Instrumentation (E&I)',
+  'Offsite & Tank Farm Logistics',
+  'Central Control Room (CCR)',
+  'General Operations',
+];
+
 export default function UsersPage() {
   const [users, setUsers] = useState<OperatorUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -65,7 +81,7 @@ export default function UsersPage() {
   const [formPassword, setFormPassword] = useState('');
   const [formFullName, setFormFullName] = useState('');
   const [formRole, setFormRole] = useState('FIELD_OPERATOR');
-  const [formDepartment, setFormDepartment] = useState('Refinery Operations');
+  const [formDepartment, setFormDepartment] = useState('Refinery Operations (CDU / VDU / FCCU)');
   const [formStatus, setFormStatus] = useState<'ACTIVE' | 'FROZEN'>('ACTIVE');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -102,7 +118,7 @@ export default function UsersPage() {
     setFormPassword('');
     setFormFullName('');
     setFormRole('FIELD_OPERATOR');
-    setFormDepartment('Refinery Operations');
+    setFormDepartment('Refinery Operations (CDU / VDU / FCCU)');
     setShowCreateModal(true);
   };
 
@@ -593,13 +609,17 @@ export default function UsersPage() {
 
                   <div className="space-y-1">
                     <label className="text-[11px] text-gray-500">Department / Unit:</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Flare & Utility Section"
+                    <select
                       value={formDepartment}
                       onChange={(e) => setFormDepartment(e.target.value)}
                       className="w-full px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-[#0c0e14] text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500"
-                    />
+                    >
+                      {DEPARTMENTS.map((dept) => (
+                        <option key={dept} value={dept}>
+                          {dept}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
 
@@ -676,13 +696,22 @@ export default function UsersPage() {
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[11px] text-gray-500">Department:</label>
-                    <input
-                      type="text"
+                    <label className="text-[11px] text-gray-500">Department / Unit:</label>
+                    <select
                       value={formDepartment}
                       onChange={(e) => setFormDepartment(e.target.value)}
                       className="w-full px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-[#0c0e14] text-gray-900 dark:text-gray-100 text-xs focus:outline-none focus:border-blue-500"
-                    />
+                    >
+                      {/* If the current department is custom/legacy and not in list, include it as first option */}
+                      {formDepartment && !DEPARTMENTS.includes(formDepartment) && (
+                        <option value={formDepartment}>{formDepartment} (Current)</option>
+                      )}
+                      {DEPARTMENTS.map((dept) => (
+                        <option key={dept} value={dept}>
+                          {dept}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
 
