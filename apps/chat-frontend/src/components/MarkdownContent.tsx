@@ -12,6 +12,11 @@ function cleanMarkdownText(raw: string): string {
   if (!raw) return '';
   let text = raw;
 
+  // Clean LaTeX text wraps like $\\text{FCV}$, $\\text{D-105}$, \\text{V-1}, etc.
+  text = text.replace(/\$\s*\\text\{([^}]+)\}\s*\$/g, '$1');
+  text = text.replace(/\\text\{([^}]+)\}/g, '$1');
+  text = text.replace(/\$([A-Za-z0-9\-_]+)\$/g, '$1');
+
   // Clean unrendered escaped characters like \[ or \] or \( or \)
   text = text.replace(/\\\[([\s\S]*?)\\\]/g, '\n\n```\n$1\n```\n\n');
   text = text.replace(/\\\(([\s\S]*?)\\\)/g, '`$1`');
@@ -25,6 +30,7 @@ function cleanMarkdownText(raw: string): string {
   text = text.replace(/\\approx/g, '≈');
   text = text.replace(/\\le/g, '≤');
   text = text.replace(/\\ge/g, '≥');
+  text = text.replace(/\\times/g, '×');
 
   // Normalize excessive blank lines
   text = text.replace(/\n{4,}/g, '\n\n\n');

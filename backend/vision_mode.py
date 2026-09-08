@@ -655,7 +655,8 @@ async def handle_vision_mode(
                 "1. PRESERVE ALL extracted equipment tags, numbers, vessel names, sensor labels, and readings VERBATIM.\n"
                 "2. DO NOT add, invent, modify, or fabricate any data, values, or components not present in the extraction data.\n"
                 "3. If the extraction mentions an element is not visible or unreadable, keep it exactly as reported.\n"
-                "4. Structure the report with clear headings, bullet points, and neat tables for readability."
+                "4. Structure the report with clear headings, bullet points, and neat tables for readability.\n"
+                "5. FORMATTING RULE: Write in clean, standard Markdown only. NEVER wrap tags or names in LaTeX syntax like $\\text{...}$ or dollar signs."
             )
         },
         {
