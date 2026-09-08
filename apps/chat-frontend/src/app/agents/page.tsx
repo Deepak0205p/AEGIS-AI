@@ -27,7 +27,10 @@ import {
   FlaskConical,
   Flame,
   Activity,
-  ArrowLeft
+  ArrowLeft,
+  SlidersHorizontal,
+  Wrench,
+  Settings2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AppSidebar } from '@/components/sidebar/AppSidebar';
@@ -231,11 +234,8 @@ export default function AgentsPage() {
                 <Cpu className="h-5 w-5 text-blue-600 dark:text-[#a8c7fa]" />
               </div>
               <div>
-                <h1 className="text-sm sm:text-base font-bold text-slate-900 dark:text-[#f1f3f4] flex items-center gap-2">
+                <h1 className="text-sm sm:text-base font-bold text-slate-900 dark:text-[#f1f3f4]">
                   Custom AI Agent Builder
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-500/10 dark:text-blue-300 dark:border-blue-500/30">
-                    Agentic Workflows
-                  </span>
                 </h1>
                 <p className="text-[11px] text-slate-500 dark:text-[#8e918f]">
                   Design, orchestrate, and deploy autonomous AI personas with custom tools and grounding
@@ -255,7 +255,7 @@ export default function AgentsPage() {
                     : 'text-slate-600 dark:text-[#8e918f] hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                Agent Gallery ({agents.length})
+                Agent Gallery
               </button>
               <button
                 onClick={handleStartCreate}
@@ -329,15 +329,6 @@ export default function AgentsPage() {
                                   <h3 className="text-sm font-bold text-slate-900 dark:text-[#f1f3f4]">
                                     {agent.name}
                                   </h3>
-                                  {agent.is_template ? (
-                                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 dark:bg-[#1c1c24] dark:text-[#8e918f]">
-                                      Template
-                                    </span>
-                                  ) : (
-                                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-500/10 dark:text-blue-300 dark:border-blue-500/30">
-                                      Custom
-                                    </span>
-                                  )}
                                 </div>
                                 <p className="text-[11px] font-medium text-blue-600 dark:text-[#a8c7fa] mt-0.5">
                                   {agent.role}
@@ -411,7 +402,7 @@ export default function AgentsPage() {
                                 className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-[#181822] text-slate-600 dark:text-[#8e918f] hover:text-blue-600 dark:hover:text-[#a8c7fa] text-xs font-semibold transition-colors"
                                 title="Clone & Customize Template"
                               >
-                                <Sparkles className="h-3.5 w-3.5" />
+                                <SlidersHorizontal className="h-3.5 w-3.5 text-blue-600 dark:text-[#a8c7fa]" />
                                 <span>Customize</span>
                               </button>
                             ) : (
