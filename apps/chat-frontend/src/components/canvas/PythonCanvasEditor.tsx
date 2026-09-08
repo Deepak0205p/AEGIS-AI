@@ -49,7 +49,7 @@ export function PythonCanvasEditor({ deliverable }: PythonCanvasEditorProps) {
     (deliverable as any).code ||
     `"""
 AIR-GAPPED SOVEREIGN REFINERY SCRIPT
-Filename: ${deliverable.filename}
+Filename: ` + deliverable.filename + `
 Runtime: Isolated Python 3.11 Execution Engine
 Compliance: OISD-STD-105 / PESO Statutory Rules
 """
@@ -73,10 +73,10 @@ def run_analysis():
     net_grm = round(base_margin + 2.40 + gravity_bonus - sulfur_penalty, 2)
     daily_ebitda = round(net_grm * throughput_kbpd * 1000, 2)
     
-    print(f"  [+] Crude Assay Gravity      : {api_gravity}° API")
+    print(f"  [+] Crude Assay Gravity      : {api_gravity}\\u00b0 API")
     print(f"  [+] Sulfur Content           : {sulfur_pct}% wt")
-    print(f"  [+] Realized Gross Margin    : ${net_grm:.2f} / bbl")
-    print(f"  [+] Daily Operating EBITDA   : ${daily_ebitda:,.2f}")
+    print(f"  [+] Realized Gross Margin    : $" + "{net_grm:.2f} / bbl")
+    print(f"  [+] Daily Operating EBITDA   : $" + "{daily_ebitda:,.2f}")
     print(f"  [+] OISD Safety Verification : COMPLIANT (Pass)")
     print("=" * 55)
     print("  STATUS: EXECUTION FINISHED SUCCESSFULLY")
