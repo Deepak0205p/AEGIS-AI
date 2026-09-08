@@ -192,6 +192,8 @@ async def call_ollama(
     formatted_messages = list(messages)
     is_vision_target = (
         target_model == VISION_MODEL_NAME
+        or "ocr" in target_model.lower()
+        or "unlimited" in target_model.lower()
         or "vl" in target_model.lower()
         or "vision" in target_model.lower()
         or "gemma" in target_model.lower()

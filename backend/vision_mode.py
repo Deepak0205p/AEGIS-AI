@@ -13,7 +13,7 @@ import hashlib
 import time
 from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, List, Optional
-from backend.config import logger, EQUIPMENT_TAG_REGEX, VISION_MODEL_NAME, MODEL_NAME
+from backend.config import logger, EQUIPMENT_TAG_REGEX, VISION_MODEL_NAME, OCR_MODEL_NAME, MODEL_NAME
 from backend.ollama_client import call_ollama, filter_thinking, swap_to_model
 from backend.db import build_context_messages, save_message
 
@@ -648,8 +648,9 @@ async def handle_vision_mode(
         {"role": "user", "content": clean_user_prompt}
     ]
 
-    # ── Step 1: Extract Raw Visual Details via Qwen2.5-VL into Temporary Variable (Unlimited Token Budget) ──
-    yield {"token": f"🔍 Scanning image with {VISION_MODEL_NAME} (High-Density Multi-Page OCR)...\n\n"}
+    # ── Step 1: Extract Raw Visual Details via Dedicated Multimodal Model into Temporary Variable (Unlimited Token Budget) ──
+    scanner_model = OCR_MODEL_NAME if is_ocr else VISION_MODEL_NAME
+    yield {"token": f"🔍 Scanning document with {scanner_model} (High-Density Multi-Page OCR)...\n\n"}
     
     raw_vision_output = await call_ollama(
         vision_messages,
@@ -658,17 +659,17 @@ async def handle_vision_mode(
         think=False,
         max_tokens=8192,
         images=image_base64_list if image_base64_list else None,
-        model=VISION_MODEL_NAME,
+        model=scanner_model,
     )
     raw_visual_extracted_data = filter_thinking(str(raw_vision_output))
-    logger.info(f"[{mode_name.upper()}] Qwen2.5-VL raw extraction completed ({len(raw_visual_extracted_data)} chars)")
+    logger.info(f"[{mode_name.upper()}] {scanner_model} raw extraction completed ({len(raw_visual_extracted_data)} chars)")
 
-    # ── Step 2: Model Swap (Unload Qwen -> Load Gemma 4 E4B) ──
+    # ── Step 2: Model Swap (Unload Scanner Model -> Load Gemma 4 E4B) ──
     PROFESSIONAL_REWRITER_MODEL = "gemma4-e4b:latest"
     yield {"token": f"✨ Formatting & polishing report with Gemma 4 E4B...\n\n"}
     await swap_to_model(
         target_model=PROFESSIONAL_REWRITER_MODEL,
-        unload_model_name=VISION_MODEL_NAME,
+        unload_model_name=scanner_model,
         chat_id=chat_id,
         context_to_transfer=f"Raw Vision Extraction:\n{raw_visual_extracted_data[:2000]}"
     )
