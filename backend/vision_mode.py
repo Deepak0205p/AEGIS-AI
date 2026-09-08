@@ -123,41 +123,78 @@ Reply strictly with a JSON object:
 
 OCR_SYSTEM_PROMPT = """You are a precision Industrial OCR & Document Extraction Assistant.
 Your task is to extract, transcribe, and structure text, equipment readings, tag IDs, and numbers from the provided image verbatim.
-Do not hallucinate or invent characters. Transcribe tabular columns, form fields, and error codes accurately.
+Do not hallucinate or invent characters. Transcribe tabular columns, form fields, and error codes with 100% fidelity.
 
 OUTPUT FORMAT:
 Return your response as valid JSON with this structure:
 {
-  "raw_text": "<full extracted text verbatim>",
+  "raw_text": "<full extracted text verbatim line by line>",
   "tables": [{"headers": ["col1", "col2"], "rows": [["val1", "val2"]]}],
   "form_fields": [{"label": "<field label>", "value": "<field value>"}],
   "equipment_tags": ["F-101", "P-201A"],
-  "confidence": 8
+  "confidence": 9
 }
 
 RULES:
-1. "raw_text": Transcribe ALL visible text line by line.
-2. "tables": If tabular data is visible, extract it with proper headers and rows. If no tables, return empty array.
-3. "form_fields": If form-like label:value pairs are visible, extract them. If none, return empty array.
-4. "equipment_tags": List all equipment tag IDs matching patterns like X-NNN, XX-NNNN, XXX-NNN (e.g., F-101, CDU-1001, TK-501).
-5. "confidence": Self-rate your extraction accuracy from 1-10 (10 = perfect, fully legible).
-6. Return ONLY valid JSON. No markdown, no explanation outside the JSON."""
+1. "raw_text": Transcribe ALL visible text exactly as printed. Preserve casing, punctuation, and numeric values.
+2. "tables": If tabular rows/columns exist, preserve column alignments, headers, and values.
+3. "form_fields": Extract key-value pairs (e.g., Date, Inspector, Pressure, Tag).
+4. "equipment_tags": Extract all equipment tag IDs matching industrial patterns (e.g. F-101, CDU-1001, TK-501, MOV-104).
+5. "confidence": Self-rate extraction clarity from 1-10.
+6. Return ONLY valid JSON."""
 
-VISION_SYSTEM_PROMPT = """You are an Industrial Computer Vision & Inspection Assistant.
-Your task is to visually inspect, interpret, and describe the provided image, engineering diagram, P&ID schematic, or equipment gauge.
-Identify components, flow directions, tags, visible corrosion/anomalies, and explain key operational aspects clearly.
+VISION_SYSTEM_PROMPT = """You are an Expert Industrial Multimodal & Computer Vision Inspector.
+Your objective is to provide high-precision, technical visual analysis of industrial diagrams (P&ID, PFD, isometric), equipment photos, analog/digital gauges, control panels, or field assets.
 
-At the end of your analysis, add a line:
-**Confidence:** X/10 (where X is your self-rated confidence in the visual interpretation)"""
+Conduct your visual inspection following this structured Chain-of-Thought method:
+
+1. 🏷️ **VISUAL INVENTORY & TAGS:**
+   - Detect and list all equipment tag IDs (e.g. P-101A, E-204, V-102, TK-501, MOV-104), valve codes, and sensor labels.
+   - List key mechanical/electrical components visible.
+
+2. 📊 **READINGS, GAUGES & OPERATIONAL STATE:**
+   - For analog/digital gauges, read exact needle positions, digital values, measurement units (bar, psi, °C, kg/cm², RPM, % level).
+   - Identify normal vs alert ranges (green/red zones) if marked on dial.
+   - Note valve positions (Open / Closed / Throttled).
+
+3. 🔄 **FLOW CONNECTIVITY & PROCESS LOGIC (If Diagram/P&ID):**
+   - Trace line flows from inlet to outlet.
+   - Identify bypass lines, relief valves (PSV), interlocks, and sensor connections.
+
+4. 🔍 **CONDITION & ANOMALY ASSESSMENT (If Physical Asset Photo):**
+   - Inspect for surface corrosion, fouling, physical deformation, leakages, loose connections, or safety hazards.
+
+5. 📈 **CONFIDENCE & SUMMARY:**
+   - Summarize key findings with professional clarity.
+   - Conclude with: **Confidence:** X/10 (based on image clarity and legibility)."""
 
 EQUIPMENT_REGEX_COMPILED = re.compile(EQUIPMENT_TAG_REGEX, re.IGNORECASE)
+
+
+def _enhance_image_quality(img):
+    """
+    Applies subtle adaptive contrast enhancement and sharpening to make fine technical lines,
+    needle pointers, and small text tags extremely crisp for VL patch encoders.
+    """
+    try:
+        from PIL import ImageEnhance, ImageFilter
+        
+        # Mild sharpening to clarify blurry tag numbers and gauge needles
+        img = img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=3))
+        
+        # Slight contrast boost for readable text on technical diagrams
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.15)
+    except Exception as e:
+        logger.debug(f"[VISION] Enhancement filter skipped: {e}")
+    return img
 
 
 def encode_image_to_base64(file_path: str) -> Optional[str]:
     """
     Encodes an image or PDF file to a base64 string for multimodal inference.
     Supports PNG, JPG, JPEG, TIFF, BMP, WEBP, and single/multi-page PDFs.
-    Automatically normalizes minimum dimensions (>= 56x56) for Qwen2.5-VL patch encoder.
+    Ensures high-resolution detail retention, crisp contrast, and dimensions >= 56x56.
     """
     try:
         if not file_path:
@@ -182,18 +219,24 @@ def encode_image_to_base64(file_path: str) -> Optional[str]:
                 # Ensure minimum 56x56 dimensions for VL patch embeddings
                 if img.width < 56 or img.height < 56:
                     img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
-                max_dim = 1920
+                
+                # Apply quality enhancement
+                img = _enhance_image_quality(img)
+
+                # Keep higher resolution threshold for technical blueprints (up to 2560px)
+                max_dim = 2560
                 ratio = min(max_dim / img.width, max_dim / img.height)
                 if ratio < 1.0:
                     new_size = (int(img.width * ratio), int(img.height * ratio))
                     img = img.resize(new_size, Image.LANCZOS)
+                
                 buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=90)
+                img.save(buf, format="JPEG", quality=95, subsampling=0)
                 return base64.b64encode(buf.getvalue()).decode("utf-8")
             except Exception:
                 return clean_b64
 
-        # Check if valid file path (only for reasonable path lengths)
+        # Check if valid file path
         if len(str(file_path)) < 260:
             p = Path(file_path)
             if p.exists() and p.is_file():
@@ -209,13 +252,14 @@ def encode_image_to_base64(file_path: str) -> Optional[str]:
                                 img = Image.open(io.BytesIO(img_obj.data)).convert("RGB")
                                 if img.width < 56 or img.height < 56:
                                     img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
+                                img = _enhance_image_quality(img)
                                 buf = io.BytesIO()
-                                img.save(buf, format="JPEG", quality=90)
+                                img.save(buf, format="JPEG", quality=95, subsampling=0)
                                 return base64.b64encode(buf.getvalue()).decode("utf-8")
                     except Exception as pdf_err:
                         logger.warning(f"[VISION/OCR] PDF image extraction fallback for {p.name}: {pdf_err}")
                 
-                # Standard image handling with RGB normalization & smart resizing
+                # Standard image handling with high-fidelity enhancement
                 raw_bytes = p.read_bytes()
                 try:
                     img = Image.open(io.BytesIO(raw_bytes))
@@ -223,14 +267,18 @@ def encode_image_to_base64(file_path: str) -> Optional[str]:
                         img = img.convert("RGB")
                     if img.width < 56 or img.height < 56:
                         img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
-                    max_dim = 1920
+                    
+                    # Apply quality enhancement filter
+                    img = _enhance_image_quality(img)
+
+                    max_dim = 2560
                     ratio = min(max_dim / img.width, max_dim / img.height)
                     if ratio < 1.0:
                         new_size = (int(img.width * ratio), int(img.height * ratio))
                         img = img.resize(new_size, Image.LANCZOS)
                     
                     buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=90)
+                    img.save(buf, format="JPEG", quality=95, subsampling=0)
                     norm_bytes = buf.getvalue()
                     return base64.b64encode(norm_bytes).decode("utf-8")
                 except Exception:
@@ -573,11 +621,11 @@ async def handle_vision_mode(
 
     yield {"token": f"🔍 Reading image features with {VISION_MODEL_NAME}...\n\n"}
 
-    # Run non-streaming or fast extraction via Gemma
+    # Run non-streaming high-precision extraction via Vision Model
     raw_vision_output = await call_ollama(
         vision_messages,
         stream=False,
-        temperature=0.1 if is_ocr else 0.3,
+        temperature=0.05 if is_ocr else 0.15,
         think=False,
         images=image_base64_list if image_base64_list else None,
         model=VISION_MODEL_NAME,
