@@ -92,13 +92,9 @@ def execute_python_sandbox(code: str, job_id: str = None, stdin_input: Optional[
     isolated = False
     
     # Standardize input stream data
-    input_data = (stdin_input if stdin_input is not None else "").strip()
-    if input_data:
-        if not input_data.endswith("\n"):
-            input_data += "\n"
-    else:
-        # Default mock input for empty stdin to prevent EOFError when script calls input()
-        input_data = "Demo User\n"
+    input_data = stdin_input if stdin_input is not None else ""
+    if input_data and not input_data.endswith("\n"):
+        input_data += "\n"
 
     if docker_active:
         abs_path = str(job_dir.resolve())

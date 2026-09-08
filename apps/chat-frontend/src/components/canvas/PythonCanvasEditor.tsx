@@ -340,8 +340,11 @@ if __name__ == "__main__":
             </pre>
 
             {/* Interactive STDIN Input Bar if input() is requested or needed */}
-            <div className="px-3 py-1.5 bg-[#0b1222] border-t border-slate-800 flex items-center gap-2">
-              <span className="text-[11px] font-mono text-emerald-400 font-semibold shrink-0">STDIN &gt;</span>
+            <div className="px-3 py-2 bg-[#090f1f] border-t border-slate-800 flex items-center gap-2">
+              <span className="text-[11px] font-mono text-emerald-400 font-bold shrink-0 flex items-center gap-1">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-ping" />
+                STDIN &gt;
+              </span>
               <input
                 type="text"
                 value={stdinInput}
@@ -351,13 +354,13 @@ if __name__ == "__main__":
                     handleRunCode();
                   }
                 }}
-                placeholder="Type interactive inputs for input() here and click Rerun or press Enter..."
-                className="flex-1 bg-[#050811] text-xs font-mono text-white px-2.5 py-1 rounded border border-slate-700/80 focus:border-emerald-500 focus:outline-none"
+                placeholder="Enter input for input() statement here..."
+                className="flex-1 bg-[#050811] text-xs font-mono text-white px-3 py-1.5 rounded-lg border border-slate-700/80 focus:border-emerald-500 focus:outline-none placeholder:text-slate-500"
               />
               <button
-                onClick={handleRunCode}
+                onClick={() => handleRunCode()}
                 disabled={isRunning}
-                className="px-2.5 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white font-medium text-[11px] transition-colors shrink-0"
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] transition-all cursor-pointer shrink-0 disabled:opacity-50"
               >
                 Send & Run
               </button>
