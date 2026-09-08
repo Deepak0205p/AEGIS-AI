@@ -637,8 +637,11 @@ async def handle_vision_mode(
     
     # Handle empty or attachment-only user prompts
     clean_user_prompt = user_message.strip() if user_message else ""
-    if not clean_user_prompt or re.match(r"^\s*(analyze attached:?|inspect attached:?|attached:?|image:?)\s*[\w\.\-_,\s]*$", clean_user_prompt, re.IGNORECASE):
-        clean_user_prompt = "Examine this image in full detail. Identify and describe all visible components, equipment tags, process flows, vessels, instruments, and readings."
+    if not clean_user_prompt or re.match(r"^\s*(analyze attached:?|inspect attached:?|attached:?|image:?|document:?)\s*[\w\.\-_,\s]*$", clean_user_prompt, re.IGNORECASE):
+        if is_ocr:
+            clean_user_prompt = "Perform complete OCR and transcribe all text, tables, dates, numbers, and form data from this document verbatim."
+        else:
+            clean_user_prompt = "Examine this image in full detail. Identify and describe all visible components, equipment tags, process flows, vessels, instruments, and readings."
 
     vision_messages = [
         {"role": "system", "content": system_prompt},
