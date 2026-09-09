@@ -103,6 +103,18 @@ export function Header() {
           <span className="text-xs font-mono text-gray-500 dark:text-[#888888]">
             {deploymentMode} ({hostIp}:{port})
           </span>
+          <span className="text-gray-300 dark:text-[#333333]">/</span>
+          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800/60 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+            MULTI-DOMAIN ACTIVE
+          </span>
+          <Link
+            href="/monitor"
+            className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800/60 flex items-center gap-1 transition-colors"
+          >
+            <Shield className="w-3 h-3 text-rose-500" />
+            SENTINEL MONITOR
+          </Link>
         </div>
 
         {/* Right: User Badge, Auth Method, Theme Switcher & Air-Gap Pill */}

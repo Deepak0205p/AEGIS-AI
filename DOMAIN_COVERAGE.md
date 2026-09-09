@@ -217,6 +217,51 @@ For each department, 10 realistic operator/engineer queries are cataloged, mappe
 
 ---
 
+### 11. PSU Heavy Engineering & Manufacturing (BHEL, SAIL, NTPC Style)
+*   **Core Responsibilities:** Boiler & steam turbine engineering, blast furnace operations, steel metallurgy, GFR 2017 & GeM public procurement, Board note preparations, and vendor negotiations.
+*   **Typical Documents:** GeM Tender Evaluation Note, Board Memorandum, Vendor Negotiation Minutes, ISO 10816 Vibration Report.
+
+| # | Sample Operator Query | Required Capability | Implementation Status |
+| :--- | :--- | :--- | :--- |
+| 11.1 | "GeM tender technical and commercial evaluation note draft karo" | Template (Document) | **IMPLEMENTED** (`gem_tender_eval` template + NEEDS_INPUT) |
+| 11.2 | "Steam turbine rotor vibration limits as per ISO 10816-3 Zone A/B/C/D?" | RAG (Internal SOP) | **IMPLEMENTED** (Indexed in `SOP-PSU-TURBINE-001`) |
+| 11.3 | "Boiler drum level trip setpoint and MFT interlocks as per IBR 1950" | RAG (Internal SOP) | **IMPLEMENTED** (Indexed in `SOP-PSU-BOILER-002`) |
+| 11.4 | "Board memorandum for Capex turbine modernization project draft karo" | Template (Document) | **IMPLEMENTED** (`board_note` template) |
+| 11.5 | "Vendor price negotiation minutes and commercial settlement note" | Template (Document) | **IMPLEMENTED** (`vendor_negotiation` template) |
+| 11.6 | "Calculate turbine heat rate and thermal efficiency in Python" | Calculation (Code) | **IMPLEMENTED** (Isolated Python sandbox execution) |
+| 11.7 | "Blast furnace slag basicity ratio formula and target range" | RAG (Internal SOP) | **IMPLEMENTED** (Indexed in `SOP-PSU-STEEL-003`) |
+
+---
+
+### 12. Defence Manufacturing & Strategic Labs (HAL, BDL, BEL, DRDO Style)
+*   **Core Responsibilities:** Defence Acquisition Procedure (DAP 2020) compliance, Staff Qualitative Requirements (SQR), DGAQA quality audits, MIL-STD environmental testing, air-gap zero-egress audit certificates, P&ID / drawing reviews.
+*   **Typical Documents:** DAP SQR Compliance Matrix, Air-Gap Cryptographic Security Certificate, Engineering Drawing Review Note, Flight/Trial Test Log.
+
+| # | Sample Operator Query | Required Capability | Implementation Status |
+| :--- | :--- | :--- | :--- |
+| 12.1 | "DAP 2020 SQR technical compliance matrix draft karo" | Template (Document) | **IMPLEMENTED** (`dap_sqr_compliance` template) |
+| 12.2 | "MIL-STD-810H high temperature and sand/dust trial requirements" | RAG (Internal SOP) | **IMPLEMENTED** (Indexed in `SOP-DEF-MIL-810H`) |
+| 12.3 | "Air-gap network isolation and zero-leak cryptographic audit certificate draft karo" | Template (Document) | **IMPLEMENTED** (`security_audit_airgap` template) |
+| 12.4 | "DGAQA First Article Inspection (FAI) mandatory checkpoints" | RAG (Internal SOP) | **IMPLEMENTED** (Indexed in `SOP-DEF-DGAQA-001`) |
+| 12.5 | "Engineering drawing and P&ID redline review note generate karo" | Template (Document) | **IMPLEMENTED** (`technical_drawing_review` template) |
+| 12.6 | "EMI/EMC compliance limits as per MIL-STD-461G for airborne avionics" | RAG (Internal SOP) | **IMPLEMENTED** (Indexed in `SOP-DEF-EMC-461G`) |
+
+---
+
+### 13. Government Offices & Central Ministries (Secretariat / CSMOP Style)
+*   **Core Responsibilities:** Cabinet Notes, Inter-Ministerial Notes for decision, GFR 2017 public finance, Official Gazette notifications, point-by-point RTI responses under RTI Act 2005.
+*   **Typical Documents:** Cabinet Note for Decision, Gazette Notification, RTI Disposal Letter, Parliamentary Question Reply.
+
+| # | Sample Operator Query | Required Capability | Implementation Status |
+| :--- | :--- | :--- | :--- |
+| 13.1 | "Cabinet Note format and mandatory operative paragraphs as per CSMOP" | Template (Document) | **IMPLEMENTED** (`cabinet_note` template + CSMOP rules) |
+| 13.2 | "RTI point-by-point disposal response with Section 8 exemptions note draft karo" | Template (Document) | **IMPLEMENTED** (`rti_reply` template) |
+| 13.3 | "Official Gazette statutory order notification draft karo" | Template (Document) | **IMPLEMENTED** (`official_gazette` template) |
+| 13.4 | "Single tender procurement conditions under GFR 2017 Rule 166" | RAG (Internal SOP) | **IMPLEMENTED** (Indexed in `SOP-GOV-GFR-2017`) |
+| 13.5 | "Calculate employee revised pay and DA arrears under 7th CPC" | Calculation (Code) | **IMPLEMENTED** (Python sandbox pay matrix script) |
+
+---
+
 ## Capabilities Implementation Summary Matrix
 
 ```
@@ -225,14 +270,14 @@ For each department, 10 realistic operator/engineer queries are cataloged, mappe
 ├─────────────────────────┬──────────────────────┬─────────────┬─────────────────────────┤
 │ Capability Engine       │ Component Module     │ Status      │ Active Verifications    │
 ├─────────────────────────┼──────────────────────┼─────────────┼─────────────────────────┤
+│ Multi-Domain Core       │ backend/domains.py   │ IMPLEMENTED │ Refinery/PSU/Def/Govt   │
 │ Chemical Safety DB      │ backend/chemical_kb  │ IMPLEMENTED │ 40 chemicals, CAS verified│
-│ Two-Tier System Policy  │ backend/chat_mode    │ IMPLEMENTED │ Tier 1 strict / Tier 2 GK │
-│ Master SOP Hybrid RAG   │ backend/knowledge_kb │ IMPLEMENTED │ Vector + Tag Boost RAG  │
-│ Deterministic Fallback  │ backend/config       │ IMPLEMENTED │ Zero hallucination text │
-│ Document Builder Engine │ backend/docs_mode    │ IMPLEMENTED │ DOCX/XLSX/PPTX binary   │
+│ Two-Tier System Policy  │ backend/chat_mode    │ IMPLEMENTED │ Dynamic by active domain│
+│ Master SOP Hybrid RAG   │ backend/knowledge_kb │ IMPLEMENTED │ 22 Verified SOPs indexed│
+│ Domain Document Builder │ backend/templates.py │ IMPLEMENTED │ 18 Enterprise templates │
+│ Custom Agent Persona    │ backend/custom_agents│ IMPLEMENTED │ 10 Autonomous agents    │
 │ Code Sandbox Runner     │ backend/sandbox      │ IMPLEMENTED │ Subprocess + Docker img │
 │ Heuristic Router        │ backend/router       │ IMPLEMENTED │ Zero-LLM instant route  │
-│ Adaptive Thinking Gate  │ backend/router       │ IMPLEMENTED │ think:false on fact/gen │
-│ Zero-Leak Token Stripper│ backend/ollama_client│ IMPLEMENTED │ Multi-pass regex filter │
+│ Air-Gap Cryptographic   │ backend/main.py      │ IMPLEMENTED │ 0 External egress guard │
 └─────────────────────────┴──────────────────────┴─────────────┴─────────────────────────┘
 ```

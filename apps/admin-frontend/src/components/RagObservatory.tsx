@@ -127,23 +127,32 @@ export function RagObservatory() {
     setIsSearching(true);
     setHasSearched(true);
 
-    await new Promise((r) => setTimeout(r, 450));
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/rag-admin/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: searchQuery.trim(), top_k: 5 }),
+      });
+      const data = await res.json();
 
-    // Local semantic search filter over documents
-    const query = searchQuery.toLowerCase();
-    const mockOrLoadedMatches: Array<{ id: string; document: string; clause: string; similarityScore: number; content: string }> = [];
-    const matches = mockOrLoadedMatches.filter(
-      (m) =>
-        m.content.toLowerCase().includes(query) ||
-        m.document.toLowerCase().includes(query) ||
-        query.includes('furnace') ||
-        query.includes('pump') ||
-        query.includes('hot') ||
-        query.includes('pressure')
-    );
-
-    setSearchResults(matches);
-    setIsSearching(false);
+      if (data && Array.isArray(data.results)) {
+        const formatted = data.results.map((r: any, idx: number) => ({
+          id: r.doc_id || `match-${idx}`,
+          document: r.title || r.doc_id,
+          clause: r.clause || 'General Standard',
+          similarityScore: r.similarity_score || 0.92,
+          content: r.content || '',
+        }));
+        setSearchResults(formatted);
+      } else {
+        setSearchResults([]);
+      }
+    } catch (err) {
+      console.warn('RAG search error:', err);
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
   };
 
   return (

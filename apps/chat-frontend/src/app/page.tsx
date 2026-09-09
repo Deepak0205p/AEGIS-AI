@@ -40,13 +40,16 @@ import {
   Moon,
   RotateCcw,
   X,
-  Image as ImageIcon
+  Image as ImageIcon,
+  AlertTriangle,
+  Lightbulb
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDeliverableStore } from '@/store/useDeliverableStore';
 import { useThemeStore } from '@/store/useThemeStore';
 import { ArtifactsModal, getFileIcon, getBadgeColor } from '@/components/ArtifactsModal';
 import { SearchChatsModal } from '@/components/SearchChatsModal';
+import { FeedbackModal } from '@/components/chat/FeedbackModal';
 import { RevealBrand, RevealLogoIcon } from '@/components/RevealLogo';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { DocumentCanvasPanel } from '@/components/canvas/DocumentCanvasPanel';
@@ -458,10 +461,19 @@ export default function GeminiReplicaChatApp() {
   const { toggle: toggleSidebar } = useSidebarStore();
   const { user, isAuthenticated, isLoading: isAuthLoading, initialize: initAuth } = useAuthStore();
 
-  // Sync initialSessionId from dynamic route /chat/[id]
+  // Sync initialSessionId from dynamic route /chat/[id], or start fresh on root '/'
   useEffect(() => {
     if (initialSessionId) {
       selectSession(initialSessionId);
+    } else if (typeof window !== 'undefined' && window.location.pathname === '/') {
+      // On root '/', start with clean empty welcome hero screen
+      useChatStore.setState({
+        activeSessionId: '',
+        messages: [],
+        activeTraceSteps: [],
+        currentInput: '',
+        isStreaming: false
+      });
     }
   }, [initialSessionId, selectSession]);
 
@@ -472,7 +484,11 @@ export default function GeminiReplicaChatApp() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pidFileInputRef = useRef<HTMLInputElement>(null);
+  const spreadsheetFileInputRef = useRef<HTMLInputElement>(null);
+  const codeFileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [showArtifactPickerModal, setShowArtifactPickerModal] = useState(false);
 
   const hasMessages = Array.isArray(messages) && messages.length > 0;
 
@@ -719,7 +735,7 @@ export default function GeminiReplicaChatApp() {
     });
 
     const activeAgentId = useCustomAgentStore.getState().activeAgentId;
-    socketManager.sendChatTask(displayPrompt, attachmentPayload, activeModelRole, activeAgentId || undefined);
+    socketManager.sendChatTask(displayPrompt, attachmentPayload, activeModelRole, false, undefined, undefined, activeAgentId || undefined);
     if (typeof window !== 'undefined' && window.location.pathname === '/') {
       const currentActiveId = useChatStore.getState().activeSessionId;
       if (currentActiveId) {
@@ -765,6 +781,16 @@ export default function GeminiReplicaChatApp() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showArtifactsModal, setShowArtifactsModal] = useState(false);
+  const [feedbackModal, setFeedbackModal] = useState<{
+    isOpen: boolean;
+    type: 'ERROR' | 'SUGGESTION';
+    messageId?: string;
+    chatId?: string;
+    messageContent?: string;
+  }>({
+    isOpen: false,
+    type: 'ERROR',
+  });
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [activeModelRole, setActiveModelRole] = useState<'orchestrator' | 'code' | 'vision' | 'docs' | 'excel' | 'ppt' | 'ocr'>('orchestrator');
   const [showModelBoard, setShowModelBoard] = useState(false);
@@ -804,7 +830,9 @@ export default function GeminiReplicaChatApp() {
 
   useEffect(() => {
     if (!isAuthLoading && !isAuthenticated) {
-      router.replace('/login');
+      if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+        router.replace('/login');
+      }
     }
   }, [isAuthLoading, isAuthenticated, router]);
 
@@ -812,13 +840,26 @@ export default function GeminiReplicaChatApp() {
     ? sessions.filter(s => s.title?.toLowerCase().includes(searchQuery.toLowerCase()) || s.messages.some(m => m.content.toLowerCase().includes(searchQuery.toLowerCase())))
     : sessions;
 
-  if (isAuthLoading || !isAuthenticated) {
+  if (isAuthLoading) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-[#070709] text-white">
+      <div className="flex h-screen w-screen items-center justify-center bg-white text-slate-900 dark:bg-[#070709] dark:text-white">
         <div className="flex flex-col items-center space-y-3">
           <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-xs font-mono text-slate-400">
-            {isAuthLoading ? 'Initializing Sovereign Security Context...' : 'Redirecting to Operator Login (/login)...'}
+          <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+            Initializing Sovereign Security Context...
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-white text-slate-900 dark:bg-[#070709] dark:text-white">
+        <div className="flex flex-col items-center space-y-3">
+          <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+            Redirecting to Operator Login (/login)...
           </span>
         </div>
       </div>
@@ -831,6 +872,7 @@ export default function GeminiReplicaChatApp() {
       <AppSidebar
         onOpenSearchModal={() => setShowSearchModal(true)}
         activePage={activeView}
+        onOpenFeedbackModal={(type) => setFeedbackModal({ isOpen: true, type })}
       />
 
       {/* 2. Main Window (Chat Window or In-Place Artifacts Vault) */}
@@ -1347,34 +1389,77 @@ export default function GeminiReplicaChatApp() {
                                           className="flex items-center gap-2.5 text-left cursor-pointer min-w-0"
                                           title={`Open & Edit ${displayName} Live in Canvas`}
                                         >
-                                          <div className="h-7 w-7 rounded-lg bg-slate-100 dark:bg-white/[0.06] flex items-center justify-center shrink-0">
+                                          <div className="h-8 w-8 rounded-xl bg-slate-100 dark:bg-white/[0.06] flex items-center justify-center shrink-0">
                                             <Sparkles className={`h-4 w-4 ${themeStyle.iconColor} transition-transform group-hover:rotate-12`} />
                                           </div>
                                           <div className="flex flex-col min-w-0">
-                                            <div className="flex items-center gap-1.5">
+                                            <div className="flex items-center gap-2">
                                               <span className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate max-w-[220px]">
                                                 {displayName}
                                               </span>
-                                              <span className={`px-1.5 py-0.2 rounded-md text-[9px] font-mono font-semibold uppercase border ${themeStyle.badge}`}>
+                                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase border ${themeStyle.badge}`}>
                                                 {rawExt}
                                               </span>
                                             </div>
-                                            <span className="text-[10px] text-slate-500 dark:text-slate-400 group-hover:text-blue-600 dark:group-hover:text-[#a8c7fa] transition-colors font-medium">
-                                              Click to Edit in Workspace →
-                                            </span>
+                                             <div className="flex items-center gap-1.5 mt-0.5">
+                                               {(() => {
+                                                 const delivObj = matchedDeliv && typeof matchedDeliv === 'object' ? matchedDeliv : null;
+                                                 const vStatus = delivObj?.verification_status || 'PENDING_STAGE_1';
+                                                 if (vStatus === 'VERIFIED') {
+                                                   return (
+                                                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                                                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                                       VERIFIED
+                                                     </span>
+                                                   );
+                                                 }
+                                                 if (vStatus === 'PENDING_STAGE_2') {
+                                                   return (
+                                                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-600 dark:text-purple-400">
+                                                       <span className="h-1.5 w-1.5 rounded-full bg-purple-500 animate-pulse" />
+                                                       STEP 2 SIGN-OFF
+                                                     </span>
+                                                   );
+                                                 }
+                                                 if (vStatus === 'REJECTED') {
+                                                   return (
+                                                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-600 dark:text-rose-400">
+                                                       <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                                                       REJECTED
+                                                     </span>
+                                                   );
+                                                 }
+                                                 return (
+                                                   <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                                                     <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                                     PENDING L1 REVIEW
+                                                   </span>
+                                                 );
+                                               })()}
+                                             </div>
                                           </div>
                                         </button>
 
-                                        {/* Direct Quick Download Icon */}
-                                        <a
-                                          href={downloadUrl}
-                                          download
-                                          title={`Download ${displayName}`}
-                                          className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.08] text-slate-400 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors shrink-0 ml-1"
-                                          onClick={(e) => e.stopPropagation()}
-                                        >
-                                          <Download className="h-4 w-4" />
-                                        </a>
+                                        {/* Actions: Open & Direct Download */}
+                                        <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => openCanvas(matchedDeliv || cleanId)}
+                                            className="px-2.5 py-1 rounded-xl bg-blue-50 hover:bg-blue-100 dark:bg-blue-500/10 dark:hover:bg-blue-500/20 text-blue-600 dark:text-[#a8c7fa] border border-blue-200 dark:border-blue-500/30 text-[11px] font-bold transition-all cursor-pointer"
+                                            title="Open and edit live"
+                                          >
+                                            Open ↗
+                                          </button>
+                                          <a
+                                            href={downloadUrl}
+                                            download
+                                            title={`Download ${displayName}`}
+                                            className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.08] text-slate-400 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            <Download className="h-4 w-4" />
+                                          </a>
+                                        </div>
                                       </div>
                                     );
                                   })}
@@ -1382,10 +1467,10 @@ export default function GeminiReplicaChatApp() {
                               );
                             })()}
 
-                            {/* Action Bar (Copy) */}
+                            {/* Action Bar (Copy, Report Error, Suggest Improvement) */}
                             {!isUser && msg.content && (
-                              <div className="flex items-center w-full pt-1 text-slate-400 dark:text-[#8e918f]">
-                                <div className="flex items-center space-x-1">
+                              <div className="flex items-center w-full pt-1.5 text-slate-400 dark:text-[#8e918f]">
+                                <div className="flex items-center space-x-1.5">
                                   <button
                                     onClick={() => handleCopy(msg.id, msg.content)}
                                     aria-label="Copy response"
@@ -1456,11 +1541,40 @@ export default function GeminiReplicaChatApp() {
 
         {/* 3. Authentic Single-Line Gemini Pill Input Dock with Integrated Model Board */}
         <div className="max-w-4xl mx-auto w-full px-3 sm:px-4 pt-1 z-20 shrink-0 pb-36 sm:pb-5 relative">
+          {/* 1. Category-specific Local File Upload Inputs */}
+          {/* General Document input (PDF, DOCX, TXT, DOC, PPTX) */}
           <input
             type="file"
             ref={fileInputRef}
             onChange={handleFileChange}
-            accept=".pdf,.png,.jpg,.jpeg"
+            accept=".pdf,.docx,.doc,.txt,.pptx,.ppt,.md"
+            className="hidden"
+          />
+
+          {/* P&ID / Schematics / CAD / Vision input (PNG, JPG, JPEG, WEBP, SVG, DXF, DWG, PDF) */}
+          <input
+            type="file"
+            ref={pidFileInputRef}
+            onChange={handleFileChange}
+            accept=".png,.jpg,.jpeg,.webp,.svg,.bmp,.pdf,.dxf,.dwg"
+            className="hidden"
+          />
+
+          {/* Spreadsheets / Data input (XLSX, XLS, CSV, JSON, TSV, ODS) */}
+          <input
+            type="file"
+            ref={spreadsheetFileInputRef}
+            onChange={handleFileChange}
+            accept=".xlsx,.xls,.csv,.json,.tsv,.ods"
+            className="hidden"
+          />
+
+          {/* Code & Scripts input (PY, IPYNB, SQL, JS, TS, CPP, RS, SH, YAML) */}
+          <input
+            type="file"
+            ref={codeFileInputRef}
+            onChange={handleFileChange}
+            accept=".py,.ipynb,.sql,.js,.ts,.tsx,.jsx,.cpp,.c,.h,.rs,.sh,.bash,.yaml,.yml,.json,.env"
             className="hidden"
           />
 
@@ -1656,54 +1770,102 @@ export default function GeminiReplicaChatApp() {
                         transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
                         className="absolute bottom-full left-0 mb-3 w-64 max-w-[calc(100vw-32px)] bg-white border border-slate-200 dark:bg-[#0d0d0e] dark:border-[#222225] rounded-2xl p-1.5 shadow-2xl z-50 backdrop-blur-xl"
                       >
+                        {/* 1. Documents (PDF, DOCX, TXT, PPTX) */}
                         <button
                           type="button"
                           onClick={() => {
                             setShowAttachMenu(false);
                             fileInputRef.current?.click();
                           }}
-                          className="w-full flex items-center space-x-3 px-3 py-3 rounded-xl hover:bg-slate-100 active:bg-slate-200 dark:hover:bg-[#1a1a1c] dark:active:bg-[#282a2c] text-xs text-slate-900 hover:text-blue-600 dark:text-[#e3e3e3] dark:hover:text-white transition-colors group text-left min-h-[44px] cursor-pointer"
+                          className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl hover:bg-slate-100 active:bg-slate-200 dark:hover:bg-[#1a1a1c] dark:active:bg-[#282a2c] text-xs text-slate-900 hover:text-blue-600 dark:text-[#e3e3e3] dark:hover:text-white transition-colors group text-left min-h-[42px] cursor-pointer"
                         >
                           <div className="h-7 w-7 rounded-lg bg-blue-50 dark:bg-[#080808] flex items-center justify-center text-blue-600 dark:text-[#a8c7fa] group-hover:scale-105 transition-transform border border-blue-200 dark:border-[#1a1a1c] shrink-0">
                             <FileText className="h-3.5 w-3.5" />
                           </div>
                           <div>
-                            <div className="font-bold">Upload from device</div>
-                            <div className="text-[10px] text-slate-500 dark:text-[#8e918f]">PDF, TXT, DOCX files</div>
+                            <div className="font-bold">Documents & SOPs</div>
+                            <div className="text-[10px] text-slate-500 dark:text-[#8e918f]">PDF, DOCX, TXT, PPTX</div>
                           </div>
                         </button>
 
+                        {/* 2. P&ID / Schematics / CAD / Vision */}
                         <button
                           type="button"
                           onClick={() => {
                             setShowAttachMenu(false);
-                            fileInputRef.current?.click();
+                            pidFileInputRef.current?.click();
                           }}
-                          className="w-full flex items-center space-x-3 px-3 py-3 rounded-xl hover:bg-slate-100 active:bg-slate-200 dark:hover:bg-[#1a1a1c] dark:active:bg-[#282a2c] text-xs text-slate-900 hover:text-emerald-600 dark:text-[#e3e3e3] dark:hover:text-white transition-colors group text-left min-h-[44px] cursor-pointer"
+                          className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl hover:bg-slate-100 active:bg-slate-200 dark:hover:bg-[#1a1a1c] dark:active:bg-[#282a2c] text-xs text-slate-900 hover:text-emerald-600 dark:text-[#e3e3e3] dark:hover:text-white transition-colors group text-left min-h-[42px] cursor-pointer"
                         >
                           <div className="h-7 w-7 rounded-lg bg-emerald-50 dark:bg-[#080808] flex items-center justify-center text-emerald-600 dark:text-emerald-400 group-hover:scale-105 transition-transform border border-emerald-200 dark:border-[#1a1a1c] shrink-0">
                             <Eye className="h-3.5 w-3.5" />
                           </div>
                           <div>
-                            <div className="font-bold">P&ID / Schematics</div>
-                            <div className="text-[10px] text-slate-500 dark:text-[#8e918f]">OCR & tag extraction</div>
+                            <div className="font-bold">P&ID / Schematics / CAD</div>
+                            <div className="text-[10px] text-slate-500 dark:text-[#8e918f]">PNG, JPG, SVG, DWG, DXF</div>
                           </div>
                         </button>
 
+                        {/* 3. Spreadsheets & Datasets */}
                         <button
                           type="button"
                           onClick={() => {
                             setShowAttachMenu(false);
-                            handleSend('Execute centrifugal pump hydraulic power verification in isolated Python sandbox.');
+                            spreadsheetFileInputRef.current?.click();
                           }}
-                          className="w-full flex items-center space-x-3 px-3 py-3 rounded-xl hover:bg-slate-100 active:bg-slate-200 dark:hover:bg-[#1a1a1c] dark:active:bg-[#282a2c] text-xs text-slate-900 hover:text-amber-600 dark:text-[#e3e3e3] dark:hover:text-white transition-colors group text-left min-h-[44px] cursor-pointer"
+                          className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl hover:bg-slate-100 active:bg-slate-200 dark:hover:bg-[#1a1a1c] dark:active:bg-[#282a2c] text-xs text-slate-900 hover:text-teal-600 dark:text-[#e3e3e3] dark:hover:text-white transition-colors group text-left min-h-[42px] cursor-pointer"
                         >
-                          <div className="h-7 w-7 rounded-lg bg-amber-50 dark:bg-[#080808] flex items-center justify-center text-amber-600 dark:text-amber-400 group-hover:scale-105 transition-transform border border-amber-200 dark:border-[#1a1a1c] shrink-0">
-                            <Calculator className="h-3.5 w-3.5" />
+                          <div className="h-7 w-7 rounded-lg bg-teal-50 dark:bg-[#080808] flex items-center justify-center text-teal-600 dark:text-teal-400 group-hover:scale-105 transition-transform border border-teal-200 dark:border-[#1a1a1c] shrink-0">
+                            <FileSpreadsheet className="h-3.5 w-3.5" />
                           </div>
                           <div>
-                            <div className="font-bold">Engineering Sandbox</div>
-                            <div className="text-[10px] text-slate-500 dark:text-[#8e918f]">Run Python calculations</div>
+                            <div className="font-bold">Spreadsheets & Data</div>
+                            <div className="text-[10px] text-slate-500 dark:text-[#8e918f]">XLSX, XLS, CSV, JSON</div>
+                          </div>
+                        </button>
+
+                        {/* 4. Scripts & Code */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAttachMenu(false);
+                            codeFileInputRef.current?.click();
+                          }}
+                          className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl hover:bg-slate-100 active:bg-slate-200 dark:hover:bg-[#1a1a1c] dark:active:bg-[#282a2c] text-xs text-slate-900 hover:text-purple-600 dark:text-[#e3e3e3] dark:hover:text-white transition-colors group text-left min-h-[42px] cursor-pointer"
+                        >
+                          <div className="h-7 w-7 rounded-lg bg-purple-50 dark:bg-[#080808] flex items-center justify-center text-purple-600 dark:text-purple-400 group-hover:scale-105 transition-transform border border-purple-200 dark:border-[#1a1a1c] shrink-0">
+                            <Code className="h-3.5 w-3.5" />
+                          </div>
+                          <div>
+                            <div className="font-bold">Scripts & Code Files</div>
+                            <div className="text-[10px] text-slate-500 dark:text-[#8e918f]">Python, SQL, TS, Shell</div>
+                          </div>
+                        </button>
+
+                        {/* Divider */}
+                        <div className="h-px bg-slate-200/80 dark:bg-white/[0.08] my-1" />
+
+                        {/* 5. Load from Artifacts Vault (Directly load deliverable into canvas / workspace) */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAttachMenu(false);
+                            useDeliverableStore.getState().fetchDiskDeliverables();
+                            setShowArtifactPickerModal(true);
+                          }}
+                          className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl bg-gradient-to-r from-blue-50/80 to-purple-50/80 hover:from-blue-100/90 hover:to-purple-100/90 dark:from-blue-950/40 dark:to-purple-950/40 dark:hover:from-blue-900/60 dark:hover:to-purple-900/60 text-xs text-blue-900 dark:text-blue-200 transition-all group text-left min-h-[42px] cursor-pointer border border-blue-200/80 dark:border-blue-500/30"
+                        >
+                          <div className="h-7 w-7 rounded-lg bg-blue-600 text-white flex items-center justify-center group-hover:scale-105 transition-transform shadow-xs shrink-0">
+                            <Sparkles className="h-3.5 w-3.5" />
+                          </div>
+                          <div>
+                            <div className="font-bold flex items-center gap-1.5">
+                              <span>Load from Artifacts</span>
+                              <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-blue-200/70 dark:bg-blue-800 text-blue-900 dark:text-blue-100">
+                                VAULT
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 dark:text-blue-300/80">Open generated deliverables live</div>
                           </div>
                         </button>
                       </motion.div>
@@ -1797,10 +1959,123 @@ export default function GeminiReplicaChatApp() {
       onClose={() => setShowArtifactsModal(false)}
     />
 
+    {/* Quick Artifacts Loader Picker Modal */}
+    <AnimatePresence>
+      {showArtifactPickerModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowArtifactPickerModal(false)}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+          />
+
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 10 }}
+            transition={{ duration: 0.2 }}
+            className="relative w-full max-w-xl bg-white dark:bg-[#111216] border border-slate-200 dark:border-white/[0.12] rounded-3xl shadow-2xl overflow-hidden z-10 max-h-[85vh] flex flex-col"
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200/80 dark:border-white/[0.08]">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-xl bg-blue-600/10 dark:bg-blue-400/10 text-blue-600 dark:text-[#a8c7fa] flex items-center justify-center font-bold">
+                  <Sparkles className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">Load from Artifacts Vault</h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">Select any previously generated document to open & work live</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowArtifactPickerModal(false)}
+                className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/10 text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Modal Content / Artifacts List */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {deliverables.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 text-xs">
+                  No artifacts generated yet in this session.
+                </div>
+              ) : (
+                deliverables.map((deliv) => {
+                  const ext = (deliv.type || 'docx').toLowerCase();
+                  return (
+                    <div
+                      key={deliv.id}
+                      className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 hover:bg-slate-100/80 dark:bg-white/[0.03] dark:hover:bg-white/[0.07] border border-slate-200/60 dark:border-white/[0.06] transition-all group"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="h-9 w-9 rounded-xl bg-white dark:bg-[#1a1b22] border border-slate-200 dark:border-white/10 flex items-center justify-center shrink-0 shadow-2xs">
+                          {ext === 'xlsx' ? (
+                            <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                          ) : ext === 'pptx' ? (
+                            <Presentation className="h-4 w-4 text-orange-600" />
+                          ) : ext === 'py' ? (
+                            <Code className="h-4 w-4 text-amber-500" />
+                          ) : (
+                            <FileText className="h-4 w-4 text-blue-600" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate max-w-[280px]">
+                              {deliv.filename}
+                            </span>
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-semibold uppercase bg-slate-200/60 dark:bg-white/10 text-slate-700 dark:text-slate-300">
+                              {ext}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate max-w-[320px]">
+                            {deliv.summary || `${deliv.generating_model} • ${deliv.size_formatted}`}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowArtifactPickerModal(false);
+                            openCanvas(deliv);
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-xs transition-all active:scale-95 cursor-pointer flex items-center gap-1"
+                        >
+                          <Sparkles className="h-3 w-3" />
+                          <span>Open Live</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+
     {/* 4. Global Search Chats Command Palette Modal */}
     <SearchChatsModal
       isOpen={showSearchModal}
       onClose={() => setShowSearchModal(false)}
+    />
+
+    {/* Feedback & Error Reporting Modal */}
+    <FeedbackModal
+      isOpen={feedbackModal.isOpen}
+      initialType={feedbackModal.type}
+      messageId={feedbackModal.messageId}
+      chatId={feedbackModal.chatId}
+      messageContent={feedbackModal.messageContent}
+      onClose={() => setFeedbackModal(prev => ({ ...prev, isOpen: false }))}
     />
 
     {/* 5. Custom Agent Builder & Agentic Workflow Modal */}
@@ -1808,4 +2083,3 @@ export default function GeminiReplicaChatApp() {
   </div>
   );
 }
-

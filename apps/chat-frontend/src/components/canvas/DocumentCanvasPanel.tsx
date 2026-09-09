@@ -57,8 +57,13 @@ import {
   Globe,
   Braces,
   Terminal,
-  FileCode2
+  FileCode2,
+  Edit2,
+  Check as CheckIcon,
+  X as CancelIcon,
+  ShieldCheck
 } from 'lucide-react';
+import { useVerificationStore } from '@/store/useVerificationStore';
 
 export function DocumentCanvasPanel() {
   const {
@@ -70,9 +75,26 @@ export function DocumentCanvasPanel() {
     saveChanges,
     hasUnsavedChanges,
     isSaving,
+    renameActiveDeliverable,
   } = useCanvasStore();
 
   const { downloadDeliverable } = useDeliverableStore();
+  const [isEditingTitle, setIsEditingTitle] = React.useState(false);
+  const [editTitleValue, setEditTitleValue] = React.useState('');
+
+  React.useEffect(() => {
+    if (activeDeliverable?.filename) {
+      setEditTitleValue(activeDeliverable.filename);
+      setIsEditingTitle(false);
+    }
+  }, [activeDeliverable?.filename]);
+
+  const handleCommitRename = async () => {
+    if (editTitleValue.trim() && editTitleValue.trim() !== activeDeliverable?.filename) {
+      await renameActiveDeliverable(editTitleValue.trim());
+    }
+    setIsEditingTitle(false);
+  };
 
   if (!isOpen || !activeDeliverable) return null;
 
@@ -170,10 +192,10 @@ export function DocumentCanvasPanel() {
         animate={{ x: 0, opacity: 1 }}
         exit={{ x: '100%', opacity: 0 }}
         transition={{ type: 'spring', damping: 28, stiffness: 240 }}
-        className={`fixed md:relative inset-0 md:inset-auto bg-[#ffffff] border-l border-[#cbd5e1] dark:border-white/10 flex flex-col shadow-2xl transition-all duration-300 z-50 md:z-20 h-full overflow-hidden shrink-0 ${
+        className={`fixed md:relative inset-0 md:inset-auto bg-[#ffffff] border-l border-[#cbd5e1] dark:border-white/10 flex flex-col shadow-2xl transition-all duration-300 z-50 md:z-20 h-full overflow-hidden flex-1 ${
           isExpanded
             ? 'w-full fixed inset-0 md:absolute z-50 border-l-0'
-            : 'w-full md:w-[50vw] lg:w-[48vw] xl:w-[46vw]'
+            : 'w-full md:flex-1'
         }`}
       >
         {/* 1. Canvas Top Header (Clean Light Theme & Mobile Optimized) */}
@@ -185,9 +207,52 @@ export function DocumentCanvasPanel() {
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center space-x-1.5 sm:space-x-2">
-                <h2 className="text-xs sm:text-sm font-bold text-[#0f172a] truncate max-w-[120px] xs:max-w-[180px] sm:max-w-none">
-                  {activeDeliverable.filename}
-                </h2>
+                {isEditingTitle ? (
+                  <div className="flex items-center gap-1 min-w-0">
+                    <input
+                      type="text"
+                      value={editTitleValue}
+                      onChange={(e) => setEditTitleValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleCommitRename();
+                        if (e.key === 'Escape') setIsEditingTitle(false);
+                      }}
+                      autoFocus
+                      className="px-2 py-0.5 text-xs font-bold text-[#0f172a] bg-white border-2 border-blue-500 rounded-lg outline-none shadow-xs w-48 sm:w-64"
+                    />
+                    <button
+                      onClick={handleCommitRename}
+                      className="p-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 cursor-pointer"
+                      title="Confirm Rename"
+                    >
+                      <CheckIcon className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setIsEditingTitle(false)}
+                      className="p-1 rounded-md hover:bg-slate-100 text-slate-400 cursor-pointer"
+                      title="Cancel"
+                    >
+                      <CancelIcon className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 min-w-0 group/title">
+                    <h2
+                      onClick={() => setIsEditingTitle(true)}
+                      className="text-xs sm:text-sm font-bold text-[#0f172a] truncate max-w-[120px] xs:max-w-[180px] sm:max-w-none cursor-pointer hover:text-blue-600 transition-colors"
+                      title="Click to rename document"
+                    >
+                      {activeDeliverable.filename}
+                    </h2>
+                    <button
+                      onClick={() => setIsEditingTitle(true)}
+                      className="p-1 rounded-md text-slate-400 hover:text-blue-600 hover:bg-blue-50/80 transition-all cursor-pointer"
+                      title="Rename Document"
+                    >
+                      <Edit2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
                 <span className="px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold uppercase tracking-wider bg-[#f1f5f9] border border-[#cbd5e1] text-[#334155] shrink-0">
                   {ext.replace('.', '') || activeDeliverable.type}
                 </span>
@@ -218,6 +283,28 @@ export function DocumentCanvasPanel() {
 
           {/* Right: Actions */}
           <div className="flex items-center space-x-1 sm:space-x-2 shrink-0">
+            {/* Quick Human Verification Advance Trigger */}
+            <button
+              onClick={async () => {
+                await saveChanges(activeDeliverable.id);
+                useCanvasStore.getState().closeCanvas();
+                useVerificationStore.getState().openVerificationModal({
+                  file_id: activeDeliverable.id,
+                  chat_id: activeDeliverable.source_scenario || 'current',
+                  filename: activeDeliverable.filename,
+                  file_type: activeDeliverable.type,
+                  verification_status: activeDeliverable.verification_status || 'PENDING_STAGE_1',
+                  created_at: activeDeliverable.generated_timestamp || '',
+                  download_url: `/api/files/${activeDeliverable.id}`
+                });
+              }}
+              className="flex items-center space-x-1 sm:space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:hover:bg-blue-500/20 dark:text-[#a8c7fa] border border-blue-200 dark:border-blue-500/30 transition-all cursor-pointer shadow-xs"
+              title="Save changes and open 2-step verification review"
+            >
+              <ShieldCheck className="h-3.5 w-3.5 text-blue-600 dark:text-[#a8c7fa]" />
+              <span className="hidden sm:inline">Verification Review</span>
+            </button>
+
             <button
               onClick={() => saveChanges(activeDeliverable.id)}
               disabled={isSaving}

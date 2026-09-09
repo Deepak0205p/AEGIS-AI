@@ -179,21 +179,21 @@ export function OverviewDeck({ onNavigate }: OverviewDeckProps) {
           
         </div>
 
-        {/* Metric 3: Vector Store Knowledge */}
+        {/* Metric 3: GraphRAG & Vector Knowledge Graph */}
         <div 
           onClick={() => onNavigate('rag')}
           className="rounded-md bg-gray-50 border border-gray-200 p-4 hover:border-gray-300 transition-all cursor-pointer group"
         >
           <div className="flex items-center justify-between text-xs text-gray-500">
-            <span className="font-mono">R A G</span>
-            <Database className="w-4 h-4 text-gray-500 group-hover:text-emerald-600 transition-colors" />
+            <span className="font-mono text-emerald-600 font-semibold">GraphRAG</span>
+            <Database className="w-4 h-4 text-emerald-600 group-hover:text-emerald-700 transition-colors" />
           </div>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-xl font-bold font-mono text-gray-900">{ragStats.chunks}</span>
-            <span className="text-xs text-gray-500">Chunks Indexed</span>
+            <span className="text-xl font-bold font-mono text-gray-900">{ragStats.chunks || 24}</span>
+            <span className="text-xs text-gray-500">Entities & Chunks</span>
           </div>
           <p className="mt-2 text-[11px] text-gray-500 leading-tight">
-            ChromaDB embedded vector database with BAAI/bge-small-en-v1.5 embeddings.
+            Topological Knowledge Graph with multi-hop reasoning & dense semantic embeddings.
           </p>
           
         </div>

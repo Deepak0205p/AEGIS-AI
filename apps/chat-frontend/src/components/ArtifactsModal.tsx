@@ -14,7 +14,8 @@ import {
   Search,
   Layers,
   Sparkles,
-  Check
+  Check,
+  Edit3
 } from 'lucide-react';
 
 export function getFileIcon(type: DeliverableType, className = "h-5 w-5") {
@@ -58,13 +59,15 @@ export function ArtifactsModal({ isOpen, onClose }: ArtifactsModalProps) {
     selectedDeliverable,
     selectDeliverable,
     downloadDeliverable,
+    renameDeliverable,
     filterType,
     setFilterType,
-    searchQuery,
-    setSearchQuery
   } = useDeliverableStore();
 
+  const [searchQuery, setSearchQuery] = useState('');
   const [copiedHash, setCopiedHash] = useState(false);
+  const [isEditingModalName, setIsEditingModalName] = useState(false);
+  const [editModalNameVal, setEditModalNameVal] = useState('');
 
   if (!isOpen) return null;
 
@@ -226,9 +229,68 @@ export function ArtifactsModal({ isOpen, onClose }: ArtifactsModalProps) {
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <h3 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-[#f1f3f4] break-all">
-                          {activeItem.filename}
-                        </h3>
+                        {isEditingModalName ? (
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="text"
+                              value={editModalNameVal}
+                              onChange={(e) => setEditModalNameVal(e.target.value)}
+                              onKeyDown={async (e) => {
+                                if (e.key === 'Enter') {
+                                  if (editModalNameVal.trim() && editModalNameVal.trim() !== activeItem.filename) {
+                                    await renameDeliverable(activeItem.id, editModalNameVal.trim());
+                                  }
+                                  setIsEditingModalName(false);
+                                }
+                                if (e.key === 'Escape') setIsEditingModalName(false);
+                              }}
+                              autoFocus
+                              className="px-2.5 py-1 text-sm font-bold rounded-lg border-2 border-blue-500 bg-white dark:bg-[#121215] text-slate-900 dark:text-white outline-none w-56 sm:w-72"
+                            />
+                            <button
+                              onClick={async () => {
+                                if (editModalNameVal.trim() && editModalNameVal.trim() !== activeItem.filename) {
+                                  await renameDeliverable(activeItem.id, editModalNameVal.trim());
+                                }
+                                setIsEditingModalName(false);
+                              }}
+                              className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 hover:bg-blue-100 cursor-pointer"
+                              title="Save filename"
+                            >
+                              <Check className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => setIsEditingModalName(false)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
+                              title="Cancel"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 group/title">
+                            <h3
+                              onClick={() => {
+                                setEditModalNameVal(activeItem.filename);
+                                setIsEditingModalName(true);
+                              }}
+                              className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-[#f1f3f4] break-all cursor-pointer hover:text-blue-600 transition-colors"
+                              title="Click to rename document"
+                            >
+                              {activeItem.filename}
+                            </h3>
+                            <button
+                              onClick={() => {
+                                setEditModalNameVal(activeItem.filename);
+                                setIsEditingModalName(true);
+                              }}
+                              className="p-1 rounded-md text-slate-400 hover:text-blue-600 hover:bg-blue-50/80 transition-all cursor-pointer"
+                              title="Rename Document"
+                            >
+                              <Edit3 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
                         <span className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded-md border ${getBadgeColor(activeItem.type)}`}>
                           .{activeItem.type}
                         </span>

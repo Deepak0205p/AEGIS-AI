@@ -160,12 +160,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         set({ sessions: mysqlSessions });
 
-        // If no active session set, pick the first from MySQL and fetch its full messages
+        // Only fetch messages if user explicitly has an active session or opened /chat/[id]
         const currentActive = get().activeSessionId;
-        if (!currentActive && mysqlSessions.length > 0) {
-          const first = mysqlSessions[0];
-          await get().fetchSessionById(first.id);
-        } else if (currentActive) {
+        if (currentActive) {
           await get().fetchSessionById(currentActive);
         }
       }

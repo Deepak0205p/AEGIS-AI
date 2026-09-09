@@ -11,6 +11,7 @@ export interface UserProfile {
   department?: string;
   auth_method?: string;
   cert_serial?: string;
+  can_verify?: boolean;
 }
 
 interface AuthState {
@@ -129,7 +130,16 @@ export const useAuthStore = create<AuthState>()(
       }
     }),
     {
-      name: 'mrpl-auth-storage'
+      name: 'mrpl-auth-storage',
+      onRehydrateStorage: () => {
+        return (state) => {
+          if (state) {
+            state.initialize();
+          } else {
+            useAuthStore.setState({ isLoading: false });
+          }
+        };
+      }
     }
   )
 );

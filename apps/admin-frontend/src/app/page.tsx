@@ -59,6 +59,18 @@ const subsystemTiles = [
     icon: Users,
     description: 'Provision and manage operator logins with XAMPP MySQL and air-gapped sovereign SQLite sync.'
   },
+  {
+    title: 'Security & Activity Sentinel',
+    href: '/monitor',
+    icon: Shield,
+    description: 'Live audit of all user searches, chat queries, and file transfers. Instantly freeze/block suspicious accounts.'
+  },
+  {
+    title: 'Feedback & Error Triage',
+    href: '/feedback',
+    icon: MessageSquare,
+    description: 'Review operator error reports, SOP inaccuracies, and suggestions with live XAMPP MySQL resolution.'
+  },
 ];
 
 export default function WorkbenchHomePage() {

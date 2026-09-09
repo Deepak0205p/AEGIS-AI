@@ -46,10 +46,15 @@ THINK_ON_COMPLEX_CHAT = True
 MIN_RAG_SCORE = float(os.getenv("MIN_RAG_SCORE", "0.3"))
 RAG_CACHE_TTL_SECONDS = 600.0  # 10 minutes
 
+# Domain Configuration (defaults for backward compatibility; overridden by active domain)
+AEGIS_DOMAIN = os.getenv("AEGIS_DOMAIN", "refinery")
+
 # Universal equipment tag pattern (e.g. F-101, HEX-201, TK-1002, P-101A, MOV-104)
+# NOTE: Use get_active_equipment_regex() for domain-aware regex
 EQUIPMENT_TAG_REGEX = r"\b[A-Z]{1,4}[-]\d{2,5}[A-Z]?\b"
 
 # Domain technical keywords that trigger RAG search
+# NOTE: Use get_active_rag_keywords() for domain-aware keywords
 RAG_DOMAIN_KEYWORDS = [
     "sop", "manual", "procedure", "standard", "specification", "drawing",
     "pid", "inspection", "approval", "guideline", "policy", "shift",
@@ -62,6 +67,33 @@ DETERMINISTIC_FALLBACK_TEXT = (
     "Operational parameters for this query are not indexed in active Master SOPs (OISD/API/MRPL). "
     "Manual entry or Shift In-Charge sign-off required."
 )
+
+
+def get_active_equipment_regex() -> str:
+    """Returns equipment tag regex for the active domain."""
+    try:
+        from backend.domains import get_equipment_tag_regex
+        return get_equipment_tag_regex()
+    except Exception:
+        return EQUIPMENT_TAG_REGEX
+
+
+def get_active_rag_keywords():
+    """Returns RAG domain keywords for the active domain."""
+    try:
+        from backend.domains import get_rag_keywords
+        return get_rag_keywords()
+    except Exception:
+        return RAG_DOMAIN_KEYWORDS
+
+
+def get_active_fallback_text() -> str:
+    """Returns deterministic fallback text for the active domain."""
+    try:
+        from backend.domains import get_fallback_text
+        return get_fallback_text()
+    except Exception:
+        return DETERMINISTIC_FALLBACK_TEXT
 
 # Generation defaults
 DEFAULT_TOP_P = 0.9

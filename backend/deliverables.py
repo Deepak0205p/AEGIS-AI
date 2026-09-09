@@ -864,10 +864,49 @@ def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
     return file_id, filename, out_path
 
 
+def is_critical_important_document(plan: Dict[str, Any], filename: str, mode: str) -> bool:
+    """
+    Evaluates whether a generated deliverable is an 'Important Document' requiring 2-Step Verification:
+    - SOPs, Standard Operating Procedures, Safety Guidelines
+    - Inspection Reports, HAZOP Analysis, Pressure & Temperature Compliance
+    - Refinery Mass Balance, CDU/VDU Operational Directives, Production Schedules
+    - Financial / Audit / Critical Engineering deliverables
+    """
+    text_corpus = f"{plan.get('title', '')} {filename} {mode}".lower()
+    
+    # Check block contents if present
+    for b in plan.get("blocks", [])[:8]:
+        text_corpus += " " + str(b.get("text", "")).lower()
+        if "rows" in b:
+            text_corpus += " " + str(b.get("rows", "")).lower()
+
+    important_keywords = [
+        "sop", "standard operating", "safety", "inspection", "hazop", "compliance",
+        "refinery", "mrpl", "cdu", "vdu", "fccu", "dhds", "shutdown", "maintenance",
+        "emergency", "audit", "protocol", "engineering report", "hazard", "pressure",
+        "temperature", "operating procedure", "critical", "incident", "emission"
+    ]
+
+    # If document plan explicitly declares importance, or matches critical keywords
+    if plan.get("is_important") is not None:
+        return bool(plan.get("is_important"))
+
+    for kw in important_keywords:
+        if kw in text_corpus:
+            return True
+
+    # Important industrial docs are automatically categorized as important
+    if mode in ("docs", "excel") and len(plan.get("blocks", [])) >= 2:
+        return True
+
+    return False
+
+
 def create_deliverable_file(plan: Dict[str, Any], mode: str, chat_id: str) -> Dict[str, Any]:
     """
     Builds the target deliverable based on mode ('docs', 'excel', 'ppt'),
     persists it, records in database, and returns metadata with download URL.
+    Only important documents are flagged for 2-step verification.
     """
     mode = mode.lower()
     if mode == "docs":
@@ -883,12 +922,27 @@ def create_deliverable_file(plan: Dict[str, Any], mode: str, chat_id: str) -> Di
         file_id, filename, file_path = build_docx(plan, chat_id)
         file_type = "docx"
         
-    save_file_record(file_id, chat_id, filename, file_type, str(file_path))
+    is_important = is_critical_important_document(plan, filename, mode)
+    initial_status = "PENDING_STAGE_1" if is_important else "VERIFIED"
+    
+    save_file_record(
+        file_id=file_id,
+        chat_id=chat_id,
+        filename=filename,
+        file_type=file_type,
+        file_path=str(file_path),
+        verification_status=initial_status,
+        is_important=is_important
+    )
+    
+    logger.info(f"[DELIVERABLE REGISTRY] Registered {filename} (file_id={file_id}, is_important={is_important}, status={initial_status})")
     
     return {
         "file_id": file_id,
         "filename": filename,
         "file_type": file_type,
         "file_path": str(file_path),
+        "is_important": is_important,
+        "verification_status": initial_status,
         "download_url": f"/api/files/{file_id}"
     }

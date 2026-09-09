@@ -62,3 +62,7 @@ chat_greeting_response.png
 sdih 26117.pdf
 sandbox_jobs/
 generated/
+scratch_*.png
+scratch_*.py
+verify_*.py
+test_upload_doc.txt

@@ -11,28 +11,41 @@ from backend.db import build_context_messages, save_message
 from backend.knowledge_base import format_rag_context_block
 from backend.chemical_kb import detect_chemicals, format_chemical_context_block
 
-CHAT_SYSTEM_PROMPT = """You are AEGIS AI, an authoritative Industrial Operations & Plant Safety Assistant for ONGC & MRPL refineries.
+from backend.domains import get_active_domain, get_active_domain_info
 
-TWO-TIER KNOWLEDGE POLICY:
-1. TIER 1 (INTERNAL REFINERY PROCEDURES & EQUIPMENT PARAMETERS):
-   - When the user asks about refinery-specific procedures, operating parameters, equipment tags (e.g. F-101, P-101A, CDU, VDU), maintenance schedules, or internal standards:
-   - Answer strictly and exclusively from the verified RETRIEVED CONTEXT provided below.
-   - If internal parameters or equipment specifics are missing from the retrieved context, respond strictly with:
-     "Operational parameters for this query are not indexed in active Master SOPs (OISD/API/MRPL). Manual entry or Shift In-Charge sign-off required."
-   - NEVER invent or guess temperature limits, vibration thresholds, clause numbers, or refinery operating values.
+def get_chat_system_prompt() -> str:
+    domain_info = get_active_domain_info()
+    domain_name = domain_info["name"]
+    domain_code = domain_info["code"]
+    standards = ", ".join(domain_info["standards"][:4])
+    
+    return f"""You are AEGIS AI, a sovereign, air-gapped Enterprise AI Assistant dedicated EXCLUSIVELY to:
+1. Oil Refineries & Upstream E&P (MRPL, ONGC, IOCL style)
+2. PSU Heavy Engineering & Manufacturing (BHEL, SAIL, NTPC style)
+3. Defence Manufacturing & Strategic Units (DRDO, HAL, BEL style)
+4. Government Offices & Secretariats (CSMOP, GFR 2017, RTI 2005 style)
 
-2. TIER 2 (GENERAL KNOWLEDGE, DEFINITIONS & SCIENCE):
-   - When the user asks general science questions, definitions, concepts (e.g. "what is benzene", "what is photosynthesis", general chemistry/physics/safety principles):
-   - Answer normally and clearly from model knowledge in 2 to 6 concise sentences.
-   - CRITICAL RESTRICTION ON CAS NUMBERS & EXPOSURE LIMITS:
-     * NEVER recite CAS numbers, TLV/TWA exposure limits, flash points, exact clause numbers, or legal compliance thresholds from unverified memory.
-     * State exact CAS numbers, chemical formulas, and exposure limits ONLY when present in the VERIFIED CHEMICAL DATABASE CONTEXT provided in the prompt.
-     * If specific numerical regulatory limits or CAS numbers are requested for a substance not in the local database context, state: "Chemical data not available in local verified database."
-   - Never invent organization-specific policies or refinery plant data.
+Currently Active Operational Domain: {domain_name} ({domain_code})
+Applicable Sovereign Regulatory Standards: {standards}
 
-NATURAL CONVERSATION:
-- Reply in the user's language/style (Hinglish/English).
-- Keep factual responses concise, direct, and authoritative."""
+CRITICAL MANDATORY DOMAIN-ONLY RESTRICTION (ZERO TOLERANCE FOR OUT-OF-DOMAIN QUESTIONS):
+1. STRICT SCOPE RESTRICTION:
+   - You MUST ONLY answer questions, execute calculations, and draft documents directly related to MRPL, ONGC, Oil Refineries, Petrochemicals, PSU Industrial Manufacturing, Defence, and Government Enterprise operations.
+   - Permitted topics: Industrial plant operations (CDU/VDU/HCU/PFCCU/DHDS), upstream exploration & drilling (rigs, mud logging, well engineering), refinery chemical hazards, equipment inspection & maintenance, safety permits (PTW/LOTO/OISD), engineering calculations, procurement (GFR/GeM), and enterprise SOPs.
+
+2. IMMEDIATE REJECTION OF UNRELATED / CASUAL / GENERAL QUESTIONS:
+   - If the user asks ANY question outside of MRPL, ONGC, and the allowed industrial domains (including but not limited to: general biology/anatomy/sex/reproduction, personal relationships, entertainment/celebrities/movies, sports, video games, recipes, casual conversation, politics, or general trivia):
+   - You MUST REFUSE TO ANSWER and output ONLY this standard enterprise rejection response:
+     "I am AEGIS AI, a sovereign enterprise AI assistant configured strictly for MRPL, ONGC, and industrial plant operations. I cannot answer queries outside these enterprise domains."
+   - Do NOT provide general explanations or definitions for out-of-domain or inappropriate questions under any circumstances.
+
+3. GROUNDING & ACCURACY:
+   - For operational parameters, setpoints, tender rules, and safety thresholds: answer strictly from the RETRIEVED KNOWLEDGE BASE & verified records.
+   - Never fabricate numbers or internal records. If not found in internal SOPs, state the standard verification notice.
+
+NATURAL ENTERPRISE COMMUNICATION:
+- Respond authoritatively and professionally in English or Hinglish as requested by the plant operator."""
+
 
 
 async def handle_chat_mode(
@@ -63,7 +76,8 @@ async def handle_chat_mode(
     save_message(chat_id, "user", user_message, mode="chat")
 
     # Construct effective system prompt with Custom Agent persona, Chemical DB & RAG grounding
-    effective_system = CHAT_SYSTEM_PROMPT
+    base_prompt = get_chat_system_prompt()
+    effective_system = base_prompt
 
     if agent_id:
         try:
@@ -76,7 +90,7 @@ async def handle_chat_mode(
                     f"Workflow Mode: {custom_agent.workflow_mode}\n"
                     f"Enabled Tools: {', '.join(custom_agent.tools)}\n"
                     "=========================================================\n\n"
-                    f"{CHAT_SYSTEM_PROMPT}"
+                    f"{base_prompt}"
                 )
                 logger.info(f"[CHAT_MODE] Injected custom agent persona '{custom_agent.name}' into system prompt")
         except Exception as ag_err:
@@ -92,14 +106,15 @@ async def handle_chat_mode(
             "Do NOT invent or guess any values."
         )
 
-    # 2. Internal SOP / RAG Context Injection
-    if rag_chunks:
-        rag_block = format_rag_context_block(rag_chunks)
-        effective_system += (
-            f"\n\n{rag_block}\n\n"
-            "MANDATORY RULE: Answer strictly from the RETRIEVED CONTEXT for internal procedures/equipment. "
-            "If the context does not contain the answer, respond with the deterministic fallback notice."
-        )
+    # 2. Internal SOP / GraphRAG Context Injection
+    if rag_chunks or rag_status != "skipped":
+        rag_block = format_rag_context_block(rag_chunks or [], query=user_message)
+        if rag_block:
+            effective_system += (
+                f"\n\n{rag_block}\n\n"
+                "MANDATORY RULE: Answer strictly from the RETRIEVED KNOWLEDGE BASE & GRAPHRAG CONTEXT for internal procedures/equipment. "
+                "If the context does not contain the answer, respond with the deterministic fallback notice."
+            )
     elif rag_status == "miss":
         effective_system += (
             f"\n\nNOTE: No matching internal SOP documentation was found for this specific query in the local repository. "

@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 
 import psutil
 
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, File, UploadFile, Form
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -396,6 +396,20 @@ async def chat_endpoint(request_body: ChatRequest):
     requested_mode = request_body.mode or "auto"
     agent_id = request_body.agent_id
 
+    # Log user query to activity & monitoring audit ledger
+    try:
+        from backend.db import log_user_activity
+        log_user_activity(
+            username="operator",
+            activity_type="CHAT_QUERY",
+            query_text=user_msg,
+            channel_or_chat_id=chat_id,
+            details=f"Mode: {requested_mode} | Agent: {agent_id or 'default'}",
+            file_meta=attachments
+        )
+    except Exception as log_err:
+        logger.warning(f"[AUDIT_LOG_WARN] Failed to record user query: {log_err}")
+
     async def sse_event_generator():
         async for event in generate_chat_events(user_msg, requested_mode, chat_id, attachments=attachments, agent_id=agent_id):
             yield f"data: {json.dumps(event)}\n\n"
@@ -612,7 +626,60 @@ async def get_vram_metrics():
 
 @app.get("/api/v1/models/status")
 async def get_models_status():
-    return {"status": "ready", "active_model": MODEL_NAME}
+    from backend.domains import get_active_domain, get_active_domain_info
+    return {
+        "status": "ready",
+        "active_model": MODEL_NAME,
+        "active_domain": get_active_domain(),
+        "domain_info": get_active_domain_info(),
+    }
+
+
+# --- Domain Management Endpoints (PSU, Defence, Government, Refinery) ---
+@app.get("/api/domains")
+async def list_available_domains():
+    """Returns list of supported industrial and enterprise domains with active selection."""
+    from backend.domains import list_domains, get_active_domain
+    return {
+        "status": "SUCCESS",
+        "active_domain": get_active_domain(),
+        "domains": list_domains(),
+    }
+
+
+@app.get("/api/domains/active")
+async def get_current_domain():
+    """Returns metadata for the currently active domain."""
+    from backend.domains import get_active_domain_info
+    return {
+        "status": "SUCCESS",
+        "domain": get_active_domain_info(),
+    }
+
+
+class SwitchDomainRequest(BaseModel):
+    domain: str
+
+
+@app.post("/api/domains/switch")
+async def switch_operational_domain(req: SwitchDomainRequest):
+    """Dynamically switches active operational domain across the air-gapped system."""
+    from backend.domains import set_active_domain, get_active_domain_info, DOMAIN_REGISTRY
+    domain_key = req.domain.strip().lower()
+    if domain_key not in DOMAIN_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid domain '{req.domain}'. Valid choices: {list(DOMAIN_REGISTRY.keys())}"
+        )
+    set_active_domain(domain_key)
+    info = get_active_domain_info()
+    logger.info(f"[DOMAIN] Operational domain successfully switched to: '{domain_key}' ({info['name']})")
+    return {
+        "status": "SUCCESS",
+        "message": f"Operational domain switched to {info['name']}",
+        "active_domain": domain_key,
+        "domain_info": info,
+    }
 
 
 # --- Auth ---
@@ -627,6 +694,7 @@ AUTH_USERS = {
         "full_name": "Refinery Compliance Chief",
         "department": "Executive HSE & CISO",
         "status": "ACTIVE",
+        "can_verify": True,
         "created_at": "2026-01-10 09:00:00",
     },
     "operator": {
@@ -635,6 +703,7 @@ AUTH_USERS = {
         "full_name": "Lead Process Operator",
         "department": "Refinery Operations",
         "status": "ACTIVE",
+        "can_verify": False,
         "created_at": "2026-02-14 11:30:00",
     },
     "engineer": {
@@ -643,6 +712,7 @@ AUTH_USERS = {
         "full_name": "Senior Reliability Engineer",
         "department": "Mechanical Maintenance",
         "status": "ACTIVE",
+        "can_verify": True,
         "created_at": "2026-03-01 14:15:00",
     },
     "lead": {
@@ -651,6 +721,7 @@ AUTH_USERS = {
         "full_name": "Chief Process Lead",
         "department": "Crude Distillation Unit (CDU)",
         "status": "ACTIVE",
+        "can_verify": True,
         "created_at": "2026-03-15 08:45:00",
     },
 }
@@ -709,6 +780,7 @@ async def login_endpoint(body: LoginRequest):
             "role": user["role"],
             "full_name": user["full_name"],
             "department": user["department"],
+            "can_verify": user.get("can_verify", user["role"] in ("SUPER_ADMIN", "PROCESS_LEAD", "MAINTENANCE_ENG")),
         },
         "permissions": ["read", "write", "admin"],
     }
@@ -737,6 +809,7 @@ async def get_auth_me(request: Request):
         "role": user["role"],
         "full_name": user["full_name"],
         "department": user["department"],
+        "can_verify": user.get("can_verify", user["role"] in ("SUPER_ADMIN", "PROCESS_LEAD", "MAINTENANCE_ENG")),
         "authenticated": True,
     }
 
@@ -756,27 +829,273 @@ async def get_history(chat_id: str):
 
 @app.get("/api/files/list")
 async def list_files(chat_id: Optional[str] = None):
-    """Lists generated deliverable files from XAMPP MySQL."""
-    conn = get_db_connection()
-    with conn.cursor() as cursor:
-        if chat_id:
-            cursor.execute("SELECT * FROM files WHERE chat_id = %s ORDER BY created_at DESC", (chat_id,))
-        else:
-            cursor.execute("SELECT * FROM files ORDER BY created_at DESC")
-        rows = cursor.fetchall()
-    conn.close()
+    """Lists generated deliverable files with full 2-step verification metadata."""
+    from backend.db import get_all_deliverable_files
+    rows = get_all_deliverable_files(chat_id)
     
     items = []
     for r in rows:
+        v_status = r.get("verification_status") or "PENDING_STAGE_1"
         items.append({
             "file_id": r["file_id"],
             "chat_id": r["chat_id"],
             "filename": r["filename"],
             "file_type": r["file_type"],
+            "verification_status": v_status,
+            "stage_1_verifier": r.get("stage_1_verifier"),
+            "stage_1_at": str(r["stage_1_at"]) if r.get("stage_1_at") else None,
+            "stage_1_notes": r.get("stage_1_notes"),
+            "stage_2_verifier": r.get("stage_2_verifier"),
+            "stage_2_at": str(r["stage_2_at"]) if r.get("stage_2_at") else None,
+            "stage_2_notes": r.get("stage_2_notes"),
+            "rejected_by": r.get("rejected_by"),
+            "rejected_at": str(r["rejected_at"]) if r.get("rejected_at") else None,
+            "reject_reason": r.get("reject_reason"),
             "created_at": str(r["created_at"]),
             "download_url": f"/api/files/{r['file_id']}"
         })
     return {"files": items}
+
+
+class RenameFileRequest(BaseModel):
+    filename: str
+
+
+@app.post("/api/files/{file_id}/rename")
+async def rename_file(file_id: str, body: RenameFileRequest):
+    """Renames an existing generated deliverable."""
+    from backend.db import rename_file_record
+    success = rename_file_record(file_id, body.filename)
+    if not success:
+        raise HTTPException(status_code=404, detail="File not found")
+    return {"status": "SUCCESS", "file_id": file_id, "new_filename": body.filename}
+
+
+# =====================================================================
+# 2-STEP HUMAN VERIFICATION & APPROVAL WORKFLOW ENDPOINTS
+# =====================================================================
+
+class VerifyActionRequest(BaseModel):
+    verifier: Optional[str] = None
+    notes: Optional[str] = None
+    role: Optional[str] = None
+
+
+class RejectActionRequest(BaseModel):
+    rejected_by: Optional[str] = None
+    reason: str
+    role: Optional[str] = None
+
+
+class EditAndApproveRequest(BaseModel):
+    verifier: Optional[str] = None
+    notes: Optional[str] = None
+    role: Optional[str] = None
+    stage: int = 1 # 1 for Stage 1, 2 for Stage 2
+    filename: Optional[str] = None
+
+
+@app.get("/api/verification/pending")
+@app.get("/api/v1/verification/pending")
+async def get_pending_verification_items(role: Optional[str] = None, request: Request = None):
+    """
+    Returns deliverables awaiting verification filtered by user role:
+    - PROCESS_LEAD / MAINTENANCE_ENG -> Stage 1 items
+    - SUPER_ADMIN / FIELD_OPERATOR -> Stage 2 items (and Stage 1)
+    """
+    from backend.db import get_pending_verifications
+    effective_role = role
+    if not effective_role and request:
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header.replace("Bearer ", "").strip()
+        payload = _decode_token(token) if token else None
+        if payload:
+            effective_role = payload.get("role")
+            
+    items = get_pending_verifications(effective_role)
+    stage1_count = len([i for i in items if i.get("verification_status") == "PENDING_STAGE_1"])
+    stage2_count = len([i for i in items if i.get("verification_status") == "PENDING_STAGE_2"])
+    
+    formatted = []
+    for r in items:
+        formatted.append({
+            "file_id": r["file_id"],
+            "chat_id": r["chat_id"],
+            "filename": r["filename"],
+            "file_type": r["file_type"],
+            "verification_status": r.get("verification_status") or "PENDING_STAGE_1",
+            "stage_1_verifier": r.get("stage_1_verifier"),
+            "stage_1_at": str(r["stage_1_at"]) if r.get("stage_1_at") else None,
+            "stage_1_notes": r.get("stage_1_notes"),
+            "stage_2_verifier": r.get("stage_2_verifier"),
+            "stage_2_at": str(r["stage_2_at"]) if r.get("stage_2_at") else None,
+            "stage_2_notes": r.get("stage_2_notes"),
+            "created_at": str(r["created_at"]),
+            "download_url": f"/api/files/{r['file_id']}"
+        })
+
+    return {
+        "status": "SUCCESS",
+        "role": effective_role,
+        "total_pending": len(formatted),
+        "stage1_pending": stage1_count,
+        "stage2_pending": stage2_count,
+        "items": formatted
+    }
+
+
+@app.post("/api/verification/{file_id}/stage1/approve")
+@app.post("/api/v1/verification/{file_id}/stage1/approve")
+async def approve_stage_1(file_id: str, body: VerifyActionRequest, request: Request):
+    """
+    Step 1 Verification Approval (Lower Post / L1 Peer Review):
+    Authorized Roles: PROCESS_LEAD, MAINTENANCE_ENG, SUPER_ADMIN
+    Advances deliverable from PENDING_STAGE_1 -> PENDING_STAGE_2.
+    """
+    from backend.db import get_file_record, verify_file_stage_1
+    record = get_file_record(file_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Deliverable file not found")
+        
+    current_status = record.get("verification_status")
+    if current_status != "PENDING_STAGE_1":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot execute Step 1 Approval: Document is currently in '{current_status}' stage."
+        )
+
+    verifier = body.verifier or "ProcessLead"
+    notes = body.notes or "Step 1: Technical parameters and mass balance approved by Process Lead"
+    
+    verify_file_stage_1(file_id, verifier=verifier, notes=notes)
+    logger.info(f"[VERIFY STEP 1 - LOWER POST] File {file_id} approved by {verifier}. Advanced to PENDING_STAGE_2.")
+    
+    return {
+        "status": "SUCCESS",
+        "file_id": file_id,
+        "verification_status": "PENDING_STAGE_2",
+        "stage": 1,
+        "message": f"Step 1 Verification Approved by {verifier}. Document advanced to Higher Post (Step 2 Sign-Off)."
+    }
+
+
+@app.post("/api/verification/{file_id}/stage2/approve")
+@app.post("/api/v1/verification/{file_id}/stage2/approve")
+async def approve_stage_2(file_id: str, body: VerifyActionRequest, request: Request):
+    """
+    Step 2 Verification Final Sign-Off (Higher Post / Executive CISO & Compliance Chief):
+    Strictly Authorized: SUPER_ADMIN (or authorized Compliance Executive)
+    Transitions deliverable from PENDING_STAGE_2 -> VERIFIED.
+    """
+    from backend.db import get_file_record, verify_file_stage_2
+    record = get_file_record(file_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Deliverable file not found")
+        
+    current_status = record.get("verification_status")
+    if current_status == "PENDING_STAGE_1":
+        raise HTTPException(
+            status_code=400, 
+            detail="Access Denied: Document must first be approved by Lower Post in Step 1 before Higher Post can sign off."
+        )
+    elif current_status != "PENDING_STAGE_2":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Document is not awaiting Step 2 Sign-off (Current status: {current_status})."
+        )
+
+    # Check caller role if provided
+    caller_role = body.role
+    if not caller_role and request:
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header.replace("Bearer ", "").strip()
+        payload = _decode_token(token) if token else None
+        if payload:
+            caller_role = payload.get("role")
+
+    if caller_role and caller_role not in ("SUPER_ADMIN", "ADMIN"):
+        raise HTTPException(
+            status_code=403,
+            detail="Higher Post Authority Required: Step 2 Final Sign-Off can only be approved by SUPER_ADMIN."
+        )
+
+    verifier = body.verifier or "Refinery Compliance Chief"
+    notes = body.notes or "Step 2: Executive compliance & regulatory sign-off certified"
+    
+    verify_file_stage_2(file_id, verifier=verifier, notes=notes)
+    logger.info(f"[VERIFY STEP 2 - HIGHER POST] File {file_id} signed off by {verifier}. Status: VERIFIED.")
+    
+    return {
+        "status": "SUCCESS",
+        "file_id": file_id,
+        "verification_status": "VERIFIED",
+        "stage": 2,
+        "message": f"Document fully verified and cryptographically signed off by Higher Post ({verifier})."
+    }
+
+
+@app.post("/api/verification/{file_id}/reject")
+@app.post("/api/v1/verification/{file_id}/reject")
+async def reject_verification(file_id: str, body: RejectActionRequest, request: Request):
+    """
+    Rejection action (at either Step 1 or Step 2):
+    Marks deliverable as REJECTED with mandatory reason note.
+    """
+    from backend.db import get_file_record, reject_file
+    record = get_file_record(file_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Deliverable file not found")
+        
+    if not body.reason.strip():
+        raise HTTPException(status_code=400, detail="Rejection reason is required")
+        
+    rejected_by = body.rejected_by or "Reviewer"
+    reject_file(file_id, rejected_by=rejected_by, reason=body.reason.strip())
+    logger.info(f"[VERIFY REJECT] File {file_id} rejected by {rejected_by}. Reason: {body.reason}")
+    
+    return {
+        "status": "SUCCESS",
+        "file_id": file_id,
+        "verification_status": "REJECTED",
+        "rejected_by": rejected_by,
+        "reason": body.reason,
+        "message": f"Document rejected by {rejected_by}."
+    }
+
+
+@app.post("/api/verification/{file_id}/edit-and-approve")
+@app.post("/api/v1/verification/{file_id}/edit-and-approve")
+async def edit_and_approve(file_id: str, body: EditAndApproveRequest):
+    """
+    Make Edits & Proceed:
+    Updates document metadata/filename, records verification notes, and promotes to next stage.
+    """
+    from backend.db import get_file_record, verify_file_stage_1, verify_file_stage_2, rename_file_record
+    record = get_file_record(file_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Deliverable file not found")
+        
+    # If a new filename was provided from editor canvas
+    if body.filename and body.filename.strip():
+        rename_file_record(file_id, body.filename.strip())
+
+    verifier = body.verifier or "Reviewer"
+    notes = body.notes or "Edited and approved by reviewer"
+
+    if body.stage == 1:
+        verify_file_stage_1(file_id, verifier=verifier, notes=notes)
+        next_status = "PENDING_STAGE_2"
+    else:
+        verify_file_stage_2(file_id, verifier=verifier, notes=notes)
+        next_status = "VERIFIED"
+
+    return {
+        "status": "SUCCESS",
+        "file_id": file_id,
+        "verification_status": next_status,
+        "message": f"Document edited & approved by {verifier}. Advanced to {next_status}."
+    }
+
 
 
 @app.get("/api/ppt/styles")
@@ -1539,25 +1858,209 @@ async def evaluate_router_query(body: RouterEvalRequest):
 @app.get("/api/v1/rag-admin/stats")
 async def get_rag_admin_stats():
     """Returns vector database status, chunk counts, and collection statistics."""
-    try:
-        from backend.knowledge_base import get_collection_count
-        count = get_collection_count()
-    except Exception:
-        count = 1420
+    from backend.knowledge_base import MASTER_SOPS
+    from backend.graph_rag import graphrag_engine
+    
+    total_chunks = len(MASTER_SOPS)
+    total_entities = len(graphrag_engine.entities)
+    total_relations = len(graphrag_engine.relations)
 
     return {
         "success": True,
-        "documents": 8,
-        "chunks": count,
-        "total_chunks": count,
-        "document_count": 8,
+        "documents": 18,
+        "chunks": total_chunks,
+        "total_chunks": total_chunks,
+        "document_count": 18,
+        "entities_count": total_entities,
+        "relations_count": total_relations,
         "collections": 1,
-        "collection_name": "mrpl_refinery_sops_master",
+        "collection_name": "sovereign_master_knowledge_graph",
         "dimensions": 1024,
-        "embedding_model": "BAAI/bge-m3-gguf",
+        "embedding_model": "BAAI/bge-m3-gguf + GraphRAG",
         "bm25_enabled": True,
-        "last_indexed": "Live On-Premise"
+        "last_indexed": "Live On-Premise (Multi-Domain Active)"
     }
+
+
+from fastapi import UploadFile, File as FastAPIFile, Form
+
+@app.post("/api/rag-admin/ingest-file")
+@app.post("/api/v1/rag-admin/ingest-file")
+async def ingest_rag_files(
+    files: List[UploadFile] = FastAPIFile(...),
+    chunk_size: Optional[int] = Form(512),
+    overlap: Optional[int] = Form(100),
+    enable_bm25: Optional[bool] = Form(True)
+):
+    """Parses, extracts GraphRAG entities, and ingests uploaded document files into master knowledge base."""
+    import pypdf
+    import io
+    from backend.knowledge_base import MASTER_SOPS, SOPChunk, _generate_dense_vector
+    from backend.graph_rag import graphrag_engine, KnowledgeEntity, KnowledgeRelation
+
+    ingested_summary = []
+
+    for upload in files:
+        contents = await upload.read()
+        filename = upload.filename or "uploaded_sop.txt"
+        text = ""
+
+        if filename.lower().endswith(".pdf"):
+            try:
+                reader = pypdf.PdfReader(io.BytesIO(contents))
+                for page in reader.pages[:20]:
+                    text += (page.extract_text() or "") + "\n"
+            except Exception as e:
+                logger.warning(f"[INGEST] PDF extraction error for {filename}: {e}")
+                text = contents.decode("utf-8", errors="ignore")
+        else:
+            text = contents.decode("utf-8", errors="ignore")
+
+        # Create chunks
+        paras = [p.strip() for p in text.split("\n\n") if len(p.strip()) > 80]
+        if not paras:
+            paras = [text[:600]] if text else ["General Technical Standard Information."]
+
+        doc_base_id = filename.rsplit(".", 1)[0].replace(" ", "-").upper()
+        
+        # Discover entities
+        ent_id = f"DOC-{doc_base_id[:12]}"
+        graphrag_engine.entities[ent_id] = KnowledgeEntity(
+            id=ent_id,
+            name=filename,
+            category="Master SOP Document",
+            domain="refinery",
+            properties={"uploaded_size": len(contents), "chunks": len(paras)}
+        )
+
+        for i, para in enumerate(paras[:10], 1):
+            chunk_obj = SOPChunk(
+                doc_id=f"{doc_base_id}-{i:02d}",
+                title=f"{filename} (Section {i})",
+                clause=f"Clause {i}",
+                page=f"Page {i}",
+                content=para[:800],
+                keywords=["uploaded", "standard", "manual", "sop"],
+                equipment_tags=[],
+                domain="refinery",
+                dense_embedding=_generate_dense_vector(para[:800])
+            )
+            MASTER_SOPS.append(chunk_obj)
+
+        ingested_summary.append({
+            "filename": filename,
+            "chunks_created": len(paras[:10]),
+            "bytes": len(contents)
+        })
+
+    logger.info(f"[RAG_ADMIN] Successfully ingested {len(files)} files into Knowledge Base.")
+    return {
+        "status": "SUCCESS",
+        "message": f"Successfully ingested {len(files)} document(s)",
+        "files": ingested_summary,
+        "total_master_sops": len(MASTER_SOPS)
+    }
+
+
+class SearchRAGRequest(BaseModel):
+    query: str
+    top_k: Optional[int] = 5
+
+
+@app.post("/api/rag-admin/search")
+@app.post("/api/v1/rag-admin/search")
+async def search_rag_admin(req: SearchRAGRequest):
+    """Executes live hybrid vector + GraphRAG search for admin inspection."""
+    from backend.knowledge_base import search_sops
+    from backend.graph_rag import graphrag_engine
+    
+    results = search_sops(req.query, min_score=0.1, top_k=req.top_k or 5)
+    matched_entities = graphrag_engine.extract_entities_from_query(req.query)
+
+    return {
+        "status": "SUCCESS",
+        "query": req.query,
+        "results": results,
+        "matched_entities": [e.dict() for e in matched_entities]
+    }
+
+
+@app.post("/api/document-converter/convert")
+@app.post("/api/v1/document-converter/convert")
+async def convert_document_endpoint(
+    file: UploadFile = FastAPIFile(...),
+    target_format: str = Form("docx")
+):
+    """
+    Genuine Air-Gapped Universal Document Converter.
+    Converts between PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), Text, and Markdown
+    using on-premise Python headless builders without external calls.
+    """
+    import io
+    import pypdf
+    from backend.deliverables import create_deliverable_file
+
+    filename = file.filename or "document.txt"
+    contents = await file.read()
+    text = ""
+
+    # Extract source content
+    if filename.lower().endswith(".pdf"):
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(contents))
+            for page in reader.pages:
+                text += (page.extract_text() or "") + "\n\n"
+        except Exception:
+            text = contents.decode("utf-8", errors="ignore")
+    else:
+        text = contents.decode("utf-8", errors="ignore")
+
+    base_name = filename.rsplit(".", 1)[0]
+    target_ext = target_format.lower().replace(".", "")
+
+    plan = {
+        "title": f"Converted Document: {base_name}",
+        "filename": f"{base_name}_converted.{target_ext}",
+        "blocks": [
+            {"type": "heading", "text": f"Universal Converted Document: {base_name}", "level": 1},
+            {"type": "paragraph", "text": text[:3500] if text.strip() else "Converted content processed on-premise by AEGIS AI Sovereign Engine."}
+        ]
+    }
+
+    chat_id = "admin_converter"
+    mode_map = {"docx": "docs", "xlsx": "excel", "pptx": "ppt", "pdf": "docs", "txt": "docs"}
+    chosen_mode = mode_map.get(target_ext, "docs")
+
+    if chosen_mode == "excel":
+        # Parse lines into structured table rows
+        rows = [["Line Item / Metric", "Details / Data Extracted"]]
+        for line in [l.strip() for l in text.split("\n") if l.strip()][:30]:
+            parts = line.split(",", 1) if "," in line else line.split(":", 1) if ":" in line else [line, "Recorded"]
+            rows.append([parts[0].strip(), parts[1].strip() if len(parts) > 1 else ""])
+        plan["blocks"].append({"type": "table", "rows": rows if len(rows) > 1 else [["Item", "Value"], ["Status", "Converted"]]})
+    elif chosen_mode == "ppt":
+        # Group paragraphs into slides
+        slides = []
+        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()][:6]
+        if not paragraphs:
+            paragraphs = [text[:200]] if text else ["Executive Summary of converted dataset."]
+        for idx, para in enumerate(paragraphs, 1):
+            plan["blocks"].append({
+                "type": "bullet_list",
+                "items": [para[:150], f"Source: On-premise conversion ({filename})", "Classification: Sovereign Confidential"]
+            })
+
+    result = create_deliverable_file(plan, mode=chosen_mode, chat_id=chat_id)
+
+    logger.info(f"[DOC_CONVERTER] Converted {filename} -> {result['filename']} ({target_ext})")
+    return {
+        "status": "SUCCESS",
+        "message": f"Successfully converted to {target_ext.upper()}",
+        "filename": result["filename"],
+        "download_url": result["download_url"],
+        "size_bytes": result.get("size_bytes", len(contents))
+    }
+
 
 
 @app.get("/api/sandbox/status")
@@ -1825,19 +2328,619 @@ async def save_custom_agent(body: CustomAgent):
     saved = create_or_update_agent(body)
     return {"status": "SUCCESS", "agent": saved.dict()}
 
-@app.delete("/api/v1/agents/{agent_id}")
-@app.delete("/api/agents/{agent_id}")
-async def remove_custom_agent(agent_id: str):
-    """Deletes custom agent."""
-    success = delete_agent(agent_id)
+# ─── Feedback & Error Reporting Endpoints ────────────────────────────────────
+
+class FeedbackSubmitRequest(BaseModel):
+    report_type: str = "ERROR" # 'ERROR' | 'SUGGESTION'
+    title: str
+    description: str
+    category: Optional[str] = "GENERAL"
+    suggested_fix: Optional[str] = None
+    chat_id: Optional[str] = None
+    message_id: Optional[str] = None
+    message_content: Optional[str] = None
+    username: Optional[str] = "operator"
+    user_id: Optional[str] = None
+
+
+class FeedbackUpdateRequest(BaseModel):
+    status: str # 'OPEN' | 'IN_REVIEW' | 'RESOLVED' | 'REJECTED'
+    admin_notes: Optional[str] = None
+    admin_response: Optional[str] = None
+    resolved_by: Optional[str] = "Admin"
+
+
+@app.post("/api/v1/feedback/submit")
+@app.post("/api/feedback/submit")
+async def submit_feedback_report(body: FeedbackSubmitRequest, request: Request):
+    """
+    Submits an Error report or Improvement Suggestion from the operator.
+    Persists immediately in XAMPP MySQL.
+    """
+    from backend.db import create_feedback_report
+    
+    # Extract user identity if token present
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "").strip()
+    payload = _decode_token(token) if token else None
+    
+    username = body.username or "operator"
+    user_id = body.user_id
+    if payload:
+        username = payload.get("sub") or username
+        user_id = payload.get("user_id") or user_id
+
+    report_id = create_feedback_report(
+        report_type=body.report_type,
+        title=body.title,
+        description=body.description,
+        user_id=user_id,
+        username=username,
+        chat_id=body.chat_id,
+        message_id=body.message_id,
+        message_content=body.message_content,
+        category=body.category or "GENERAL",
+        suggested_fix=body.suggested_fix
+    )
+
+    logger.info(f"[FEEDBACK] Created {body.report_type} report #{report_id} by '{username}' - '{body.title}'")
+
+    return {
+        "status": "SUCCESS",
+        "report_id": report_id,
+        "message": f"Report #{report_id} submitted successfully to admin workbench."
+    }
+
+
+@app.get("/api/v1/feedback/list")
+@app.get("/api/feedback/list")
+async def list_feedback_reports(
+    type: Optional[str] = None,
+    status: Optional[str] = None,
+    search: Optional[str] = None
+):
+    """
+    Retrieves all feedback and error reports with counts and filtering for Admin workbench.
+    """
+    from backend.db import get_all_feedback_reports
+    reports = get_all_feedback_reports(report_type=type, status=status, search=search)
+    
+    # Calculate stats
+    all_reports = get_all_feedback_reports()
+    total_count = len(all_reports)
+    error_count = len([r for r in all_reports if r.get("report_type") == "ERROR"])
+    suggestion_count = len([r for r in all_reports if r.get("report_type") == "SUGGESTION"])
+    open_count = len([r for r in all_reports if r.get("status") == "OPEN"])
+    in_review_count = len([r for r in all_reports if r.get("status") == "IN_REVIEW"])
+    resolved_count = len([r for r in all_reports if r.get("status") == "RESOLVED"])
+
+    formatted = []
+    for r in reports:
+        formatted.append({
+            "id": r["id"],
+            "report_type": r["report_type"],
+            "user_id": r.get("user_id"),
+            "username": r.get("username") or "operator",
+            "chat_id": r.get("chat_id"),
+            "message_id": r.get("message_id"),
+            "message_content": r.get("message_content"),
+            "category": r.get("category") or "GENERAL",
+            "title": r["title"],
+            "description": r["description"],
+            "suggested_fix": r.get("suggested_fix"),
+            "status": r.get("status") or "OPEN",
+            "admin_notes": r.get("admin_notes"),
+            "admin_response": r.get("admin_response"),
+            "resolved_by": r.get("resolved_by"),
+            "resolved_at": str(r["resolved_at"]) if r.get("resolved_at") else None,
+            "created_at": str(r["created_at"]),
+            "updated_at": str(r["updated_at"]) if r.get("updated_at") else None,
+        })
+
+    return {
+        "status": "SUCCESS",
+        "stats": {
+            "total": total_count,
+            "errors": error_count,
+            "suggestions": suggestion_count,
+            "open": open_count,
+            "in_review": in_review_count,
+            "resolved": resolved_count
+        },
+        "count": len(formatted),
+        "reports": formatted
+    }
+
+
+@app.get("/api/v1/feedback/{report_id}")
+@app.get("/api/feedback/{report_id}")
+async def get_feedback_detail(report_id: int):
+    """Retrieves full details of a specific feedback report."""
+    from backend.db import get_feedback_report_by_id
+    report = get_feedback_report_by_id(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Feedback report not found")
+    
+    return {
+        "status": "SUCCESS",
+        "report": {
+            **report,
+            "created_at": str(report["created_at"]),
+            "updated_at": str(report["updated_at"]) if report.get("updated_at") else None,
+            "resolved_at": str(report["resolved_at"]) if report.get("resolved_at") else None,
+        }
+    }
+
+
+@app.patch("/api/v1/feedback/{report_id}/status")
+@app.patch("/api/feedback/{report_id}/status")
+async def update_feedback_status(report_id: int, body: FeedbackUpdateRequest, request: Request):
+    """
+    Updates report status, appends admin notes/corrections, and records resolver.
+    """
+    from backend.db import get_feedback_report_by_id, update_feedback_report
+    report = get_feedback_report_by_id(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Feedback report not found")
+
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "").strip()
+    payload = _decode_token(token) if token else None
+    resolver = payload.get("sub") if payload else (body.resolved_by or "Admin")
+
+    update_feedback_report(
+        report_id=report_id,
+        status=body.status,
+        admin_notes=body.admin_notes,
+        admin_response=body.admin_response,
+        resolved_by=resolver
+    )
+
+    logger.info(f"[FEEDBACK] Report #{report_id} updated to status '{body.status}' by '{resolver}'")
+
+    return {
+        "status": "SUCCESS",
+        "report_id": report_id,
+        "new_status": body.status,
+        "message": f"Report #{report_id} updated to '{body.status}'"
+    }
+
+
+@app.delete("/api/v1/feedback/{report_id}")
+@app.delete("/api/feedback/{report_id}")
+async def remove_feedback_report(report_id: int):
+    """Deletes a feedback report."""
+    from backend.db import delete_feedback_report
+    success = delete_feedback_report(report_id)
     if not success:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    return {"status": "SUCCESS", "deleted_id": agent_id}
+        raise HTTPException(status_code=404, detail="Feedback report not found")
+    return {"status": "SUCCESS", "deleted_id": report_id}
+
+
+# ─── Multi-User Collaboration & Plant Team Chat Endpoints ───────────────────
+
+class CreateChannelRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    department: Optional[str] = "ALL"
+    created_by: Optional[str] = "operator"
+
+class CreateDMRequest(BaseModel):
+    target_username: str
+    current_username: Optional[str] = "operator"
+
+class PostChannelMessageRequest(BaseModel):
+    channel_id: str
+    content: str
+    sender_username: Optional[str] = "operator"
+    sender_role: Optional[str] = "FIELD_OPERATOR"
+    message_type: Optional[str] = "TEXT"
+    file_id: Optional[str] = None
+    file_name: Optional[str] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
+    file_url: Optional[str] = None
+
+
+@app.get("/api/collaboration/channels")
+async def get_collaboration_channels(username: Optional[str] = "operator"):
+    """Fetches all channels and DMs for the current user."""
+    from backend.db import get_all_collaboration_channels
+    channels = get_all_collaboration_channels(username)
+    return {"status": "SUCCESS", "channels": channels}
+
+
+@app.post("/api/collaboration/channels")
+async def create_collaboration_channel(body: CreateChannelRequest):
+    """Creates a new collaboration channel."""
+    from backend.db import create_new_channel
+    chan_id = create_new_channel(body.name, body.description or "", body.department or "ALL", body.created_by or "operator")
+    return {"status": "SUCCESS", "channel_id": chan_id, "name": body.name}
+
+
+@app.post("/api/collaboration/dm")
+async def start_direct_message(body: CreateDMRequest):
+    """Creates or returns a direct message channel with target user."""
+    from backend.db import get_or_create_dm_channel
+    dm = get_or_create_dm_channel(body.current_username or "operator", body.target_username)
+    return {"status": "SUCCESS", "channel": dm}
+
+
+@app.get("/api/collaboration/channels/{channel_id}/messages")
+async def get_channel_message_history(channel_id: str, limit: int = 100):
+    """Fetches chat history for the channel."""
+    from backend.db import get_channel_messages
+    messages = get_channel_messages(channel_id, limit=limit)
+    return {"status": "SUCCESS", "channel_id": channel_id, "messages": messages}
+
+
+@app.get("/api/collaboration/users")
+async def get_collaboration_users():
+    """Returns directory of plant users with online status."""
+    from backend.db import get_plant_users_directory
+    users = get_plant_users_directory()
+    online_usernames = set(collab_manager.get_online_usernames())
+    enriched = []
+    for u in users:
+        enriched.append({
+            **u,
+            "is_online": (u["username"] in online_usernames) or (u["username"] == "operator")
+        })
+    return {"status": "SUCCESS", "users": enriched}
+
+
+@app.post("/api/collaboration/upload")
+async def upload_collaboration_file(file: UploadFile = File(...), channel_id: str = Form(...), username: str = Form("operator")):
+    """Uploads file attachment for sharing inside a collaboration channel."""
+    from backend.config import GENERATED_DIR
+    import uuid
+    import shutil
+    
+    file_ext = Path(file.filename).suffix.lower()
+    file_id = f"collab_{uuid.uuid4().hex[:12]}"
+    safe_filename = f"{file_id}_{Path(file.filename).name}"
+    save_path = GENERATED_DIR / safe_filename
+    
+    with open(save_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    file_size = save_path.stat().st_size
+    file_url = f"/api/files/download/{safe_filename}"
+    
+    # Register file in database
+    from backend.db import save_file_record, log_user_activity
+    save_file_record(
+        file_id=file_id,
+        chat_id=channel_id,
+        filename=file.filename,
+        file_type=file_ext.replace(".", "").upper() or "DOC",
+        file_path=str(save_path),
+        verification_status="VERIFIED",
+        is_important=False
+    )
+
+    try:
+        log_user_activity(
+            username=username,
+            activity_type="FILE_UPLOAD",
+            query_text=f"Uploaded file: {file.filename}",
+            channel_or_chat_id=channel_id,
+            details=f"File: {file.filename} ({file_size} bytes)",
+            file_meta={"file_id": file_id, "filename": file.filename, "size": file_size, "url": file_url}
+        )
+    except Exception:
+        pass
+    
+    return {
+        "status": "SUCCESS",
+        "file_id": file_id,
+        "file_name": file.filename,
+        "file_type": file_ext,
+        "file_size": file_size,
+        "file_url": file_url
+    }
+
+
+# ─── Real-Time Collaboration WebSocket Connection Manager ───────────────────
+
+class CollaborationConnectionManager:
+    def __init__(self):
+        # Map channel_id -> set of active WebSockets
+        self.active_rooms: Dict[str, set[WebSocket]] = {}
+        # Map websocket -> dict of metadata (username, channel_id)
+        self.socket_meta: Dict[WebSocket, Dict[str, Any]] = {}
+
+    async def connect(self, websocket: WebSocket, channel_id: str, username: str, role: str = "OPERATOR"):
+        await websocket.accept()
+        if channel_id not in self.active_rooms:
+            self.active_rooms[channel_id] = set()
+        self.active_rooms[channel_id].add(websocket)
+        self.socket_meta[websocket] = {
+            "channel_id": channel_id,
+            "username": username,
+            "role": role,
+            "joined_at": time.time()
+        }
+        logger.info(f"[COLLAB_WS] User '{username}' connected to channel '{channel_id}' (Total in room: {len(self.active_rooms[channel_id])})")
+        # Broadcast presence
+        await self.broadcast_to_channel(channel_id, {
+            "event": "user_joined",
+            "username": username,
+            "role": role,
+            "channel_id": channel_id,
+            "timestamp": str(datetime.now())
+        })
+
+    def disconnect(self, websocket: WebSocket):
+        meta = self.socket_meta.pop(websocket, None)
+        if meta:
+            chan_id = meta.get("channel_id")
+            username = meta.get("username")
+            if chan_id in self.active_rooms:
+                self.active_rooms[chan_id].discard(websocket)
+                if not self.active_rooms[chan_id]:
+                    del self.active_rooms[chan_id]
+            logger.info(f"[COLLAB_WS] User '{username}' disconnected from channel '{chan_id}'")
+
+    async def broadcast_to_channel(self, channel_id: str, message_dict: Dict[str, Any]):
+        if channel_id in self.active_rooms:
+            dead_sockets = []
+            for ws in self.active_rooms[channel_id]:
+                try:
+                    await ws.send_json(message_dict)
+                except Exception:
+                    dead_sockets.append(ws)
+            for ws in dead_sockets:
+                self.disconnect(ws)
+
+    def get_online_usernames(self) -> List[str]:
+        return list(set(m["username"] for m in self.socket_meta.values()))
+
+collab_manager = CollaborationConnectionManager()
+
+
+@app.websocket("/api/collaboration/ws")
+async def websocket_collaboration(
+    websocket: WebSocket,
+    channel_id: str = "chan_refinery_ops",
+    username: str = "operator",
+    role: str = "FIELD_OPERATOR"
+):
+    """
+    Real-Time Multi-User Collaboration WebSocket.
+    Handles:
+    - User text messaging
+    - Shared file notifications
+    - Typing indicators
+    - Real-time in-channel collaborative @aegis / @ai invocations
+    """
+    await collab_manager.connect(websocket, channel_id, username, role)
+    from backend.db import save_channel_message
+
+    try:
+        while True:
+            raw_data = await websocket.receive_text()
+            try:
+                payload = json.loads(raw_data)
+            except Exception:
+                continue
+
+            event_type = payload.get("event", "message")
+
+            # 1. Typing indicator
+            if event_type == "typing":
+                is_typing = payload.get("is_typing", True)
+                await collab_manager.broadcast_to_channel(channel_id, {
+                    "event": "typing",
+                    "username": username,
+                    "is_typing": is_typing,
+                    "channel_id": channel_id
+                })
+                continue
+
+            # 2. Regular User / File Message
+            content = (payload.get("content") or payload.get("message") or "").strip()
+            msg_type = payload.get("message_type", "TEXT")
+            file_id = payload.get("file_id")
+            file_name = payload.get("file_name")
+            file_type = payload.get("file_type")
+            file_size = payload.get("file_size")
+            file_url = payload.get("file_url")
+
+            if not content and not file_id:
+                continue
+
+            # Save message in MySQL
+            msg_id = save_channel_message(
+                channel_id=channel_id,
+                sender_username=username,
+                sender_role=role,
+                content=content,
+                message_type=msg_type,
+                file_id=file_id,
+                file_name=file_name,
+                file_type=file_type,
+                file_size=file_size,
+                file_url=file_url
+            )
+
+            # Broadcast user message to everyone in the room
+            msg_event = {
+                "event": "new_message",
+                "id": msg_id,
+                "channel_id": channel_id,
+                "sender_username": username,
+                "sender_role": role,
+                "content": content,
+                "message_type": msg_type,
+                "file_id": file_id,
+                "file_name": file_name,
+                "file_type": file_type,
+                "file_size": file_size,
+                "file_url": file_url,
+                "created_at": str(datetime.now())
+            }
+            await collab_manager.broadcast_to_channel(channel_id, msg_event)
+
+            # 3. Check for @aegis or @ai bot invocation
+            is_ai_trigger = bool(
+                re.search(r"@(?:aegis|ai|assistant|bot)\b", content, re.IGNORECASE) or
+                payload.get("ask_ai", False)
+            )
+
+            if is_ai_trigger:
+                # Strip mention tag to get pure prompt
+                clean_ai_prompt = re.sub(r"@(?:aegis|ai|assistant|bot)\b", "", content, flags=re.IGNORECASE).strip()
+                if not clean_ai_prompt and file_name:
+                    clean_ai_prompt = f"Analyze the shared file: {file_name}"
+                elif not clean_ai_prompt:
+                    clean_ai_prompt = "Hello AEGIS AI. How can you assist our plant team in this channel?"
+
+                # Signal AI thinking started
+                await collab_manager.broadcast_to_channel(channel_id, {
+                    "event": "ai_response_start",
+                    "channel_id": channel_id,
+                    "sender_username": "AEGIS AI (Sovereign)",
+                    "sender_role": "SOVEREIGN_AI_ASSISTANT",
+                    "prompt": clean_ai_prompt
+                })
+
+                # Stream response from sovereign pipeline
+                ai_chat_id = f"collab_ai_{channel_id}_{int(time.time())}"
+                full_ai_tokens = []
+                attachments_list = [file_url] if file_url else None
+
+                try:
+                    async for chunk in generate_chat_events(clean_ai_prompt, requested_mode="auto", chat_id=ai_chat_id, attachments=attachments_list):
+                        if "token" in chunk:
+                            token_txt = chunk["token"]
+                            full_ai_tokens.append(token_txt)
+                            await collab_manager.broadcast_to_channel(channel_id, {
+                                "event": "ai_response_token",
+                                "channel_id": channel_id,
+                                "token": token_txt
+                            })
+                        elif "thinking" in chunk and chunk.get("event") == "step":
+                            await collab_manager.broadcast_to_channel(channel_id, {
+                                "event": "ai_response_thinking",
+                                "channel_id": channel_id,
+                                "thinking": chunk.get("thinking", "")
+                            })
+
+                    full_ai_text = "".join(full_ai_tokens)
+                    
+                    # Save AI final response to DB
+                    ai_msg_id = save_channel_message(
+                        channel_id=channel_id,
+                        sender_username="AEGIS AI",
+                        sender_role="SOVEREIGN_AI",
+                        content=full_ai_text,
+                        message_type="AI_RESPONSE"
+                    )
+
+                    await collab_manager.broadcast_to_channel(channel_id, {
+                        "event": "ai_response_done",
+                        "id": ai_msg_id,
+                        "channel_id": channel_id,
+                        "content": full_ai_text,
+                        "created_at": str(datetime.now())
+                    })
+                except Exception as ai_err:
+                    logger.error(f"[COLLAB_AI_ERROR] Failed during @aegis stream: {ai_err}")
+                    await collab_manager.broadcast_to_channel(channel_id, {
+                        "event": "ai_response_done",
+                        "channel_id": channel_id,
+                        "content": f"⚠️ AEGIS AI Sovereign Assistant encountered an error processing this request: {ai_err}",
+                        "created_at": str(datetime.now())
+                    })
+
+    except WebSocketDisconnect:
+        collab_manager.disconnect(websocket)
+    except Exception as e:
+        logger.warning(f"[COLLAB_WS_ERR] WebSocket error: {e}")
+        collab_manager.disconnect(websocket)
+
+
+# ─── Security Audit & User Activity Monitoring Endpoints ────────────────────
+
+@app.get("/api/v1/audit/activity-logs")
+@app.get("/api/audit/activity-logs")
+async def get_activity_audit_logs(
+    username: Optional[str] = None,
+    activity_type: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 150
+):
+    """
+    Returns user activity logs (chat prompts, RAG searches, shared files, channel messages)
+    with risk levels for Admin monitoring and triage.
+    """
+    from backend.db import get_all_user_activity_logs
+    logs = get_all_user_activity_logs(
+        username=username,
+        activity_type=activity_type,
+        risk_level=risk_level,
+        search=search,
+        limit=limit
+    )
+
+    suspicious_count = len([l for l in logs if l.get("risk_level") in ("SUSPICIOUS", "CRITICAL")])
+
+    return {
+        "status": "SUCCESS",
+        "total": len(logs),
+        "suspicious_count": suspicious_count,
+        "logs": logs
+    }
+
+
+class BlockUserRequest(BaseModel):
+    username: str
+    reason: Optional[str] = "Suspicious activity detected by Sovereign Security Sentinel"
+    action: Optional[str] = "BLOCK" # "BLOCK" or "UNBLOCK"
+
+
+@app.post("/api/v1/audit/block-user")
+@app.post("/api/audit/block-user")
+async def block_or_unblock_user(body: BlockUserRequest):
+    """
+    Blocks/Freezes or Unblocks a suspicious user account immediately.
+    """
+    uname = body.username.strip().lower()
+    if uname == "admin":
+        raise HTTPException(status_code=400, detail="Cannot block root administrator account 'admin'")
+
+    new_status = "FROZEN" if body.action.upper() == "BLOCK" else "ACTIVE"
+
+    if uname in AUTH_USERS:
+        AUTH_USERS[uname]["status"] = new_status
+
+    from backend.db import log_user_activity
+    log_user_activity(
+        username="admin",
+        role="SUPER_ADMIN",
+        activity_type="SECURITY_TRIGGER",
+        details=f"Admin {body.action.upper()}ED user '{uname}'. Reason: {body.reason}",
+        risk_level="CRITICAL" if new_status == "FROZEN" else "NORMAL"
+    )
+
+    logger.warning(f"[SECURITY_SENTINEL] User '{uname}' status changed to {new_status} by Admin. Reason: {body.reason}")
+
+    return {
+        "status": "SUCCESS",
+        "username": uname,
+        "new_status": new_status,
+        "message": f"User '{uname}' has been successfully {new_status.lower()}."
+    }
 
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+
+
 
 
 

@@ -139,8 +139,8 @@ OUTPUT FORMAT:
   "confidence": 9
 }"""
 
-VISION_SYSTEM_PROMPT = """You are an Expert Industrial Multimodal & Computer Vision Inspector.
-Your objective is to provide high-precision, technical visual analysis of industrial diagrams (P&ID, PFD, isometric), equipment photos, analog/digital gauges, control panels, or field assets.
+VISION_SYSTEM_PROMPT = """You are an Expert Industrial Multimodal & Computer Vision Inspector with Visual GraphRAG Topological Intelligence.
+Your objective is to provide high-precision, technical visual analysis of industrial diagrams (P&ID, PFD, isometric, electrical SLDs), equipment photos, analog/digital gauges, control panels, or field assets.
 
 STRICT ANTI-HALLUCINATION & FACTUAL GROUNDING RULES:
 1. ONLY describe and report what is directly, verifiably visible in the image.
@@ -148,10 +148,10 @@ STRICT ANTI-HALLUCINATION & FACTUAL GROUNDING RULES:
 3. If the user asks about an element not shown in the image (e.g. asking for gauge pressure on a static diagram with no gauges), explicitly state that it is not present in the provided image.
 4. Directly answer the user's specific query without adding unnecessary boilerplate or generic template sections.
 
-INSPECTION GUIDELINES:
-- **Visual Inventory & Tags:** Report exact equipment tags (e.g., P-101A, MOV-104, TK-501), valve types, and sensors visible.
+INSPECTION GUIDELINES & GRAPHRAG TOPOLOGY:
+- **Visual Inventory & Tags:** Report exact equipment tags (e.g., P-101A, MOV-104, TK-501, ESDV-01, PSV-101), valve types, and sensors visible.
+- **Topological Flow & Interconnections (GraphRAG):** Explicitly list the flow direction and node connections (e.g., Feed Tank -> Pump P-101A -> Fired Heater F-101 -> Distillation Column C-101).
 - **Readings & Gauges:** Read exact needle positions, digital readouts, units (bar, psi, °C, RPM, %), and dial threshold colors if visible.
-- **Flow Logic (Diagrams):** Trace connections between visible equipment strictly as drawn.
 - **Asset Condition (Photos):** Note visible physical characteristics (corrosion, leakage, valve open/closed position).
 - Conclude with a factual summary and **Confidence:** X/10."""
 
@@ -730,6 +730,21 @@ async def handle_vision_mode(
     if image_base64_list:
         image_hash = _compute_image_hash(image_base64_list)
         _vision_cache.store(chat_id, image_hash, final_content, is_ocr, image_base64_list)
+
+    # ── Visual GraphRAG Post-Processing (for P&ID / Drawings / Schematics) ──
+    if not is_ocr:
+        try:
+            from backend.visual_graphrag import extract_graph_from_vision_text, VisualGraphRAG
+            graph_data = extract_graph_from_vision_text(final_content)
+            if graph_data.get("nodes") or graph_data.get("edges"):
+                vrag = VisualGraphRAG(graph_data)
+                mermaid_chart = vrag.generate_mermaid_diagram()
+                if mermaid_chart and "```mermaid" not in final_content:
+                    graphrag_block = f"\n\n### 🌐 Visual GraphRAG: Extracted Process Topology\n{mermaid_chart}\n"
+                    final_content += graphrag_block
+                    yield {"token": graphrag_block}
+        except Exception as vrag_err:
+            logger.debug(f"[VISUAL_GRAPHRAG] Topology extraction note: {vrag_err}")
 
     # ── OCR Post-Processing if applicable ──
     generated_file = None

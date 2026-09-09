@@ -1,22 +1,16 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
   FileText,
   Download,
   Search,
-  Check,
-  Copy,
-  LayoutGrid,
-  Columns,
-  ArrowUpRight,
-  ShieldCheck,
   X,
-  ChevronDown,
-  MoreVertical,
-  ArrowLeft,
+  Sparkles,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { useDeliverableStore, DeliverableItem } from '@/store/useDeliverableStore';
+import { useChatStore } from '@/store/useChatStore';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { DocumentCanvasPanel } from '@/components/canvas/DocumentCanvasPanel';
 import { AppSidebar } from '@/components/sidebar/AppSidebar';
@@ -152,10 +146,9 @@ const CATEGORIES = [
 ];
 
 export default function ArtifactsPage() {
+  const router = useRouter();
   const {
     deliverables,
-    selectedDeliverable,
-    selectDeliverable,
     downloadDeliverable,
     filterType,
     setFilterType,
@@ -164,20 +157,15 @@ export default function ArtifactsPage() {
     fetchDiskDeliverables,
   } = useDeliverableStore();
 
-  const { openCanvas } = useCanvasStore();
-
-  React.useEffect(() => {
-    // Artifacts list starts completely empty until deliverables are generated during chat sessions!
-  }, []);
-
-  const [copiedHash, setCopiedHash] = useState<string | null>(null);
+  const { openCanvas, isOpen: isCanvasOpen } = useCanvasStore();
   const [showSearchModal, setShowSearchModal] = useState(false);
-  const [viewMode, setViewMode] = useState<'grid' | 'split'>('grid');
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
-  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const { open: openSidebar, toggle } = useSidebarStore();
+
+  React.useEffect(() => {
+    fetchDiskDeliverables();
+  }, [fetchDiskDeliverables]);
 
   React.useEffect(() => {
     if (typeof window !== 'undefined' && window.innerWidth >= 768) {
@@ -194,25 +182,12 @@ export default function ArtifactsPage() {
     return matchesType && matchesSearch;
   });
 
-  const activeItem: DeliverableItem =
-    selectedDeliverable || filteredItems[0] || deliverables[0];
-
-  const handleCopy = (text: string, id: string) => {
-    if (typeof navigator !== 'undefined') {
-      navigator.clipboard.writeText(text);
-      setCopiedHash(id);
-      setTimeout(() => setCopiedHash(null), 2000);
-    }
+  const handleSendToAI = async (item: DeliverableItem) => {
+    const sessionId = await useChatStore.getState().createNewChat();
+    const promptText = `Please analyze and work with the deliverable "${item.filename}" (${item.type.toUpperCase()}).`;
+    useChatStore.getState().setCurrentInput(promptText);
+    router.push(`/chat/${sessionId}`);
   };
-
-  const handleMobileItemTap = useCallback((item: DeliverableItem) => {
-    selectDeliverable(item.id);
-    setMobileDetailOpen(true);
-  }, [selectDeliverable]);
-
-  const closeMobileDetail = useCallback(() => {
-    setMobileDetailOpen(false);
-  }, []);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-900 dark:bg-[#050507] dark:text-[#e3e3e3] font-sans antialiased selection:bg-blue-500/20 dark:selection:bg-[#4285f4]/30">
@@ -222,8 +197,13 @@ export default function ArtifactsPage() {
         activePage="artifacts"
       />
 
-      {/* 2. Main Window */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden bg-slate-100/60 dark:bg-[#07070a] relative">
+      {/* 2. Main Window & Side-by-Side Canvas Container */}
+      <div className="flex-1 flex h-full min-h-0 overflow-hidden relative bg-slate-100/60 dark:bg-[#07070a]">
+        <main className={`flex flex-col h-full min-h-0 overflow-hidden relative transition-all duration-300 ${
+          isCanvasOpen
+            ? 'hidden md:flex flex-1 md:w-[45vw] lg:w-[48vw] xl:w-[50vw]'
+            : 'flex-1 w-full'
+        }`}>
 
         {/* ============================================================
             MOBILE HEADER — Single compact bar (< md)
@@ -254,52 +234,6 @@ export default function ArtifactsPage() {
             >
               <Search className="h-5 w-5" />
             </button>
-            <div className="relative">
-              <button
-                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className="h-11 w-11 rounded-xl hover:bg-slate-100 dark:hover:bg-[#1e1f20] text-slate-600 dark:text-[#c4c7c5] flex items-center justify-center cursor-pointer touch-manipulation"
-                aria-label="More options"
-              >
-                <MoreVertical className="h-5 w-5" />
-              </button>
-              <AnimatePresence>
-                {mobileMenuOpen && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setMobileMenuOpen(false)} />
-                    <motion.div
-                      initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                      transition={{ duration: 0.15 }}
-                      className="absolute right-0 top-12 z-50 w-48 py-1.5 bg-white dark:bg-[#141622] border border-slate-200 dark:border-[#22283a] rounded-xl shadow-lg"
-                    >
-                      <button
-                        onClick={() => { setViewMode('grid'); setMobileMenuOpen(false); }}
-                        className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm cursor-pointer touch-manipulation ${
-                          viewMode === 'grid'
-                            ? 'text-blue-600 dark:text-[#a8c7fa] bg-blue-50 dark:bg-[#181a24]'
-                            : 'text-slate-700 dark:text-[#c4c7c5] hover:bg-slate-50 dark:hover:bg-[#1a1e2e]'
-                        }`}
-                      >
-                        <LayoutGrid className="h-4 w-4" />
-                        Grid View
-                      </button>
-                      <button
-                        onClick={() => { setViewMode('split'); setMobileMenuOpen(false); }}
-                        className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm cursor-pointer touch-manipulation ${
-                          viewMode === 'split'
-                            ? 'text-blue-600 dark:text-[#a8c7fa] bg-blue-50 dark:bg-[#181a24]'
-                            : 'text-slate-700 dark:text-[#c4c7c5] hover:bg-slate-50 dark:hover:bg-[#1a1e2e]'
-                        }`}
-                      >
-                        <Columns className="h-4 w-4" />
-                        Inspector View
-                      </button>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
           </div>
         </div>
 
@@ -339,7 +273,7 @@ export default function ArtifactsPage() {
         </AnimatePresence>
 
         {/* ============================================================
-            DESKTOP TOOLBAR — Filter tabs + Search + View toggle (md+)
+            DESKTOP TOOLBAR — Filter tabs + Search (md+)
             ============================================================ */}
         <div className="hidden md:flex px-6 py-3.5 bg-white/95 dark:bg-[#0a0a0e]/95 backdrop-blur-xl border-b border-slate-200 dark:border-[#181820] items-center justify-between gap-3 shrink-0 z-10 shadow-xs">
           {/* Category Filter Tabs */}
@@ -382,33 +316,6 @@ export default function ArtifactsPage() {
                 </button>
               )}
             </div>
-
-            <div className="flex items-center bg-slate-100 dark:bg-[#111116] border border-slate-200 dark:border-[#202028] rounded-full p-0.5 shrink-0">
-              <button
-                onClick={() => setViewMode('grid')}
-                className={`flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer ${
-                  viewMode === 'grid'
-                    ? 'bg-white text-blue-700 shadow-xs dark:bg-[#1e1f29] dark:text-[#a8c7fa]'
-                    : 'text-slate-600 hover:text-slate-900 dark:text-[#8e918f] dark:hover:text-[#e3e3e3]'
-                }`}
-                title="Grid Gallery View"
-              >
-                <LayoutGrid className="h-3.5 w-3.5" />
-                <span className="text-[11px]">Grid</span>
-              </button>
-              <button
-                onClick={() => setViewMode('split')}
-                className={`flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer ${
-                  viewMode === 'split'
-                    ? 'bg-white text-blue-700 shadow-xs dark:bg-[#1e1f29] dark:text-[#a8c7fa]'
-                    : 'text-slate-600 hover:text-slate-900 dark:text-[#8e918f] dark:hover:text-[#e3e3e3]'
-                }`}
-                title="Inspector View"
-              >
-                <Columns className="h-3.5 w-3.5" />
-                <span className="text-[11px]">Inspector</span>
-              </button>
-            </div>
           </div>
         </div>
 
@@ -437,456 +344,134 @@ export default function ArtifactsPage() {
         </div>
 
         {/* ============================================================
-            MAIN BODY VIEW
+            MAIN BODY VIEW (Clean Minimalist Grid Gallery)
             ============================================================ */}
-        {viewMode === 'grid' ? (
-          /* ==================== GRID MODE ==================== */
-          <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-8">
-            <div className="max-w-7xl mx-auto">
-              {filteredItems.length === 0 ? (
-                <div className="py-24 text-center text-xs text-slate-500 dark:text-[#8e918f] bg-white dark:bg-[#0c0c10] rounded-2xl md:rounded-3xl border border-slate-200 dark:border-[#1a1a22]">
-                  No deliverables match the selected filter or search term.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 md:gap-5">
-                  {filteredItems.map((item) => {
-                    const meta = getProfessionalFileMeta(item.type);
-                    return (
-                      <motion.div
-                        key={item.id}
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.15 }}
-                        onClick={() => handleMobileItemTap(item)}
-                        className={`group relative flex flex-col justify-between rounded-xl md:rounded-2xl bg-white hover:bg-slate-50/90 border border-slate-200 dark:bg-[#0c0d14] dark:hover:bg-[#10121b] dark:border-[#1a1c28] ${meta.glowColor} transition-all duration-200 overflow-hidden shadow-xs hover:shadow-md cursor-pointer active:scale-[0.98] touch-manipulation`}
-                      >
-                        {/* Card Body */}
-                        <div className="p-3 sm:p-4 md:p-5 pb-2 md:pb-3">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <div className="p-1.5 md:p-2 rounded-lg md:rounded-xl bg-slate-100 dark:bg-[#141724] border border-slate-200 dark:border-[#22283c] shadow-xs shrink-0 group-hover:scale-105 transition-transform duration-200">
-                                {meta.icon}
-                              </div>
-                              <div className="min-w-0 flex-1">
-                                <h3 className="text-xs md:text-[13px] font-bold text-slate-900 dark:text-[#f1f3f4] truncate tracking-tight group-hover:text-blue-600 dark:group-hover:text-[#a8c7fa] transition-colors" title={item.filename}>
-                                  {item.filename}
-                                </h3>
-                                <div className="text-[10px] md:text-[11px] text-slate-500 dark:text-[#8e918f] mt-0.5">
-                                  <span>{meta.label}</span>
-                                </div>
-                              </div>
-                            </div>
-                            <span className={`text-[9px] md:text-[10px] font-mono font-bold tracking-wider px-2 py-0.5 rounded-full border shrink-0 ${meta.badgeBg}`}>
-                              {meta.ext}
-                            </span>
-                          </div>
-
-                          {/* Summary — shorter on mobile */}
-                          <div className="mt-2.5 md:mt-4 pt-2.5 md:pt-3 border-t border-slate-100 dark:border-[#161824]">
-                            <p className="text-[11px] md:text-[12px] text-slate-600 dark:text-[#b5b8c4] leading-relaxed line-clamp-2 md:line-clamp-3 font-sans">
-                              {item.summary}
-                            </p>
-                          </div>
-
-                          {/* Metrics — hidden on mobile, visible on sm+ */}
-                          {item.key_metrics && item.key_metrics.length > 0 && (
-                            <div className="hidden sm:grid mt-3 grid grid-cols-2 gap-2">
-                              {item.key_metrics.slice(0, 2).map((m, idx) => (
-                                <div
-                                  key={idx}
-                                  className="px-2.5 py-1.5 rounded-xl bg-slate-50 dark:bg-[#12141f] border border-slate-200 dark:border-[#1e2334] flex flex-col justify-between"
-                                >
-                                  <span className="text-[9px] text-slate-500 dark:text-[#717686] uppercase font-bold tracking-wider truncate">
-                                    {m.label}
-                                  </span>
-                                  <span className="text-[11px] font-mono font-bold text-slate-800 dark:text-[#e3e6ee] mt-0.5 truncate">
-                                    {m.value}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Card Footer — Compact on mobile */}
-                        <div className="px-3 sm:px-4 md:px-5 py-2.5 md:py-3.5 bg-slate-50 dark:bg-[#090a10] border-t border-slate-100 dark:border-[#151722] flex items-center justify-between">
-                          <span className="text-[10px] md:text-[11px] text-blue-600 dark:text-[#a8c7fa]/80 font-bold truncate max-w-[100px] md:max-w-[140px]">
-                            {item.generating_model}
-                          </span>
-                          <div className="flex items-center gap-1.5 md:gap-2">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); downloadDeliverable(item.id); }}
-                              aria-label="Download document"
-                              className="h-9 w-9 md:h-auto md:w-auto md:p-2 rounded-lg md:rounded-xl bg-white hover:bg-slate-100 dark:bg-[#12141e] dark:hover:bg-[#1a1e2e] border border-slate-200 dark:border-[#22283a] text-slate-600 dark:text-[#8e918f] hover:text-slate-900 dark:hover:text-[#f1f3f4] transition-all cursor-pointer flex items-center justify-center touch-manipulation"
-                              title="Download"
-                            >
-                              <Download className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); openCanvas(item); }}
-                              className="h-9 md:h-auto px-3 md:px-3.5 py-1.5 rounded-lg md:rounded-xl bg-[#0070f3] hover:bg-[#0060df] text-white text-[11px] md:text-xs font-bold shadow-sm shadow-blue-500/20 transition-all active:scale-[0.97] cursor-pointer flex items-center gap-1.5 touch-manipulation"
-                            >
-                              <span>Open</span>
-                              <ArrowUpRight className="h-3 w-3 md:h-3.5 md:w-3.5 stroke-[2.5]" />
-                            </button>
-                          </div>
-                        </div>
-                      </motion.div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          /* ==================== SPLIT / INSPECTOR MODE ==================== */
-          <div className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
-            {/* Left Column: Explorer List */}
-            <div className="w-full md:w-80 lg:w-96 border-b md:border-b-0 md:border-r border-slate-200 dark:border-[#1a1c26] bg-white dark:bg-[#090a0f] flex flex-col shrink-0">
-              <div className="px-4 py-3 border-b border-slate-200 dark:border-[#181a24] flex items-center justify-between text-xs text-slate-600 dark:text-[#8e918f]">
-                <span className="font-bold uppercase tracking-wider text-[11px]">Artifacts</span>
-                <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-[#13151f] border border-slate-200 dark:border-[#222638] font-semibold">
-                  {filteredItems.length} files
-                </span>
+        <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-8">
+          <div className="max-w-7xl mx-auto">
+            {filteredItems.length === 0 ? (
+              <div className="py-24 text-center text-xs text-slate-500 dark:text-[#8e918f] bg-white dark:bg-[#0c0c10] rounded-2xl md:rounded-3xl border border-slate-200 dark:border-[#1a1a22]">
+                No deliverables match the selected filter or search term.
               </div>
-
-              <div className="flex-1 overflow-y-auto p-2.5 md:p-3 space-y-1.5 md:space-y-2">
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 md:gap-5">
                 {filteredItems.map((item) => {
                   const meta = getProfessionalFileMeta(item.type);
-                  const isSelected = activeItem?.id === item.id;
                   return (
-                    <button
+                    <motion.div
                       key={item.id}
-                      onClick={() => handleMobileItemTap(item)}
-                      className={`w-full text-left p-3 md:p-3.5 rounded-xl border transition-all flex items-start gap-2.5 md:gap-3 cursor-pointer touch-manipulation ${
-                        isSelected
-                          ? 'bg-blue-50/70 border-blue-500/60 shadow-xs dark:bg-[#131520] dark:border-blue-500/50'
-                          : 'bg-white border-slate-200 hover:bg-slate-50 hover:border-slate-300 dark:bg-[#0d0e14] dark:border-[#1a1c26] dark:hover:bg-[#11131c]'
-                      }`}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.15 }}
+                      onClick={() => openCanvas(item)}
+                      className={`group relative flex flex-col justify-between rounded-xl md:rounded-2xl bg-white hover:bg-slate-50/90 border border-slate-200 dark:bg-[#0c0d14] dark:hover:bg-[#10121b] dark:border-[#1a1c28] ${meta.glowColor} transition-all duration-200 overflow-hidden shadow-xs hover:shadow-md cursor-pointer active:scale-[0.98] touch-manipulation`}
                     >
-                      <div className="p-1.5 md:p-2 rounded-lg bg-slate-100 dark:bg-[#141622] shrink-0 mt-0.5 border border-slate-200 dark:border-[#22273a]">
-                        {meta.icon}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-bold text-xs text-slate-900 dark:text-[#f1f3f4] truncate">
-                          {item.filename}
-                        </div>
-                        <p className="text-[10px] md:text-[11px] text-slate-500 dark:text-[#8e918f] line-clamp-2 mt-0.5 leading-relaxed font-sans">
-                          {item.summary}
-                        </p>
-                        <div className="flex items-center gap-2 text-[10px] text-slate-400 dark:text-[#6e7175] mt-1.5 md:mt-2 font-mono">
-                          <span className={`px-2 py-0.5 rounded-full font-sans font-bold ${meta.badgeBg}`}>
+                      {/* Card Body: Only Doc Icon, File Name & Doc Type */}
+                      <div className="p-4 sm:p-5">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-[#141724] border border-slate-200 dark:border-[#22283c] shadow-xs shrink-0 group-hover:scale-105 transition-transform duration-200">
+                              {meta.icon}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <h3 className="text-sm font-bold text-slate-900 dark:text-[#f1f3f4] truncate tracking-tight group-hover:text-blue-600 dark:group-hover:text-[#a8c7fa] transition-colors" title={item.filename}>
+                                {item.filename}
+                              </h3>
+                              <div className="text-[11px] text-slate-500 dark:text-[#8e918f] mt-0.5">
+                                <span>{meta.label}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* File Extension Badge */}
+                          <span className={`text-[10px] font-mono font-bold tracking-wider px-2.5 py-0.5 rounded-full border shrink-0 ${meta.badgeBg}`}>
                             {meta.ext}
                           </span>
                         </div>
                       </div>
-                    </button>
+
+                      {/* Card Footer: Status Pill + Actions (Download & Use with AI) */}
+                      <div className="px-4 sm:px-5 py-3 bg-slate-50 dark:bg-[#090a10] border-t border-slate-100 dark:border-[#151722] flex items-center justify-between gap-2">
+                        {/* 2-Step Verification Live Status Badge */}
+                        {(() => {
+                          const status = item.verification_status || 'PENDING_STAGE_1';
+                          if (status === 'VERIFIED') {
+                            return (
+                              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 text-[11px] font-semibold" title={item.stage_2_verifier ? `Verified & signed by @${item.stage_2_verifier}` : 'Verified'}>
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                <span>VERIFIED</span>
+                              </div>
+                            );
+                          }
+                          if (status === 'PENDING_STAGE_2') {
+                            return (
+                              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-50 text-purple-700 border border-purple-200/80 dark:bg-purple-500/10 dark:text-purple-400 dark:border-purple-500/20 text-[11px] font-semibold" title="Step 1 complete. Awaiting final sign-off (Step 2)">
+                                <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />
+                                <span>STEP 2: SIGN-OFF</span>
+                              </div>
+                            );
+                          }
+                          if (status === 'REJECTED') {
+                            return (
+                              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200/80 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20 text-[11px] font-semibold" title={item.reject_reason ? `Rejected: ${item.reject_reason}` : 'Rejected'}>
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                <span>REJECTED</span>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200/80 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20 text-[11px] font-semibold" title="Awaiting Step 1 Technical Peer Review">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                              <span>STEP 1: REVIEW</span>
+                            </div>
+                          );
+                        })()}
+
+                        {/* Action Buttons: Download + Compact Ask AI Button */}
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              downloadDeliverable(item.id);
+                            }}
+                            aria-label="Download document"
+                            className="h-7 w-7 sm:h-8 sm:w-8 rounded-lg bg-white hover:bg-slate-100 dark:bg-[#12141e] dark:hover:bg-[#1a1e2e] border border-slate-200 dark:border-[#22283a] text-slate-600 dark:text-[#8e918f] hover:text-slate-900 dark:hover:text-[#f1f3f4] transition-all cursor-pointer flex items-center justify-center touch-manipulation shadow-xs"
+                            title="Download file"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                          </button>
+                          
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSendToAI(item);
+                            }}
+                            className="h-7 sm:h-8 px-2.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-[11px] font-semibold shadow-xs shadow-blue-500/20 transition-all active:scale-[0.97] cursor-pointer flex items-center gap-1 touch-manipulation"
+                            title="Work with this file in AI Chat"
+                          >
+                            <Sparkles className="h-3 w-3" />
+                            <span>Ask AI</span>
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
                   );
                 })}
               </div>
-            </div>
-
-            {/* Right Column: Detail Inspector (desktop only) */}
-            <div className="hidden md:flex flex-1 bg-slate-50/50 dark:bg-[#090a0f] flex-col min-h-0 overflow-y-auto p-6 lg:p-8 space-y-6">
-              {activeItem ? (
-                <>
-                  {/* Header */}
-                  <div className="flex items-center justify-between gap-4 pb-6 border-b border-slate-200 dark:border-[#1a1c26]">
-                    <div className="flex items-start gap-4">
-                      <div className="p-3.5 rounded-2xl bg-white dark:bg-[#12141e] border border-slate-200 dark:border-[#202538] shadow-xs shrink-0">
-                        {getProfessionalFileMeta(activeItem.type).icon}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h2 className="text-lg font-extrabold text-slate-900 dark:text-[#f1f3f4] break-all">
-                            {activeItem.filename}
-                          </h2>
-                          <span className={`text-[11px] font-mono font-bold px-2.5 py-0.5 rounded-full border ${getProfessionalFileMeta(activeItem.type).badgeBg}`}>
-                            {getProfessionalFileMeta(activeItem.type).ext}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-500 dark:text-[#8e918f] mt-1">
-                          Generated by <span className="text-blue-600 dark:text-[#a8c7fa] font-bold">{activeItem.generating_model}</span>
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        onClick={() => openCanvas(activeItem)}
-                        className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-[#0070f3] hover:bg-[#0060df] text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
-                      >
-                        <span>Open Canvas</span>
-                        <ArrowUpRight className="h-3.5 w-3.5 stroke-[2.5]" />
-                      </button>
-                      <button
-                        onClick={() => downloadDeliverable(activeItem.id)}
-                        className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 dark:bg-[#141622] dark:hover:bg-[#1a1e2e] border border-slate-200 dark:border-[#252b40] text-slate-800 dark:text-[#e3e3e3] text-xs font-semibold transition-all cursor-pointer"
-                      >
-                        <Download className="h-3.5 w-3.5 text-blue-600 dark:text-[#a8c7fa]" />
-                        <span>Download</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Summary */}
-                  <div className="p-5 rounded-2xl bg-white dark:bg-[#0d0e14] border border-slate-200 dark:border-[#1a1c26] shadow-xs">
-                    <h3 className="text-[11px] font-bold text-slate-500 dark:text-[#8e918f] uppercase tracking-wider mb-2">
-                      Executive Document Summary
-                    </h3>
-                    <p className="text-sm text-slate-700 dark:text-[#d0d3d6] leading-relaxed font-sans">
-                      {activeItem.summary}
-                    </p>
-                  </div>
-
-                  {/* Metrics */}
-                  {activeItem.key_metrics && activeItem.key_metrics.length > 0 && (
-                    <div>
-                      <h3 className="text-[11px] font-bold text-slate-500 dark:text-[#8e918f] uppercase tracking-wider mb-3">
-                        Key Metrics & Parameters
-                      </h3>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                        {activeItem.key_metrics.map((metric, idx) => (
-                          <div
-                            key={idx}
-                            className="p-4 rounded-xl bg-white dark:bg-[#0d0e14] border border-slate-200 dark:border-[#1a1c26] flex flex-col justify-between shadow-xs"
-                          >
-                            <span className="text-[11px] text-slate-500 dark:text-[#8e918f] leading-tight mb-1 font-medium">
-                              {metric.label}
-                            </span>
-                            <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-[#f1f3f4] font-mono">
-                              {metric.value}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* SOP Citations */}
-                  {activeItem.sop_citations && activeItem.sop_citations.length > 0 && (
-                    <div>
-                      <h3 className="text-[11px] font-bold text-slate-500 dark:text-[#8e918f] uppercase tracking-wider mb-3">
-                        Referenced SOPs & Industry Standards
-                      </h3>
-                      <div className="space-y-2">
-                        {activeItem.sop_citations.map((cite, idx) => (
-                          <div
-                            key={idx}
-                            className="p-3 rounded-xl bg-white dark:bg-[#0d0e14] border border-slate-200 dark:border-[#1a1c26] flex items-center justify-between text-xs text-slate-700 dark:text-[#c4c7c5] shadow-xs"
-                          >
-                            <div className="flex items-center space-x-2">
-                              <ShieldCheck className="h-4 w-4 text-emerald-500 dark:text-emerald-400 shrink-0" />
-                              <span className="font-semibold">{cite}</span>
-                            </div>
-                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/30">
-                              VERIFIED
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* SHA-256 */}
-                  <div className="p-4 rounded-2xl bg-white dark:bg-[#0b0c12] border border-slate-200 dark:border-[#1a1c26] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-xs">
-                    <div className="space-y-1">
-                      <div className="flex items-center space-x-2 text-slate-500 dark:text-[#8e918f]">
-                        <ShieldCheck className="h-4 w-4 text-emerald-500 dark:text-emerald-400" />
-                        <span className="font-bold">SHA-256 Air-Gapped Signature</span>
-                      </div>
-                      <div className="font-mono text-[11px] text-blue-600 dark:text-[#a8c7fa] break-all font-semibold">
-                        {activeItem.sha256_hash}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleCopy(activeItem.sha256_hash, activeItem.id)}
-                      className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#141622] dark:hover:bg-[#1a1e2e] border border-slate-200 dark:border-[#252b40] text-slate-700 dark:text-[#c4c7c5] hover:text-slate-900 dark:hover:text-white shrink-0 transition-colors cursor-pointer font-medium"
-                    >
-                      {copiedHash === activeItem.id ? (
-                        <>
-                          <Check className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
-                          <span>Copied</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3.5 w-3.5" />
-                          <span>Copy Hash</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div className="flex-1 flex items-center justify-center p-8 text-center text-xs text-slate-500 dark:text-[#8e918f]">
-                  Select an artifact from the list to view details and launch the live editor.
-                </div>
-              )}
-            </div>
+            )}
           </div>
-        )}
+        </div>
 
-        {/* ============================================================
-            MOBILE DETAIL BOTTOM SHEET — Full-screen slide-up (< md)
-            ============================================================ */}
-        <AnimatePresence>
-          {mobileDetailOpen && activeItem && (
-            <>
-              {/* Backdrop */}
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className="md:hidden fixed inset-0 bg-black/40 z-40"
-                onClick={closeMobileDetail}
-              />
-              {/* Sheet */}
-              <motion.div
-                initial={{ y: '100%' }}
-                animate={{ y: 0 }}
-                exit={{ y: '100%' }}
-                transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-                className="md:hidden fixed inset-x-0 bottom-0 top-12 z-50 bg-slate-50 dark:bg-[#07070a] rounded-t-2xl overflow-hidden flex flex-col"
-              >
-                {/* Sheet Header */}
-                <div className="flex items-center justify-between px-4 py-3 bg-white dark:bg-[#0a0a0e] border-b border-slate-200 dark:border-[#1a1a1a] shrink-0">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <button
-                      onClick={closeMobileDetail}
-                      className="h-10 w-10 rounded-xl hover:bg-slate-100 dark:hover:bg-[#1e1f20] flex items-center justify-center text-slate-600 dark:text-[#c4c7c5] cursor-pointer touch-manipulation shrink-0"
-                      aria-label="Go back"
-                    >
-                      <ArrowLeft className="h-5 w-5" />
-                    </button>
-                    <div className="min-w-0">
-                      <h2 className="text-sm font-bold text-slate-900 dark:text-[#f1f3f4] truncate">
-                        {activeItem.filename}
-                      </h2>
-                      <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full border ${getProfessionalFileMeta(activeItem.type).badgeBg}`}>
-                        {getProfessionalFileMeta(activeItem.type).ext}
-                      </span>
-                    </div>
-                  </div>
-                </div>
+        </main>
 
-                {/* Sheet Body — Scrollable */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  {/* Summary */}
-                  <div className="p-4 rounded-xl bg-white dark:bg-[#0d0e14] border border-slate-200 dark:border-[#1a1c26] shadow-xs">
-                    <h3 className="text-[10px] font-bold text-slate-500 dark:text-[#8e918f] uppercase tracking-wider mb-2">
-                      Executive Summary
-                    </h3>
-                    <p className="text-[13px] text-slate-700 dark:text-[#d0d3d6] leading-relaxed font-sans">
-                      {activeItem.summary}
-                    </p>
-                  </div>
-
-                  {/* Metrics */}
-                  {activeItem.key_metrics && activeItem.key_metrics.length > 0 && (
-                    <div>
-                      <h3 className="text-[10px] font-bold text-slate-500 dark:text-[#8e918f] uppercase tracking-wider mb-2">
-                        Key Metrics
-                      </h3>
-                      <div className="grid grid-cols-2 gap-2">
-                        {activeItem.key_metrics.map((metric, idx) => (
-                          <div
-                            key={idx}
-                            className="p-3 rounded-xl bg-white dark:bg-[#0d0e14] border border-slate-200 dark:border-[#1a1c26] flex flex-col justify-between shadow-xs"
-                          >
-                            <span className="text-[10px] text-slate-500 dark:text-[#8e918f] leading-tight mb-1 font-medium">
-                              {metric.label}
-                            </span>
-                            <span className="text-sm font-bold text-slate-900 dark:text-[#f1f3f4] font-mono">
-                              {metric.value}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* SOP Citations */}
-                  {activeItem.sop_citations && activeItem.sop_citations.length > 0 && (
-                    <div>
-                      <h3 className="text-[10px] font-bold text-slate-500 dark:text-[#8e918f] uppercase tracking-wider mb-2">
-                        SOPs & Standards
-                      </h3>
-                      <div className="space-y-1.5">
-                        {activeItem.sop_citations.map((cite, idx) => (
-                          <div
-                            key={idx}
-                            className="p-2.5 rounded-xl bg-white dark:bg-[#0d0e14] border border-slate-200 dark:border-[#1a1c26] flex items-center gap-2 text-[11px] text-slate-700 dark:text-[#c4c7c5] shadow-xs"
-                          >
-                            <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400 shrink-0" />
-                            <span className="font-semibold flex-1 truncate">{cite}</span>
-                            <span className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 shrink-0">
-                              OK
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* SHA-256 */}
-                  <div className="p-3 rounded-xl bg-white dark:bg-[#0b0c12] border border-slate-200 dark:border-[#1a1c26] shadow-xs">
-                    <div className="flex items-center gap-1.5 text-slate-500 dark:text-[#8e918f] mb-1.5">
-                      <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
-                      <span className="font-bold text-[10px]">SHA-256 Signature</span>
-                    </div>
-                    <div className="font-mono text-[10px] text-blue-600 dark:text-[#a8c7fa] break-all font-semibold mb-2">
-                      {activeItem.sha256_hash}
-                    </div>
-                    <button
-                      onClick={() => handleCopy(activeItem.sha256_hash, activeItem.id)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-[#141622] dark:hover:bg-[#1a1e2e] border border-slate-200 dark:border-[#252b40] text-slate-700 dark:text-[#c4c7c5] text-[11px] font-medium cursor-pointer touch-manipulation"
-                    >
-                      {copiedHash === activeItem.id ? (
-                        <>
-                          <Check className="h-3 w-3 text-emerald-500 dark:text-emerald-400" />
-                          <span>Copied</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3 w-3" />
-                          <span>Copy Hash</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Sheet Footer — Fixed action bar */}
-                <div className="px-4 py-3 bg-white dark:bg-[#0a0a0e] border-t border-slate-200 dark:border-[#1a1a1a] flex items-center gap-2 shrink-0 safe-area-bottom">
-                  <button
-                    onClick={() => { downloadDeliverable(activeItem.id); }}
-                    className="h-12 flex-1 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#141622] dark:hover:bg-[#1a1e2e] border border-slate-200 dark:border-[#252b40] text-slate-800 dark:text-[#e3e3e3] text-sm font-semibold transition-all cursor-pointer flex items-center justify-center gap-2 touch-manipulation"
-                  >
-                    <Download className="h-4 w-4" />
-                    <span>Download</span>
-                  </button>
-                  <button
-                    onClick={() => { openCanvas(activeItem); closeMobileDetail(); }}
-                    className="h-12 flex-1 rounded-xl bg-[#0070f3] hover:bg-[#0060df] text-white text-sm font-bold shadow-md shadow-blue-500/20 transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 touch-manipulation"
-                  >
-                    <span>Open Canvas</span>
-                    <ArrowUpRight className="h-4 w-4 stroke-[2.5]" />
-                  </button>
-                </div>
-              </motion.div>
-            </>
-          )}
-        </AnimatePresence>
-
-        {/* Mount Live Univer Canvas Panel */}
+        {/* Mount Live Univer Canvas Panel (Side-by-Side Flex) */}
         <DocumentCanvasPanel />
+      </div>
 
-        {/* Global Search Chats Command Palette Modal */}
-        <SearchChatsModal
-          isOpen={showSearchModal}
-          onClose={() => setShowSearchModal(false)}
-        />
-      </main>
+      {/* Global Search Chats Command Palette Modal */}
+      <SearchChatsModal
+        isOpen={showSearchModal}
+        onClose={() => setShowSearchModal(false)}
+      />
     </div>
   );
 }

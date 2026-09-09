@@ -112,12 +112,6 @@ export default function LoginPage() {
     }
   };
 
-  const fillQuickUser = (u: string, p: string) => {
-    setUsername(u);
-    setPassword(p);
-    setError(null);
-  };
-
   return (
     <div className="relative min-h-[100dvh] w-full flex flex-col justify-between bg-slate-50 text-slate-900 dark:bg-[#08080a] dark:text-[#e3e3e3] font-sans antialiased selection:bg-blue-500/20 dark:selection:bg-[#4285f4]/30 overflow-x-hidden transition-colors duration-300">
       
@@ -263,10 +257,7 @@ export default function LoginPage() {
               )}
             </button>
           </form>
-
         </div>
-
-        
       </main>
 
       

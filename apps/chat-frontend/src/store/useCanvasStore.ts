@@ -18,6 +18,7 @@ interface CanvasState {
   toggleExpand: () => void;
   setActiveTab: (tab: CanvasTab) => void;
   updateEditedContent: (id: string, content: any) => void;
+  renameActiveDeliverable: (newName: string) => Promise<void>;
   saveChanges: (id: string) => Promise<void>;
 }
 
@@ -129,6 +130,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }, 1200);
   },
 
+  renameActiveDeliverable: async (newName: string) => {
+    const active = get().activeDeliverable;
+    if (!active || !newName.trim()) return;
+    const cleanName = newName.trim();
+    
+    // Update local active deliverable
+    set({
+      activeDeliverable: {
+        ...active,
+        filename: cleanName
+      }
+    });
+
+    // Sync in global deliverable store and backend
+    await useDeliverableStore.getState().renameDeliverable(active.id, cleanName);
+  },
+
   saveChanges: async (id: string) => {
     if (autoSaveTimer) {
       clearTimeout(autoSaveTimer);
@@ -139,3 +157,4 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set({ isSaving: false, hasUnsavedChanges: false });
   },
 }));
+

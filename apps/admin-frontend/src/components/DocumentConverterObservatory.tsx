@@ -27,24 +27,31 @@ export function DocumentConverterObservatory() {
     if (!convertFile) return;
     setIsConverting(true);
     setConvertStatus(null);
-    await new Promise((r) => setTimeout(r, 1200));
 
     try {
-      const blob = new Blob([`AEGIS AI Sovereign Converted Document: ${convertFile.name}`], {
-        type: 'application/octet-stream',
-      });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const baseName =
-        convertFile.name.substring(0, convertFile.name.lastIndexOf('.')) || convertFile.name;
-      a.download = `${baseName}_converted.${targetFormat}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+      const formData = new FormData();
+      formData.append('file', convertFile);
+      formData.append('target_format', targetFormat);
 
-      setConvertStatus('Conversion complete! File download initiated.');
+      const res = await fetch('http://127.0.0.1:8000/api/document-converter/convert', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+
+      if (data && data.status === 'SUCCESS' && data.download_url) {
+        const downloadUrl = `http://127.0.0.1:8000${data.download_url}`;
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = data.filename || `converted.${targetFormat}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        setConvertStatus(`Conversion successful! Downloaded: ${data.filename}`);
+      } else {
+        throw new Error(data.message || 'Conversion failed on server');
+      }
     } catch (err: any) {
       setConvertStatus(`Error converting: ${err.message}`);
     } finally {
