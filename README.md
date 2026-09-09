@@ -53,17 +53,19 @@ Commercial cloud AI solutions (such as ChatGPT, Anthropic Claude, or GitHub Copi
 **AEGIS AI** is a production-grade, 100% self-hosted, air-gapped agentic AI workbench. It operates entirely on-premise without external network connections, delivering multimodal intelligence, autonomous sandboxed execution, and native enterprise document synthesis.
 
 ### 🌟 Core Architectural Innovations
-1. **Dynamic VRAM Swapping & Paging Engine:** Orchestrates multiple specialized lightweight open-weight models (2B to 4B parameters) inside a **strict 6GB VRAM ceiling**, maintaining sub-second model swapping with zero Out-Of-Memory (OOM) errors.
-2. **Two-Stage Intelligent Auto-Selection Router:** Dynamically classifies operator queries using high-speed regex heuristic triggers (<50ms) and dense semantic intent classification, eliminating manual model switching.
-3. **Deterministic SOP RAG & Fallback Gate:** Grounded directly in verified MRPL, ONGC, OISD, and API operational standards with verbatim clause citations (`[SOURCE: Doc_ID | Clause: X | Page: Y]`) and a zero-hallucination deterministic fallback for unindexed parameters.
-4. **Air-Gapped Chemical Safety Engine:** In-memory MSDS & ACGIH chemical safety database for instant toxic gas limits (H₂S, Benzene, Chlorine, HF), flammable thresholds, and immediate medical first-aid protocols.
-5. **Isolated Docker Python Sandbox (`--network none`):** Generates, runs, and self-heals engineering calculations (hydraulic power, pump efficiency, corrosion rate) inside a hardened container with zero host-network access.
-6. **Self-Healing Agentic Loop:** Analyzes execution tracebacks and automatically patches code/deliverable schemas across up to 10 iterative correction cycles.
-7. **Native OpenXML Deliverable Generation:** Programmatically builds ready-to-use, styled Microsoft Word (`.docx`), Excel (`.xlsx`), and PowerPoint (`.pptx`) deliverables with 50+ industrial styling presets.
-8. **Real-Time Cryptographic Sovereignty Daemon:** Background socket sniffer continuously auditing network interfaces (127.0.0.1 bound), logging 0 external packets and providing tamper-evident exportable audit trails.
-9. **Dual Production Frontends:**
-   - **Chat & Canvas Workspace (Port 3000):** Next.js 14 client featuring embedded UniverJS Office Canvas (live editing of generated Word, Excel, and PowerPoint files), Monaco Code Editor, and Server-Sent Events (SSE).
-   - **Admin Observatory (Port 3001):** Unified operations deck with RAG Observatory, Router Analyzer, Docker Sandbox Monitor, Live VRAM Telemetry, and Sovereignty Sniffer.
+1. **Multi-Domain Sovereign Intelligence Engine:** Comprehensive coverage across **Refinery & Petrochemicals (MRPL/IOCL/ONGC/OISD)**, **Government & Central Administration (DoPT/GFR 2017/CCS Conduct/RTI)**, **Defence & Aerospace (DAP 2020/MIL-STD-810H/DGAQA/Air-Gap Sec)**, and **PSU Heavy Manufacturing (BHEL/SAIL/NTPC/Boiler Regulations)**.
+2. **Dynamic VRAM Swapping & Paging Engine:** Orchestrates multiple specialized lightweight open-weight models (2B to 4B parameters) inside a **strict 6GB VRAM ceiling**, maintaining sub-second model swapping with zero Out-Of-Memory (OOM) errors.
+3. **GraphRAG & Visual P&ID GraphRAG:** Hybrid Knowledge Graph + Vector retrieval connecting technical tags, equipment hierarchy (`CDU-100` -> `P-101A` -> `ISO-10816`), interlock sequences, and cross-standard compliance rules with clickable interactive visual graph exploration.
+4. **Deterministic SOP RAG & Fallback Gate:** Grounded directly in verified industry SOPs with verbatim clause citations (`[SOURCE: Doc_ID | Clause: X | Page: Y]`) and a zero-hallucination deterministic fallback for unindexed parameters.
+5. **Air-Gapped Chemical Safety Engine:** In-memory MSDS & ACGIH chemical safety database for instant toxic gas limits (H₂S, Benzene, Chlorine, HF), flammable thresholds, and immediate medical first-aid protocols.
+6. **Isolated Docker Python Sandbox (`--network none`):** Generates, runs, and self-heals engineering calculations (hydraulic power, pump efficiency, corrosion rate) inside a hardened container with zero host-network access.
+7. **Two-Tier Human-in-the-Loop Verification:** Dual-signoff safety gate for high-risk equipment parameters and critical deliverables requiring Operator and Lead Verification Officer sign-offs before execution or export.
+8. **Real-Time Air-Gapped Team Collaboration:** Multicast team chat and presence channels allowing shift engineers to collaborate, share live deliverables, and issue plant alerts securely on local intranet.
+9. **Native OpenXML Deliverable Generation:** Programmatically builds ready-to-use, styled Microsoft Word (`.docx`), Excel (`.xlsx`), and PowerPoint (`.pptx`) deliverables with 50+ industrial styling presets.
+10. **Real-Time Cryptographic Sovereignty Daemon:** Background socket sniffer continuously auditing network interfaces (127.0.0.1 bound), logging 0 external packets and providing tamper-evident exportable audit trails.
+11. **Dual Production Frontends:**
+   - **Chat & Canvas Workspace (Port 3000):** Next.js 14 client featuring embedded UniverJS Office Canvas (live editing of generated Word, Excel, and PowerPoint files), Monaco Code Editor, Visual Knowledge Graph, Team Collaboration, and Dual Verification console.
+   - **Admin Observatory (Port 3001):** Unified operations deck with Document Converter Observatory, RAG Observatory, Feedback & Audit logs, Docker Sandbox Monitor, Live VRAM Telemetry, and Sovereignty Sniffer.
 
 ---
 
@@ -231,18 +233,41 @@ flowchart TB
 ---
 
 ## 🎯 Supported Industrial Domains & Departmental Coverage
-
-Tested and cataloged across 7 core refinery & upstream operational departments:
-
-| Department | Sample Operator Query | Mechanism | Grounding / Output |
-| :--- | :--- | :--- | :--- |
-| **Refinery Operations (CDU/VDU/HCU)** | *"Furnace F-101 tube skin temperature max limit kitna hai?"* | RAG (Master SOP) | Indexed in `SOP-MRPL-FURNACE-101` (Limit: 750°C, Alarm: 720°C) |
-| **Upstream Drilling Services** | *"Calculate hydrostatic pressure for 10.5 ppg mud at 8,500 ft TVD"* | Calculation (Code) | Executes `P = 0.052 * MW * TVD` in isolated Docker sandbox |
-| **Offshore Platforms (ONGC)** | *"TEG contactor dehydration glycol circulation rate & reboiler temp?"* | Chemical-DB + RAG | Injects Triethylene Glycol properties & decomposition limits |
-| **HSE & Fire Safety** | *"H2S gas leak exposure symptoms and TLV threshold?"* | Chemical-DB | CAS 7783-06-4, TLV: 1 ppm, STEL: 5 ppm, Level A PPE |
-| **Mechanical Maintenance** | *"API 610 pump P-101A/B vibration alarm and trip limits?"* | RAG (Master SOP) | Indexed in `SOP-MRPL-PUMP-610` (Alarm: 4.5 mm/s, Trip: 7.1 mm/s) |
-| **Inspection & Metallurgy (NDT)** | *"Calculate remaining corrosion life: current 9.2mm, min 6.8mm, rate 0.15mm/yr"* | Calculation (Code) | Executes calculation in sandbox: **16.0 Years** |
-| **QC Laboratory** | *"Generate Daily Quality Certificate of Analysis (COA) for BS-VI HSD"* | Template (Document) | Programmatically builds formatted `.docx` inspection certificate |
+ 
+ Tested and cataloged across 4 major sovereign sectors with dedicated datasets, extraction rules, and GraphRAG ontologies:
+ 
+ ### 1. 🛢️ Refinery, Oil & Gas (MRPL / IOCL / ONGC / OISD)
+ | Standard / SOP | Topic / Equipment | Grounding & Logic |
+ | :--- | :--- | :--- |
+ | `SOP-MRPL-CDU-VDU-001` | CDU/VDU Furnace & Column Operation | COT 365°C max limit, flash fire PTW, emergency shutdown interlocks |
+ | `SOP-OISD-105-PTW` | Work Permit System | Cold Work, Hot Work Class-I (LEL < 1%), Confined Space Entry (< 5 ppm H2S, O2 19.5-23.5%) |
+ | `SOP-MRPL-PUMP-ISO-10816` | API 610 Heavy Centrifugal Pumps | ISO 10816-3 Zone A/B/C/D limits (Alarm 4.5 mm/s, Trip 7.1 mm/s RMS) |
+ | `SOP-API-510-VESSELS` | Pressure Vessel Inspection & Corrosion Life | Remaining life formula `RL = (t_actual - t_required) / CR`, MAWP checks |
+ | `SOP-ONGC-WELL-001` | Offshore Drilling & Hydrostatic Safety | Hydrostatic head equation `P = 0.052 * MW * TVD`, BOP accumulator safety |
+ 
+ ### 2. 🏛️ Government, Central Administration & PSUs (DoPT / MoPNG)
+ | Standard / Rule | Topic / Workflow | Grounding & Logic |
+ | :--- | :--- | :--- |
+ | `SOP-GOV-GFR-RULE-166` | Single Source / Proprietary Procurement (PAC) | General Financial Rules Rule 166 PAC certificate requirements & sanction ceilings |
+ | `SOP-GOV-CSMOP-2019` | Central Secretariat Manual of Office Procedure | Official Memo, U.O. Note, Dak receipt, file docketing, note-sheet formatting |
+ | `SOP-GOV-CCS-CONDUCT-1964` | CCS (Conduct) Rules, 1964 | Rule 3 integrity, Rule 11 communication of official info, Rule 18 immovable asset return |
+ | `SOP-GOV-RTI-2005` | Right to Information Act, 2005 | Section 4 proactive disclosure, Section 6(1) fee, Section 7(1) 30-day/48-hr life-liberty deadline |
+ 
+ ### 3. 🛡️ Defence, Aerospace & Strategic Establishments (DRDO / HAL / MoD)
+ | Standard / Guideline | Topic / Protocol | Grounding & Logic |
+ | :--- | :--- | :--- |
+ | `SOP-DEF-DAP-2020-001` | Defence Acquisition Procedure 2020 | Buy (Indian-IDDM) 50%+ indigenous content, Buy (Global-Manufacture in India) |
+ | `SOP-DEF-MIL-810H-002` | Environmental Engineering & Testing | Method 501.7 High Temp (71°C storage), Method 514.8 Vibration profile, Method 516.8 Shock |
+ | `SOP-DEF-DGAQA-FAI-003` | First Article Inspection & Quality Clearance | Form 1, Form 2, Form 3 compliance, DGAQA stamp of conformance |
+ | `SOP-DEF-AIRGAP-SEC-004` | SCADA & Air-Gap Strategic IT Security | Strict USB unidirectional data diode, zero wireless hardware, tamper seals |
+ 
+ ### 4. ⚙️ PSU Heavy Engineering & Manufacturing (BHEL / SAIL / NTPC)
+ | Standard / Code | Topic / System | Grounding & Logic |
+ | :--- | :--- | :--- |
+ | `SOP-PSU-TURBINE-001` | Heavy Steam Turbine Governing & Run-up | Barring gear engagement (3-5 RPM), casing differential expansion, tripper limits |
+ | `SOP-PSU-BOILER-002` | Supercritical Utility Boiler Operations | Indian Boiler Regulations (IBR 1950), drum water level trip (+150mm/-150mm), BMS |
+ | `SOP-PSU-GEM-GFR-003` | GeM Portal Procurement Guidelines | Reverse auction thresholds, L1 evaluation criteria, vendor registration compliance |
+ | `SOP-PSU-STEEL-004` | Blast Furnace & Hot Metal Safety | CO gas emergency protocol, carbon block hearth refractory thermocouple limits |
 
 ---
 
