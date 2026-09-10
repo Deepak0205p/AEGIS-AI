@@ -21,7 +21,7 @@
 - [🧪 Evaluation & Demo Scenarios for Judges](#-demonstration-scenarios-for-sih-evaluation)
 - [📡 API Endpoints Reference](#-api-endpoints-reference)
 - [📂 Repository Directory Structure](#-repository-file-structure)
-- [📋 SIH26117 Compliance Matrix](#-sih26117-compliance-matrix)
+- [📋 Compliance Matrix](#-compliance-matrix)
 - [🔒 Security & Air-Gap Verification](#-security--air-gap-verification)
 
 ---
@@ -378,35 +378,6 @@ npm run dev
 
 ---
 
-## 🧪 Demonstration Scenarios for SIH Evaluation
-
-The repository includes pre-configured operational test scenarios designed for live demonstration before SIH evaluation panels:
-
-### Scenario 1: Scanned Inspection PDF to Formal Word Approval Note
-- **User Action:** Upload a scanned inspection report containing furnace skin temperature anomalies and decoking requirements.
-- **System Execution:** Activates `Qwen2-VL` + `PaddleOCR` for tabular data extraction, queries ChromaDB for relevant MRPL SOP limits (`SOP-MRPL-FURNACE-101`), and synthesizes an executive memorandum.
-- **Deliverable:** Programmatically outputs a styled `approval_note.docx` rendered directly in the in-browser UniverJS Canvas.
-
-### Scenario 2: Sandboxed Hydraulic Pump Efficiency Calculation
-- **User Action:** Prompt: *"Write a Python script to calculate centrifugal pump hydraulic power and efficiency for Flow: 250 m³/h, Head: 85m, Density: 850 kg/m³, Motor Power: 65 kW."*
-- **System Execution:** Router automatically dispatches request to `Qwen 2.5 Coder 3B`, executes the script inside the `--network none` Docker sandbox, intercepts stdout, and self-checks results.
-- **Output:** Live execution stdout displayed alongside interactive Monaco code editor.
-
-### Scenario 3: P&ID Drawing Extraction to Formatted Excel Register
-- **User Action:** Upload a technical P&ID diagram of Crude Distillation Unit (CDU).
-- **System Execution:** Identifies valves, pumps, and instrumentation tags (e.g., `P-101A`, `FCV-101`), cross-references against local plant registry, and builds an editable spreadsheet.
-- **Deliverable:** Generates `equipment_register.xlsx` with headers, auto-fit columns, and formula totals, viewable in the UniverJS Spreadsheet Canvas.
-
-### Scenario 4: Provable Air-Gap Sovereignty Audit
-- **Demonstration:** Navigate to Admin Observatory (`http://localhost:3001`) -> **Sovereignty Audit Tab**.
-- **Evidence:** Live socket sniffer continuously samples all network interfaces:
-  - **External Outbound Packets:** `0`
-  - **DNS Requests:** `0`
-  - **Telemetry Egress:** `Blocked / Suppressed`
-  - **Audit Certificate:** Exportable cryptographic verification log.
-
----
-
 ## 📡 API Endpoints Reference
 
 | Endpoint | Method | Purpose |
@@ -476,7 +447,7 @@ The repository includes pre-configured operational test scenarios designed for l
 
 ---
 
-## 📋 SIH26117 Compliance Matrix
+## 📋 Compliance Matrix
 
 | S.No | SIH Requirement | System Implementation | Verification Evidence |
 | :---: | :--- | :--- | :--- |
@@ -513,8 +484,3 @@ To guarantee strict compliance with industrial security policies:
 
 ---
 
-## 👥 Contributors & Acknowledgements
-
-Developed for the **Smart India Hackathon 2026 (SIH26117)** under the Ministry of Petroleum & Natural Gas (MoPNG) for **Mangalore Refinery and Petrochemicals Limited (MRPL)**.
-
-*Built with passion for Indian Industrial Sovereignty and AI Excellence.* 🇮🇳
