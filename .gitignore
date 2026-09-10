@@ -66,3 +66,9 @@ scratch_*.png
 scratch_*.py
 verify_*.py
 test_upload_doc.txt
+tests/
+test_*.py
+reveal_engine.py
+ingest_downloaded_pdfs.py
+generate_datasets.py
+run.sh

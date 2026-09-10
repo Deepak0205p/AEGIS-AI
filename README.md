@@ -448,9 +448,11 @@ The repository includes pre-configured operational test scenarios designed for l
 │   ├── ppt_styles.py            # 50 unique industrial presentation style themes
 │   ├── deliverables.py          # Native OpenXML file synthesizers (docx, xlsx, pptx)
 │   ├── router.py                # Two-Stage regex heuristic & semantic router
+│   ├── graph_rag.py             # Industrial Knowledge Graph & Tag Relation Extractor
+│   ├── visual_graphrag.py       # P&ID Visual Knowledge Graph Spatial Grounding
 │   ├── knowledge_base.py        # Master SOP RAG search & deterministic cache
 │   ├── chemical_kb.py           # In-memory MSDS, CAS, and toxic chemical safety database
-│   ├── departments.py           # Industrial department classifier (Refinery / E&P / HSE)
+│   ├── departments.py           # Industrial department classifier (Refinery / Defence / Gov)
 │   ├── templates.py             # Industrial template registry (Shift logs, DPR, PTW)
 │   ├── sandbox.py               # Docker container execution & subprocess fallback
 │   ├── db.py                    # XAMPP MySQL database manager & context windowing
@@ -459,14 +461,15 @@ The repository includes pre-configured operational test scenarios designed for l
 │   └── main.py                  # FastAPI application, SSE endpoints, and WebSockets
 ├── models/
 │   └── models.yaml              # Declarative model registry with VRAM budgets & regex routes
+├── sandbox/
+│   └── Dockerfile.sandbox       # Hardened rootless sandbox container definition
 ├── scripts/
 │   ├── download_and_verify_models.py # Model ingestion and SHA-256 audit utility
 │   └── build_sandbox_image.py   # Docker sandbox build & smoke testing utility
-├── data/                        # Persistent storage for ChromaDB and SQLite fallbacks
-├── generated/                   # Local output folder for generated docx, xlsx, pptx files
-├── Dockerfile.sandbox           # Isolated execution container definition
+├── sample_docs/                 # Verified Sovereign Standard SOPs (Refinery, Defence, Gov, PSU)
 ├── install_dependencies.bat     # Parallel automated installer for Windows
-├── start_services.bat           # 1-Click launcher for all 3 system services
+├── start_services.bat           # 1-Click launcher for all system services
+├── run_server.py                # Production backend server runner
 ├── requirements.txt             # Python backend dependencies
 └── README.md                    # System documentation
 ```
