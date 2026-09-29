@@ -74,7 +74,7 @@ Commercial public cloud AI systems (OpenAI ChatGPT, Anthropic Claude, Microsoft 
 ## 💡 The Solution: AEGIS AI (REVEAL 2.0)
 
 **AEGIS AI** is a production-grade, 100% self-hosted, air-gapped sovereign AI workbench designed specifically for refinery and upstream plant operations. It integrates:
-- Specialized lightweight open-weight foundation models (2B to 4B parameters).
+- Specialized lightweight open-weight foundation models: **Qwen 2.5 7B**, **Qwen 2.5 Coder**, **Llama 3.2**, and **Qwen 2.5 VL**.
 - In-memory chemical safety database (MSDS / ACGIH).
 - GraphRAG topological equipment hierarchy retrieval.
 - Isolated Python sandbox with AST safety validation.
@@ -121,9 +121,10 @@ Commercial public cloud AI systems (OpenAI ChatGPT, Anthropic Claude, Microsoft 
                  │                   LOCAL OLLAMA INFERENCE DAEMON                 │
                  │                    (Air-Gapped Port :11434)                     │
                  │                                                                 │
-                 │  • Reasoning & Code: deepseek-v4-pro:4b / gemma4-e4b:latest     │
-                 │  • Vision & P&ID:    qwen2.5vl:3b                               │
-                 │  • Offline OCR:      unlimited-ocr:latest                       │
+                 │  • High-Precision Reasoning: qwen2.5:7b                         │
+                 │  • Engineering & Code:       qwen2.5-coder                      │
+                 │  • Fast Dialogue & Docs:     llama3.2                           │
+                 │  • Vision & P&ID Inspection: qwen2.5vl:3b                       │
                  └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -313,10 +314,10 @@ Located in `backend/data/chemical_db.json`, it indexes verified industrial compo
 
 | Model Identifier | Display Name | Parameter Count | Quantization | Context Window | Primary Task Allocation |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `deepseek-v4-pro:4b` | DeepSeek V4 Pro | 3.8 Billion | GGUF Q3_K_L | 8,192 tokens | High-speed logic, Python sandbox coding, math balance |
-| `gemma4-e4b:latest` | Gemma 4 E4B | 4.1 Billion | GGUF Q4_K_S | 8,192 tokens | Document synthesis, shift handovers, regulatory summaries |
-| `qwen2.5vl:3b` | Qwen 2.5 VL | 3.2 Billion | GGUF Q4_K_M | 16,384 tokens | P&ID visual schematic question answering & gauge reading |
-| `unlimited-ocr:latest`| Unlimited OCR Engine| 3.2 Billion | GGUF Q4_K_M | 16,384 tokens | Dense technical datasheet & OCR symbol extraction |
+| `qwen2.5:7b` | Qwen 2.5 7B | 7.6 Billion | GGUF Q4_K_M | 8,192 tokens | High-precision engineering reasoning, technical dialogue & compliance audit |
+| `qwen2.5-coder` | Qwen 2.5 Coder | 7.0 Billion / 3B | GGUF Q4_K_M | 8,192 tokens | Industrial Python script synthesis, thermodynamics, mass-energy balance calculations |
+| `llama3.2` | Llama 3.2 | 3.2 Billion | GGUF Q4_K_M | 8,192 tokens | Ultra-fast document generation, shift handovers, and structured deliverable synthesis |
+| `qwen2.5vl:3b` | Qwen 2.5 VL | 3.2 Billion | GGUF Q4_K_M | 16,384 tokens | P&ID visual schematic question answering, gauge readings, and OCR symbol extraction |
 
 ---
 
@@ -324,12 +325,12 @@ Located in `backend/data/chemical_db.json`, it indexes verified industrial compo
 
 | Mode | Trigger Keyword / Intent | Action Performed |
 | :--- | :--- | :--- |
-| **💬 Chat** | General refinery query, definitions | Multimodal technical dialogue grounded in plant knowledge |
-| **🐍 Code** | Calculations, data analysis, conversions | Sandboxed Python execution with auto-retry and output visualization |
-| **📄 Docs** | Reports, SOP summaries, shift handovers | Formatted `.docx` document generation with standard corporate headers |
-| **📊 Excel** | Inventory logs, production telemetry | Formatted `.xlsx` spreadsheet creation with formulas and styling |
-| **📽️ PPT** | Safety briefings, executive decks | Structured `.pptx` presentation deck synthesis |
-| **👁️ Vision** | P&ID diagrams, gauge images, equipment photos | Visual question answering and OCR symbol extraction |
+| **💬 Chat** | General refinery query, definitions | Multimodal technical dialogue grounded in plant knowledge via **Qwen 2.5 7B** |
+| **🐍 Code** | Calculations, data analysis, conversions | Sandboxed Python execution with auto-retry and output visualization via **Qwen 2.5 Coder** |
+| **📄 Docs** | Reports, SOP summaries, shift handovers | Formatted `.docx` document generation with standard corporate headers via **Llama 3.2** |
+| **📊 Excel** | Inventory logs, production telemetry | Formatted `.xlsx` spreadsheet creation with formulas and styling via **Llama 3.2** |
+| **📽️ PPT** | Safety briefings, executive decks | Structured `.pptx` presentation deck synthesis via **Llama 3.2** |
+| **👁️ Vision** | P&ID diagrams, gauge images, equipment photos | Visual question answering and OCR symbol extraction via **Qwen 2.5 VL** |
 
 ---
 
@@ -338,8 +339,8 @@ Located in `backend/data/chemical_db.json`, it indexes verified industrial compo
 | # | Evaluation Scenario | Sample Query | System Pipeline Verified | Expected Output |
 | :--- | :--- | :--- | :--- | :--- |
 | **1** | **Toxic Chemical Safety Protocol** | *"Permissible exposure limit for H2S and immediate medical first aid?"* | `chemical_kb.py` -> In-memory MSDS lookup | 1 ppm TLV-TWA, 5 ppm STEL, SCBA PPE, 100% Oxygen CPR protocol |
-| **2** | **Engineering Calculation in Sandbox** | *"Calculate centrifugal pump efficiency according to API 610 with Q=250 m3/h, H=85m, rho=840 kg/m3, P_shaft=75kW"* | `code_mode.py` -> Isolated Python AST sandbox | Computes $P_{hyd}=48.64\text{ kW}$, $\eta=64.85\%$, verifies against BEP |
-| **3** | **Univer Document Studio Synthesis** | *"Generate a formal machinery insurance request letter for compressor K-101"* | `docs_mode.py` -> OpenXML builder -> Univer Canvas | Synthesizes `.docx` with 20 sections, opens in browser WYSIWYG editor |
+| **2** | **Engineering Calculation in Sandbox** | *"Calculate centrifugal pump efficiency according to API 610 with Q=250 m3/h, H=85m, rho=840 kg/m3, P_shaft=75kW"* | `code_mode.py` -> **Qwen 2.5 Coder** in isolated AST sandbox | Computes $P_{hyd}=48.64\text{ kW}$, $\eta=64.85\%$, verifies against BEP |
+| **3** | **Univer Document Studio Synthesis** | *"Generate a formal machinery insurance request letter for compressor K-101"* | `docs_mode.py` -> **Llama 3.2** OpenXML builder -> Univer Canvas | Synthesizes `.docx` with 20 sections, opens in browser WYSIWYG editor |
 | **4** | **Univer Sheet Studio Spreadsheet** | *"Create daily production report for Crude Distillation Unit with sales & revenue"* | `templates.py` -> OpenPyXL -> Univer Sheet Canvas | Generates `.xlsx` workbook with multi-sheets and live `SUM`/`AVG` formulas |
 | **5** | **Air-Gap Zero-Egress Verification** | Inspect Admin Observatory socket sniffer during active prompt | `airgap_guard.py` -> psutil daemon | **0 WAN egress packets**, all sockets bound to `127.0.0.1` |
 | **6** | **2-Step Human Verification Sign-Off** | Operator generates turnaround handover report | `db.py` -> `deliverables.py` workflow | Marked `PENDING_REVIEW`; requires `PROCESS_LEAD` approval before release |
@@ -351,8 +352,8 @@ Located in `backend/data/chemical_db.json`, it indexes verified industrial compo
 | Layer | Technologies Used | Purpose |
 | :--- | :--- | :--- |
 | **Backend Core** | Python 3.10–3.12, FastAPI, Uvicorn | High-performance asynchronous API gateway |
-| **LLM Inference** | Ollama, GGUF v3 Q4_K_M / Q3_K_L | 100% offline local model execution on GPU/CPU |
-| **Models** | DeepSeek V4 Pro (4B), Gemma 4 (E4B), Qwen2.5-VL (3B), Unlimited-OCR | Reasoning, code generation, multimodal vision, and OCR |
+| **LLM Inference** | Ollama, GGUF v3 Q4_K_M | 100% offline local model execution on GPU/CPU |
+| **Models** | **Qwen 2.5 7B**, **Qwen 2.5 Coder**, **Llama 3.2**, **Qwen 2.5 VL** | Reasoning, industrial code, document synthesis, and multimodal vision |
 | **Database** | MySQL / MariaDB (or PostgreSQL via Prisma) | Conversation history, user authentication, security audit logs |
 | **Frontend UI** | Next.js 14, React 18, Tailwind CSS, TypeScript, Zustand | Operator Chat UI & Admin Observatory dashboards |
 | **Document Engine** | Python-Docx, OpenPyXL, Python-PPTX, Univer Core | Air-gapped office document generation and spreadsheet canvas |
@@ -403,10 +404,10 @@ ollama serve
 ```
 Verify or pull the required lightweight models:
 ```bash
-ollama pull deepseek-v4-pro:4b
-ollama pull gemma4-e4b:latest
+ollama pull qwen2.5:7b
+ollama pull qwen2.5-coder
+ollama pull llama3.2
 ollama pull qwen2.5vl:3b
-ollama pull unlimited-ocr:latest
 ```
 
 ### Step 6: Launch Applications (1-Click or Manual)
