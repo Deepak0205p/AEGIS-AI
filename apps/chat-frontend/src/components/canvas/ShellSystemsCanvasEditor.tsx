@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   FileText
 } from 'lucide-react';
+import { runCode, formatRunReport, CodeRunResult } from '@/lib/codeRunner';
 
 interface ShellSystemsCanvasEditorProps {
   deliverable: DeliverableItem;
@@ -25,6 +26,7 @@ export function ShellSystemsCanvasEditor({ deliverable }: ShellSystemsCanvasEdit
   const [copied, setCopied] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [outputConsole, setOutputConsole] = useState<string | null>(null);
+  const [lastRun, setLastRun] = useState<CodeRunResult | null>(null);
   const [fontSize, setFontSize] = useState(13);
 
   const defaultShellCode =
@@ -67,24 +69,12 @@ echo "✓ Status: Ready"
 
   const handleRunScript = async () => {
     setIsRunning(true);
-    setOutputConsole('Executing script in local sandboxed POSIX environment...');
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    setOutputConsole('Submitting the script to the sovereign shell runner...');
 
-    setOutputConsole(`[POSIX SHELL EXECUTION SUCCESS]
-==================================================
-  MRPL SOVEREIGN SYSTEM INTEGRITY & OISD AUDIT   
-==================================================
-[1/3] Verifying Air-Gapped Network State...
-✓ PASS: Network isolated (Air-Gapped 100%).
-[2/3] Verifying Deliverable Signatures & Checksums...
-✓ HW-B-OISD105.docx : VALID_SIGNATURE
-✓ HSE-KPI-Dash.xlsx : VALID_SIGNATURE
-✓ Apex_Review.pptx  : VALID_SIGNATURE
-[3/3] Querying Local On-Premise Inference Engine...
-✓ Primary Reasoning Engine (Q4_K_M) : READY (0.0ms WAN)
---------------------------------------------------
-SYSTEM STATE: SECURE & 100% OPERATIONAL
-Process finished with exit code 0.`);
+    const result = await runCode('shell', shellCode, { filename: deliverable.filename });
+
+    setLastRun(result);
+    setOutputConsole(formatRunReport(result));
     setIsRunning(false);
   };
 
@@ -109,8 +99,8 @@ Process finished with exit code 0.`);
             <Terminal className="h-3.5 w-3.5 text-[#475569]" />
             <span className="font-mono text-xs">{deliverable.filename}</span>
           </div>
-          <span className="text-[11px] text-[#64748b] font-medium hidden sm:inline">
-            POSIX Sandbox Runtime &bull; Air-Gapped
+          <span className="text-[11px] text-[#64748b] font-medium hidden sm:inline" title={lastRun?.engine || 'No run yet'}>
+            {lastRun ? lastRun.engine : 'Shell runner (Docker sandbox when available)'}
           </span>
         </div>
 
@@ -192,7 +182,17 @@ Process finished with exit code 0.`);
               ✕ Close
             </button>
           </div>
-          <pre className="flex-1 p-3 text-xs font-mono text-[#0f172a] whitespace-pre-wrap overflow-auto bg-[#ffffff]">
+          <pre
+            className={`flex-1 p-3 text-xs font-mono whitespace-pre-wrap overflow-auto bg-[#ffffff] ${
+              lastRun?.status === 'SUCCESS'
+                ? 'text-[#0f172a]'
+                : lastRun?.status === 'UNSUPPORTED'
+                  ? 'text-amber-700'
+                  : lastRun
+                    ? 'text-rose-700'
+                    : 'text-[#0f172a]'
+            }`}
+          >
             {outputConsole}
           </pre>
         </div>

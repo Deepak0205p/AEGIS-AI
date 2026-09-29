@@ -182,8 +182,23 @@ async def call_ollama(
     url = f"{base_host}/api/chat"
     
     eff_num_predict = max_tokens if (max_tokens is not None and max_tokens > 0) else 2048
-    # For multimodal vision/OCR requests, allocate 16384 context to accommodate high-res patch tokens
-    eff_num_ctx = 16384 if images else NUM_CTX
+
+    # Resolve the model's registry definition so the context window and the
+    # reasoning (`think`) capability come from config rather than being
+    # hardcoded per model name.
+    model_def = None
+    try:
+        from backend.models_registry import models_registry as _registry
+        model_def = _registry.get_model(target_model)
+    except Exception:
+        model_def = None
+
+    # Vision/OCR models declare a larger context in the registry to accommodate
+    # high-res patch tokens; fall back to the configured window when unknown.
+    if images:
+        eff_num_ctx = (model_def.context_window if model_def else 16384)
+    else:
+        eff_num_ctx = (model_def.context_window if model_def else NUM_CTX)
     options: Dict[str, Any] = {
         "temperature": float(temperature),
         "top_p": DEFAULT_TOP_P,
@@ -206,6 +221,18 @@ async def call_ollama(
         or "phi" in target_model.lower()
         or "minicpm" in target_model.lower()
     )
+    if images and not is_vision_target:
+        # Never drop images silently: the model would answer "I cannot see the
+        # image" with no indication that the payload was discarded upstream.
+        logger.error(
+            f"[OLLAMA] Images were supplied but model '{target_model}' is not a "
+            f"vision-capable target. Refusing to send a text-only request that "
+            f"would be indistinguishable from a missing image."
+        )
+        raise ValueError(
+            f"Model '{target_model}' cannot accept image input; a vision/OCR "
+            f"model is required."
+        )
     if images and formatted_messages and is_vision_target:
         for idx in range(len(formatted_messages) - 1, -1, -1):
             if formatted_messages[idx].get("role") == "user":
@@ -221,8 +248,24 @@ async def call_ollama(
         "options": options,
     }
     
+    # Supply 'think' only when the caller asked for it AND the resolved model is
+    # registered with a reasoning capability. The previous check hardcoded
+    # "deepseek-r1"/"qwq", which match none of the registered model ids, so the
+    # adaptive-thinking decision computed by the router was never sent.
     if think is not None:
-        payload["think"] = think
+        supports_think = bool(
+            model_def and (
+                "general_reasoning" in model_def.capabilities
+                or "reasoning" in model_def.capabilities
+            )
+        )
+        if supports_think:
+            payload["think"] = think
+        else:
+            logger.debug(
+                f"[OLLAMA] think={think} not sent: model '{target_model}' has no "
+                f"reasoning capability in the registry."
+            )
     
     if json_mode:
         payload["format"] = "json"
@@ -233,19 +276,46 @@ async def call_ollama(
         f"json_mode={json_mode}, stream={stream}, messages_count={len(messages)}"
     )
 
+    # STRUCTURED LOGGING: Verbatim model prompt with character/token count right before API call
+    try:
+        from backend.structured_logger import log_raw_model_prompt, StageTimer
+        log_raw_model_prompt(
+            model=target_model,
+            messages=formatted_messages,
+            extra_options=options,
+        )
+    except Exception as e:
+        logger.warning(f"Structured prompt logging error: {e}")
+
+    # Resolve fallback model dynamically from config-driven registry
+    fallback_model_id = None
+    try:
+        from backend.models_registry import models_registry
+        fb_def = models_registry.get_fallback_model(target_model)
+        if fb_def and fb_def.model_id != target_model:
+            fallback_model_id = fb_def.model_id
+    except Exception as reg_err:
+        logger.debug(f"[REGISTRY] Fallback resolution note: {reg_err}")
+
     if stream:
-        return _stream_ollama(url, payload)
+        return _stream_ollama(url, payload, fallback_model=fallback_model_id)
     else:
-        return await _non_stream_ollama(url, payload)
+        return await _non_stream_ollama(url, payload, fallback_model=fallback_model_id)
 
 
-async def _stream_ollama(url: str, payload: Dict[str, Any]) -> AsyncGenerator[Dict[str, str], None]:
+async def _stream_ollama(
+    url: str,
+    payload: Dict[str, Any],
+    fallback_model: Optional[str] = None
+) -> AsyncGenerator[Dict[str, str], None]:
     """
     Streams structured chunks:
     - {"type": "thinking", "token": "..."}
     - {"type": "content", "token": "..."}
+    If the primary model fails, attempts failover to the next-best model in the capability tag.
     """
     exact_fix = f"run: ollama serve && ollama pull {MODEL_NAME}"
+    failed_model = payload.get("model", "unknown")
     try:
         timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -254,9 +324,9 @@ async def _stream_ollama(url: str, payload: Dict[str, Any]) -> AsyncGenerator[Di
                     error_text = await response.aread()
                     error_msg = f"Ollama error {response.status_code}: {error_text.decode('utf-8', errors='ignore')}"
                     logger.error(error_msg)
-                    yield {"type": "content", "token": f"Error from Ollama backend: {error_msg}. ({exact_fix})"}
-                    return
+                    raise OllamaConnectionError(error_msg)
 
+                has_received_tokens = False
                 async for line in response.aiter_lines():
                     line = line.strip()
                     if not line:
@@ -268,31 +338,52 @@ async def _stream_ollama(url: str, payload: Dict[str, Any]) -> AsyncGenerator[Di
                         content = msg.get("content", "")
                         
                         if thinking:
+                            has_received_tokens = True
                             yield {"type": "thinking", "token": thinking}
                         if content:
+                            has_received_tokens = True
                             yield {"type": "content", "token": content}
                         if chunk.get("done", False):
                             break
                     except json.JSONDecodeError:
                         continue
 
-    except (httpx.ConnectError, httpx.NetworkError) as e:
-        err = f"Failed to connect to Ollama at {OLLAMA_HOST}. Ensure Ollama is running ({exact_fix}). Error: {e}"
+    except Exception as primary_err:
+        logger.warning(f"[FAILOVER_TRIGGER] Model '{failed_model}' failed with error: {primary_err}")
+        if fallback_model and fallback_model != failed_model:
+            try:
+                from backend.structured_logger import log_stage_event
+                log_stage_event(
+                    stage="MODEL_FAILOVER",
+                    status="RETRYING",
+                    input_summary=f"failed_model={failed_model}",
+                    output_summary=f"retrying_with_fallback={fallback_model}",
+                    metadata={"error": str(primary_err), "fallback_model": fallback_model}
+                )
+            except Exception:
+                pass
+            
+            logger.info(f"[FAILOVER] Retrying request with fallback model '{fallback_model}'...")
+            fallback_payload = dict(payload)
+            fallback_payload["model"] = fallback_model
+            async for fallback_chunk in _stream_ollama(url, fallback_payload, fallback_model=None):
+                yield fallback_chunk
+            return
+        
+        # If no fallback or fallback also failed:
+        err = f"Failed to complete inference with Ollama model '{failed_model}': {primary_err}"
         logger.error(err)
-        yield {"type": "content", "token": f"\n[Ollama Connection Error: {err}]"}
-    except httpx.TimeoutException as e:
-        err = f"Ollama inference timed out after {OLLAMA_TIMEOUT}s. Error: {e}"
-        logger.error(err)
-        yield {"type": "content", "token": f"\n[Ollama Timeout Error: {err}]"}
-    except Exception as e:
-        err = f"Unexpected error communicating with Ollama: {e}"
-        logger.error(err)
-        yield {"type": "content", "token": f"\n[Ollama Error: {err}]"}
+        yield {"type": "content", "token": f"\n[Ollama Model Error: {err}. ({exact_fix})]"}
 
 
-async def _non_stream_ollama(url: str, payload: Dict[str, Any]) -> str:
-    """Non-streaming request to Ollama returning full string response."""
+async def _non_stream_ollama(
+    url: str,
+    payload: Dict[str, Any],
+    fallback_model: Optional[str] = None
+) -> str:
+    """Non-streaming request to Ollama returning full string response with failover retry."""
     exact_fix = f"run: ollama serve && ollama pull {MODEL_NAME}"
+    failed_model = payload.get("model", "unknown")
     try:
         timeout = httpx.Timeout(connect=15.0, read=300.0, write=15.0, pool=15.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -305,8 +396,26 @@ async def _non_stream_ollama(url: str, payload: Dict[str, Any]) -> str:
             msg = data.get("message", {})
             raw_text = msg.get("content") or msg.get("thinking") or ""
             return filter_thinking(raw_text)
-    except httpx.RequestError as e:
-        raise OllamaConnectionError(f"Cannot reach Ollama at {OLLAMA_HOST}: {e}. Fix: {exact_fix}") from e
+    except Exception as e:
+        logger.warning(f"[FAILOVER_TRIGGER] Non-stream call for model '{failed_model}' failed: {e}")
+        if fallback_model and fallback_model != failed_model:
+            try:
+                from backend.structured_logger import log_stage_event
+                log_stage_event(
+                    stage="MODEL_FAILOVER",
+                    status="RETRYING",
+                    input_summary=f"failed_model={failed_model}",
+                    output_summary=f"retrying_with_fallback={fallback_model}",
+                    metadata={"error": str(e), "fallback_model": fallback_model}
+                )
+            except Exception:
+                pass
+            logger.info(f"[FAILOVER] Retrying non-stream request with fallback model '{fallback_model}'...")
+            fallback_payload = dict(payload)
+            fallback_payload["model"] = fallback_model
+            return await _non_stream_ollama(url, fallback_payload, fallback_model=None)
+            
+        raise OllamaConnectionError(f"Cannot reach Ollama or model '{failed_model}' failed: {e}. Fix: {exact_fix}") from e
 
 
 async def unload_model(model_name: str) -> bool:

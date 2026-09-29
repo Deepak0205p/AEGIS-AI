@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Header } from '@/components/Header';
-import { MessageSquare, ExternalLink, ShieldCheck, Sparkles } from 'lucide-react';
+import { ChatWorkspace } from '@/components/Chat/ChatWorkspace';
+import { ExternalLink, MessageSquare, ShieldCheck } from 'lucide-react';
 
 export default function ChatPage() {
   const [chatUrl, setChatUrl] = useState('http://localhost:3000');
@@ -17,31 +19,40 @@ export default function ChatPage() {
   return (
     <div className="flex flex-col min-h-screen bg-white text-gray-900 font-sans">
       <Header />
-      <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-6 flex flex-col items-center justify-center">
-        <div className="flex flex-col items-center justify-center gap-6 p-8 max-w-lg text-center bg-gray-50 dark:bg-[#111116] border border-gray-200 dark:border-white/[0.08] rounded-2xl shadow-sm">
-          <div className="w-16 h-16 rounded-2xl bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 flex items-center justify-center">
-            <MessageSquare className="w-8 h-8 text-blue-600 dark:text-blue-400" />
+      <main className="flex-1 w-full mx-auto px-4 sm:px-6 py-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 max-w-7xl mx-auto">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 flex items-center justify-center">
+              <MessageSquare className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div>
+              <h1 className="text-sm font-bold text-gray-900 dark:text-white">Operational Chat Console</h1>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                Streaming Q&amp;A against the local sovereign backend (no attachments or document canvas in this view).
+              </p>
+            </div>
           </div>
-          <div className="space-y-2">
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white">Conversational Chat Workspace</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-              The full sovereign multi-agent conversational AI interface runs on port 3000. It features live token streaming, reasoning canvas sidebars, OCR parsing, and artifact synthesis.
-            </p>
+
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Local backend only</span>
+            </span>
+            <a
+              href={chatUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all cursor-pointer"
+              title="Open the full chat application (canvas, attachments, document preview)"
+            >
+              Full Chat App
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
           </div>
-          <a
-            href={chatUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg shadow-sm transition-all cursor-pointer"
-          >
-            <Sparkles className="w-4 h-4" />
-            Launch Chat Interface
-            <ExternalLink className="w-4 h-4 ml-1" />
-          </a>
-          <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-mono">
-            <ShieldCheck className="w-4 h-4" />
-            <span>Air-Gapped Local Host Connection</span>
-          </div>
+        </div>
+
+        <div className="max-w-7xl mx-auto">
+          <ChatWorkspace />
         </div>
       </main>
     </div>

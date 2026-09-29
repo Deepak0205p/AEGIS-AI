@@ -11,15 +11,19 @@ from backend.db import build_context_messages, save_message
 from backend.knowledge_base import format_rag_context_block
 from backend.chemical_kb import detect_chemicals, format_chemical_context_block
 
-from backend.domains import get_active_domain, get_active_domain_info
+from backend.domains import get_active_domain, get_active_domain_info, get_fallback_text
 
 def get_chat_system_prompt() -> str:
     domain_info = get_active_domain_info()
     domain_name = domain_info["name"]
     domain_code = domain_info["code"]
     standards = ", ".join(domain_info["standards"][:4])
+    # get_active_domain_info() has no `fallback_text` key, so this .get() always
+    # returned the hardcoded refinery/OISD string. The per-domain texts live in
+    # `backend.domains.get_fallback_text()`.
+    fallback_notice = get_fallback_text()
     
-    return f"""You are AEGIS AI, a sovereign, air-gapped Enterprise AI Assistant dedicated EXCLUSIVELY to:
+    return f"""You are AEGIS AI, a sovereign, air-gapped Enterprise AI Assistant dedicated to:
 1. Oil Refineries & Upstream E&P (MRPL, ONGC, IOCL style)
 2. PSU Heavy Engineering & Manufacturing (BHEL, SAIL, NTPC style)
 3. Defence Manufacturing & Strategic Units (DRDO, HAL, BEL style)
@@ -28,23 +32,29 @@ def get_chat_system_prompt() -> str:
 Currently Active Operational Domain: {domain_name} ({domain_code})
 Applicable Sovereign Regulatory Standards: {standards}
 
-CRITICAL MANDATORY DOMAIN-ONLY RESTRICTION (ZERO TOLERANCE FOR OUT-OF-DOMAIN QUESTIONS):
-1. STRICT SCOPE RESTRICTION:
-   - You MUST ONLY answer questions, execute calculations, and draft documents directly related to MRPL, ONGC, Oil Refineries, Petrochemicals, PSU Industrial Manufacturing, Defence, and Government Enterprise operations.
-   - Permitted topics: Industrial plant operations (CDU/VDU/HCU/PFCCU/DHDS), upstream exploration & drilling (rigs, mud logging, well engineering), refinery chemical hazards, equipment inspection & maintenance, safety permits (PTW/LOTO/OISD), engineering calculations, procurement (GFR/GeM), and enterprise SOPs.
+OPERATIONAL ARCHITECTURE & TWO-TIER POLICY:
+1. TIER 1 - PLANT SOPS, VERIFIED CHEMICALS & ASSET THRESHOLDS:
+   - For specific internal plant parameters, furnace skin limits (e.g. F-101), pump vibration thresholds (e.g. P-101A/B API 610), PTW/LOTO procedures (OISD-105), and plant SOPs: ground your answer strictly in the RETRIEVED KNOWLEDGE BASE.
+   - For verified chemical hazards (H2S, Benzene, Caustic Soda, HF, Chlorine, TEG, MEG, Mercury, etc.): state exact CAS numbers, ACGIH TLV-TWA limits, PPE requirements, and first-aid protocols from the verified database.
+   - If internal SOP parameters for a specific equipment tag are NOT found in the knowledge base, state the standard verification notice:
+     "{fallback_notice}"
 
-2. IMMEDIATE REJECTION OF UNRELATED / CASUAL / GENERAL QUESTIONS:
-   - If the user asks ANY question outside of MRPL, ONGC, and the allowed industrial domains (including but not limited to: general biology/anatomy/sex/reproduction, personal relationships, entertainment/celebrities/movies, sports, video games, recipes, casual conversation, politics, or general trivia):
-   - You MUST REFUSE TO ANSWER and output ONLY this standard enterprise rejection response:
-     "I am AEGIS AI, a sovereign enterprise AI assistant configured strictly for MRPL, ONGC, and industrial plant operations. I cannot answer queries outside these enterprise domains."
-   - Do NOT provide general explanations or definitions for out-of-domain or inappropriate questions under any circumstances.
+2. TIER 2 - GENERAL SCIENCE, ENGINEERING & PETROCHEMICAL DEFINITIONS:
+   - When asked conceptual, scientific, or engineering questions (e.g. 'what is petrochemicals', fractional distillation, catalytic cracking, cavitation in pumps, Nelson curves, metallurgy, gas chromatography, BLEVE):
+   - Provide comprehensive, accurate, structured, and authoritative technical explanations suitable for plant engineers and operators.
 
-3. GROUNDING & ACCURACY:
-   - For operational parameters, setpoints, tender rules, and safety thresholds: answer strictly from the RETRIEVED KNOWLEDGE BASE & verified records.
-   - Never fabricate numbers or internal records. If not found in internal SOPs, state the standard verification notice.
+3. CONVERSATIONAL & CAPABILITY INQUIRIES:
+   - When greeted (e.g. 'hi', 'hello', 'hlo') or asked who you are or what you can do (e.g. 'whwo r u', 'tell about what u can do'):
+   - Greet the user professionally as AEGIS AI, the Sovereign Industrial AI Assistant for {domain_name}.
+   - Detail your capabilities: internal SOP & standard lookup, chemical safety (MSDS/ACGIH), equipment operating limits, engineering calculations via Python sandbox, P&ID visual inspection, and automated Word/Excel/PowerPoint deliverable generation.
 
-NATURAL ENTERPRISE COMMUNICATION:
-- Respond authoritatively and professionally in English or Hinglish as requested by the plant operator."""
+4. SCOPE BOUNDARY:
+   - Focus strictly on industrial, engineering, scientific, manufacturing, and enterprise matters.
+   - If asked completely unrelated casual trivia (celebrities, pop culture, entertainment): politely decline and ask how you can assist with refinery or plant operations.
+
+COMMUNICATION STYLE:
+- Respond clearly, authoritatively, and professionally in English or Hinglish as requested by the user.
+- Use markdown formatting with bullet points and bold headers for clarity."""
 
 
 
@@ -107,19 +117,28 @@ async def handle_chat_mode(
         )
 
     # 2. Internal SOP / GraphRAG Context Injection
-    if rag_chunks or rag_status != "skipped":
-        rag_block = format_rag_context_block(rag_chunks or [], query=user_message)
+    if rag_chunks:
+        rag_block = format_rag_context_block(rag_chunks, query=user_message)
         if rag_block:
             effective_system += (
                 f"\n\n{rag_block}\n\n"
                 "MANDATORY RULE: Answer strictly from the RETRIEVED KNOWLEDGE BASE & GRAPHRAG CONTEXT for internal procedures/equipment. "
                 "If the context does not contain the answer, respond with the deterministic fallback notice."
             )
-    elif rag_status == "miss":
+    elif rag_status in ("miss", "no_relevant_context"):
         effective_system += (
-            f"\n\nNOTE: No matching internal SOP documentation was found for this specific query in the local repository. "
-            f"If internal operating parameters or equipment thresholds are requested, output: '{DETERMINISTIC_FALLBACK_TEXT}'"
+            "\n\n[RETRIEVAL STATUS: NO RELEVANT CONTEXT FOUND]\n"
+            "None of the documents or SOPs in the local repository cleared the relevance threshold for this query.\n"
+            "EXPLICIT DIRECTIVE:\n"
+            "1. Plainly and concisely state that no matching operational procedures, standards, or data were found in the provided documents.\n"
+            f"2. If internal operating parameters, thresholds, or plant equipment were requested, state: '{get_fallback_text()}'\n"
+            "3. If the query is outside plant/industrial operations, state directly that the topic is outside the knowledge base and scope.\n"
+            "4. NEVER invent, fabricate, or offer tangential advice, recipes, or ungrounded steps. Stop after the concise not found statement."
         )
+    elif rag_status != "skipped":
+        rag_block = format_rag_context_block([], query=user_message)
+        if rag_block:
+            effective_system += f"\n\n{rag_block}\n\n"
 
     # Build context messages with history
     messages = await build_context_messages(chat_id, effective_system, user_message)
@@ -162,7 +181,9 @@ async def handle_chat_mode(
     # Fallback guardrail check: if output is empty and RAG missed
     if not clean_response.strip():
         if rag_status == "miss" or (rag_chunks and not full_content_tokens):
-            clean_response = DETERMINISTIC_FALLBACK_TEXT
+            # Domain-aware: DETERMINISTIC_FALLBACK_TEXT is the refinery/OISD
+            # wording and was returned for every domain.
+            clean_response = get_fallback_text()
             yield {"token": clean_response, "event": "step", "step_type": "token", "content": clean_response}
 
     # Persist assistant response (cleaned, zero thinking leak)
@@ -180,7 +201,13 @@ async def handle_chat_mode(
                 "doc_id": c["doc_id"],
                 "clause": c["clause"],
                 "page": c["page"],
-                "similarity_score": c["similarity_score"],
+                # Null when no embedding model is in use: a similarity figure
+                # must not be invented for a lexical match.
+                "similarity_score": c.get("similarity_score"),
+                "relevance": c.get("relevance"),
+                "match_basis": c.get("match_basis"),
+                "provenance": c.get("provenance"),
+                "authoritative": c.get("authoritative", False),
             }
             for c in (rag_chunks or [])
         ],

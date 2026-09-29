@@ -218,33 +218,39 @@ def route_message(
 
     # 2. Phase 1: Attachment-aware routing
     if attachments:
-        # Check text intent for explicit diagram / visual inspection (P&ID, schematic, CAD)
-        is_diagram_or_inspection = bool(
-            re.search(r"\b(p&id|pid|cad|diagram|drawing|blueprint|schematic|photo|picture|gauge|needle|corrosion|flowsheet)\b", message_text, re.IGNORECASE)
+        # Check text intent for explicit diagram / visual inspection / handwritten notes (P&ID, schematic, CAD, layout)
+        is_drawing_or_handwritten = bool(
+            re.search(
+                r"\b(p&id|pid|cad|diagram|drawing|blueprint|schematic|photo|picture|gauge|needle|"
+                r"corrosion|flowsheet|handwritten|handwriting|hand\s*written|sketched|sketch|layout|isometric)\b",
+                message_text,
+                re.IGNORECASE
+            )
         )
         is_explicit_ocr = bool(
-            re.search(r"\b(ocr|extract|text|table|transcribe|read text|digitize|invoice|receipt|document|pdf|slip|letter|report)\b", message_text, re.IGNORECASE)
+            re.search(r"\b(ocr|transcribe|read text|extract text|digitize text|plain text)\b", message_text, re.IGNORECASE)
         )
 
         for att in attachments:
             clean_att = str(att).lower().strip()
             # If attachment is PDF extension or PDF base64 header (%PDF / JVBERi0)
             if clean_att.endswith(".pdf") or "pdf" in clean_att[:50] or clean_att.startswith("jvber") or clean_att.startswith("data:application/pdf"):
-                route = "vision" if is_diagram_or_inspection else "ocr"
-                logger.info(f"[ROUTER] Route decision: '{route}' via PDF attachment (diagram={is_diagram_or_inspection})")
+                route = "vision" if is_drawing_or_handwritten else "ocr"
+                logger.info(f"[ROUTER] Route decision: '{route}' via PDF attachment (drawing/handwritten={is_drawing_or_handwritten})")
                 return route, "attachment_pdf"
 
-            # If attachment has specific file extension
+            # Direct base64 image data (e.g. data:image/png;base64,... or raw base64)
+            if clean_att.startswith("data:image") or len(clean_att) > 100 or any(clean_att.endswith(x) for x in [".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"]):
+                # Always route handwritten notes, drawings, diagrams, and blueprints to multimodal vision model
+                target_route = "vision" if (is_drawing_or_handwritten or not is_explicit_ocr) else "ocr"
+                logger.info(f"[ROUTER] Route decision: '{target_route}' via image payload (drawing/handwritten={is_drawing_or_handwritten})")
+                return target_route, f"attachment_{target_route}"
+
+            # If attachment has specific non-image file extension
             for ext, mapped_mode in ATTACHMENT_EXTENSION_MAP.items():
-                if clean_att.endswith(ext):
+                if clean_att.endswith(ext) and mapped_mode not in ("ocr", "vision"):
                     logger.info(f"[ROUTER] Route decision: '{mapped_mode}' via attachment extension '{ext}' in '{att}'")
                     return mapped_mode, f"attachment_{ext}"
-
-            # Direct base64 image data (e.g. data:image/png;base64,... or raw base64)
-            if clean_att.startswith("data:image") or len(clean_att) > 100:
-                target_route = "vision" if (is_diagram_or_inspection and not is_explicit_ocr) else "ocr"
-                logger.info(f"[ROUTER] Route decision: '{target_route}' via image/attachment payload (ocr={is_explicit_ocr}, diagram={is_diagram_or_inspection})")
-                return target_route, f"attachment_{target_route}"
 
     # Check for image filename / attached indicators in user message text
     image_ext_in_text = re.search(r"\b\w+\.(png|jpg|jpeg|webp|bmp|tiff|tif)\b", message_text, re.IGNORECASE)
@@ -412,10 +418,10 @@ async def classify_intent_model(
         "- 'code': Writing, running, debugging Python/SQL code, mathematical calculations, scientific simulations, or plotting charts with matplotlib/numpy/pandas.\n"
         "- 'excel': Creating, formatting, or updating spreadsheets, tabular data, formulas (SUM, AVERAGE, VLOOKUP), ledgers, or .xlsx/.csv files.\n"
         "- 'ppt': Generating presentation slides, slide decks, pitch decks, or .pptx presentations.\n"
-        "- 'docs': Generating downloadable Word (.docx) files for formal multi-page enterprise documents, technical reports, engineering SOPs, formal circulars, or investigation reports. DO NOT route emails, leave requests, letters, or short text drafts to 'docs' unless a .docx file is explicitly requested.\n"
+        "- 'docs': Generating downloadable Word (.docx) files ONLY when the user explicitly requests to create, draft, export, or generate a formal Word document, multi-page technical report, or official memorandum. NEVER choose 'docs' for general informational questions, concept explanations, or inquiries (e.g. 'what is X', 'explain Y').\n"
         "- 'ocr': Extracting or reading raw text/numbers/tables from scanned documents, receipts, invoices, or images.\n"
         "- 'vision': Visual inspection, analyzing diagrams/P&ID schematics/blueprints, or detecting physical plant defects in photos.\n"
-        "- 'chat': General conversation, drafting emails, leave requests, letters, message drafts, answering technical plant questions, explaining concepts, troubleshooting, or SOP consultation.\n\n"
+        "- 'chat': Default for general conversation, answering technical plant questions, explaining concepts (e.g. 'what is petrochemicals'), troubleshooting, chemical safety queries, SOP consultation, or drafting text directly in chat.\n\n"
         "Return ONLY a valid JSON object in this format:\n"
         '{"mode": "code"|"excel"|"ppt"|"docs"|"ocr"|"vision"|"chat", "confidence": 0.95, "reason": "<short explanation in 1 sentence>"}'
     )
@@ -537,10 +543,69 @@ async def route_message_async(
 
     # 4. Fast-path for emails, leave requests, and messages (must render as readable chat text, NOT Word .docx)
     is_email = bool(re.search(r"\b(email|mail|e-mail|leave application|leave request|resignation)\b", clean_msg, re.IGNORECASE))
-    explicit_word_doc = bool(re.search(r"\b(word document|docx|\.docx|word file|downloadable doc)\b", clean_msg, re.IGNORECASE))
+    explicit_word_doc = bool(re.search(r"\b(word document|docx|\.docx|word file|downloadable doc|generate doc|create doc|make doc)\b", clean_msg, re.IGNORECASE))
     if is_email and not explicit_word_doc and not attachments:
         logger.info("[ROUTER] Route decision: 'chat' for email/correspondence communication draft")
         return "chat", "email_draft_chat"
+
+    # 4b. Fast-path for informational, explanatory, conceptual, and greeting questions
+    # (e.g. "what is petrochemicals", "explain distillation", "tell about what u can do", "who are you", "difference between X and Y")
+    # These must ALWAYS be answered in interactive chat unless explicitly requested as a downloadable file/code!
+    has_explicit_doc_export = bool(re.search(
+        r"\b(word\s+(document|file)|docx|\.docx|downloadable\s+doc|make\s+a\s+doc|save\s+as\s+doc|draft\s+(a\s+)?(formal\s+)?report|banao\s+report|generate\s+(a\s+)?report)\b",
+        clean_msg, re.IGNORECASE
+    ))
+    has_explicit_code = bool(re.search(
+        r"\b(calculate|compute|solve|python|script|code|formula|plot|graph|simulate)\b",
+        clean_msg, re.IGNORECASE
+    ))
+    has_explicit_slides = bool(re.search(
+        r"\b(ppt|pptx|presentation|slides|deck)\b",
+        clean_msg, re.IGNORECASE
+    ))
+    has_explicit_sheet = bool(re.search(
+        r"\b(excel|xlsx|spreadsheet|csv|table data|sheet banao)\b",
+        clean_msg, re.IGNORECASE
+    ))
+
+    is_info_question = bool(re.search(
+        r"^(what\s+is|what\s+are|how\s+does|how\s+do|why\s+is|why\s+does|explain|tell\s+me\s+about|tell\s+about|describe|overview\s+of|difference\s+between|who\s+are\s+you|who\s+is|whwo\s+r\s+u|what\s+can\s+you\s+do|what\s+u\s+can\s+do|help|kya\s+hai|kya\s+hota\s+hai|kaise\s+kaam\s+karta|batao)\b",
+        clean_msg, re.IGNORECASE
+    )) or bool(re.search(
+        r"\b(kya\s+hai|kaise\s+hota\s+hai|kya\s+farak\s+hai|meaning\s+of|definition\s+of|principle\s+of)\b",
+        clean_msg, re.IGNORECASE
+    ))
+
+    if is_info_question and not has_explicit_doc_export and not has_explicit_code and not has_explicit_slides and not has_explicit_sheet and not attachments:
+        logger.info(f"[ROUTER] Route decision: 'chat' for informational question '{user_message[:50]}'")
+        return "chat", "info_question_chat"
+
+    # 4c. Deterministic code-language guard (runs BEFORE the model classifier).
+    # A request that explicitly names a programming language, or asks to
+    # "write a code/script/function", is unambiguous. The 4B intent classifier
+    # previously sent "write a python code to ..." to the DOCS pipeline, which
+    # then tried to build a Word file and failed. It also saves a model call.
+    explicit_language = bool(re.search(
+        r"\b(python|java|javascript|typescript|golang|rust|ruby|php|matlab|sql|bash|powershell|shell|c\+\+|cpp|c#|c sharp|swift|kotlin|scala|perl|r)\b",
+        clean_msg, re.IGNORECASE
+    ))
+    explicit_code_phrase = bool(re.search(
+        r"\b(write|create|generate|make|give|provide|show|dikhao|banao)\b[^.?]{0,40}\b(code|script|program|programme|function|snippet)\b",
+        clean_msg, re.IGNORECASE
+    ))
+    doc_artifact_requested = has_explicit_doc_export or has_explicit_slides or has_explicit_sheet
+
+    if (
+        (explicit_language or explicit_code_phrase)
+        and not doc_artifact_requested
+        and not is_info_question
+        and not attachments
+    ):
+        logger.info(
+            f"[ROUTER] Route decision: 'code' via explicit code/language guard "
+            f"(language={explicit_language}, phrase={explicit_code_phrase}) - '{user_message[:50]}'"
+        )
+        return "code", "explicit_code_language_guard"
 
     # 5. Model-Driven Intent Orchestration (Zero Keywords)
     mode, reason, confidence = await classify_intent_model(
@@ -646,3 +711,35 @@ def should_retrieve(message: str, has_upload: bool = False) -> bool:
 def is_follow_up_query(message: str) -> bool:
     """Checks if query is a short conversational follow-up request."""
     return bool(FOLLOW_UP_PATTERNS.search(message.strip()))
+
+
+def get_model_for_route(route: str) -> Tuple[str, int, float]:
+    """
+    Config-driven resolver mapping execution route to Ollama model, context window, and temperature.
+    Reads directly from models_registry.json without hardcoding model names in branches.
+    Returns: (model_id, context_window, default_temperature)
+    """
+    from backend.models_registry import models_registry
+    
+    capability_map = {
+        "code": "code",
+        "docs": "document_generation",
+        "excel": "document_generation",
+        "ppt": "document_generation",
+        "ocr": "ocr",
+        "vision": "vision",
+        "chat": "chat",
+    }
+    cap = capability_map.get(route.lower(), "general_reasoning")
+    model_def = models_registry.get_best_model_for_capability(cap)
+    
+    if not model_def:
+        # Fallback to general reasoning if specific capability not registered
+        model_def = models_registry.get_best_model_for_capability("general_reasoning")
+        
+    if model_def:
+        return model_def.model_id, model_def.context_window, model_def.default_temperature
+
+    # Ultimate default safety
+    return "deepseek-v4-pro:4b", 8192, 0.5
+

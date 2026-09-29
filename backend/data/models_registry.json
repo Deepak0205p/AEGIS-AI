@@ -1,0 +1,55 @@
+{
+  "models": [
+    {
+      "model_id": "deepseek-v4-pro:4b",
+      "display_name": "DeepSeek V4 Pro 4B (Specialized Code & Reasoning)",
+      "capabilities": [
+        "code",
+        "general_reasoning"
+      ],
+      "priority": 1,
+      "resource_cost": "low",
+      "context_window": 8192,
+      "default_temperature": 0.15,
+      "fallback_model_id": "gemma4-e4b:latest"
+    },
+    {
+      "model_id": "gemma4-e4b:latest",
+      "display_name": "Gemma 4 e4B (Specialized Document Synthesis & Summary)",
+      "capabilities": [
+        "document_generation",
+        "summary",
+        "chat"
+      ],
+      "priority": 1,
+      "resource_cost": "medium",
+      "context_window": 8192,
+      "default_temperature": 0.3,
+      "fallback_model_id": "deepseek-v4-pro:4b"
+    },
+    {
+      "model_id": "unlimited-ocr:latest",
+      "display_name": "Unlimited OCR Vision Engine",
+      "capabilities": [
+        "ocr"
+      ],
+      "priority": 1,
+      "resource_cost": "medium",
+      "context_window": 16384,
+      "default_temperature": 0.05,
+      "fallback_model_id": "qwen2.5vl:3b"
+    },
+    {
+      "model_id": "qwen2.5vl:3b",
+      "display_name": "Qwen 2.5 VL 3B",
+      "capabilities": [
+        "vision"
+      ],
+      "priority": 1,
+      "resource_cost": "medium",
+      "context_window": 16384,
+      "default_temperature": 0.15,
+      "fallback_model_id": "unlimited-ocr:latest"
+    }
+  ]
+}

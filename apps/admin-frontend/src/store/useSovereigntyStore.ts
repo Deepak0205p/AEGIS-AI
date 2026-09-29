@@ -1,5 +1,7 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
 import { DeploymentMode } from '@/types/sovereignty';
+import { getApiHost } from '@/lib/apiBase';
+import { apiFetch } from '@/lib/api';
 
 export type { DeploymentMode };
 
@@ -18,11 +20,16 @@ export interface AuditLogEntry {
   sequence: number;
   timestamp: string;
   event: string;
-  deployment_mode: string;
-  localhost_sockets: number;
-  lan_hotspot_sockets: number;
-  external_sockets: number;
-  external_packets: number;
+  deployment_mode?: string;
+  localhost_sockets?: number;
+  lan_hotspot_sockets?: number;
+  external_sockets?: number;
+  external_packets?: number | null;
+  username?: string;
+  role?: string;
+  details?: string;
+  risk_level?: string;
+  row_id?: number;
   block_hash: string;
   prev_hash: string;
   verified: boolean;
@@ -32,11 +39,15 @@ export interface SovereigntyMetrics {
   localhost_sockets: number;
   lan_hotspot_sockets: number;
   external_sockets: number;
-  localhost_packets: number;
-  lan_hotspot_packets: number;
-  external_packets: number;
-  external_bytes: number;
-  total_packets_sniffed: number;
+  /**
+   * Packet counters are null on deployments without packet counting. Null must
+   * stay null: rendering it as 0 would claim traffic was measured.
+   */
+  localhost_packets: number | null;
+  lan_hotspot_packets: number | null;
+  external_packets: number | null;
+  external_bytes: number | null;
+  total_packets_sniffed: number | null;
   verdict: string;
   daemon_heartbeat_hz: number;
   last_updated: string;
@@ -51,6 +62,13 @@ interface SovereigntyState {
   auditLogs: AuditLogEntry[];
   isVerifyingChain: boolean;
   chainVerificationStatus: 'unverified' | 'valid' | 'tampered';
+  /** Real failure reasons — an unreachable backend is NOT a valid chain. */
+  chainError: string | null;
+  certificateError: string | null;
+  networkError: string | null;
+  /** How the backend described the certificate (e.g. static bootstrap vs live chain). */
+  chainProvenance: string | null;
+  clearSovereigntyErrors: () => void;
 
   // Actions
   setDeploymentMode: (mode: DeploymentMode) => Promise<void>;
@@ -58,18 +76,8 @@ interface SovereigntyState {
   setSockets: (sockets: SocketRecord[]) => void;
   setAuditLogs: (logs: AuditLogEntry[]) => void;
   verifyChainIntegrity: () => Promise<void>;
-  exportAuditCertificate: () => Promise<void>;
+  exportAuditCertificate: () => Promise<boolean>;
   fetchNetworkStatus: () => Promise<void>;
-}
-
-function getApiHost(): string {
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    if (/^[a-zA-Z0-9.-]+$/.test(hostname)) {
-      return hostname;
-    }
-  }
-  return '127.0.0.1';
 }
 
 export const useSovereigntyStore = create<SovereigntyState>((set, get) => ({
@@ -80,35 +88,42 @@ export const useSovereigntyStore = create<SovereigntyState>((set, get) => ({
     localhost_sockets: 0,
     lan_hotspot_sockets: 0,
     external_sockets: 0,
-    localhost_packets: 0,
-    lan_hotspot_packets: 0,
-    external_packets: 0,
-    external_bytes: 0,
-    total_packets_sniffed: 0,
-    verdict: '100% AIR-GAPPED & SOVEREIGN',
-    daemon_heartbeat_hz: 1.0,
+    // Unknown until measured - never pre-filled with a zero.
+    localhost_packets: null,
+    lan_hotspot_packets: null,
+    external_packets: null,
+    external_bytes: null,
+    total_packets_sniffed: null,
+    // Nothing is known until the live audit stream reports it.
+    verdict: 'UNKNOWN - awaiting live telemetry',
+    daemon_heartbeat_hz: 0,
     last_updated: ''
   },
   sockets: [],
   auditLogs: [],
   isVerifyingChain: false,
-  chainVerificationStatus: 'valid',
+  chainVerificationStatus: 'unverified',
+  chainError: null,
+  certificateError: null,
+  networkError: null,
+  chainProvenance: null,
+
+  clearSovereigntyErrors: () => set({ chainError: null, certificateError: null, networkError: null }),
 
   fetchNetworkStatus: async () => {
     try {
-      const host = getApiHost();
-      const res = await fetch(`http://${host}:8000/api/network-status`);
+      const res = await apiFetch(`/api/network-status`);
       if (res.ok) {
         const data = await res.json();
         set({
-          hostIp: data.host_ip || host,
+          hostIp: data.host_ip || getApiHost(),
           port: data.port || 8000,
           deploymentMode: (data.deployment_mode as DeploymentMode) || 'STANDALONE_LOCAL'
         });
       }
 
       // Fetch live audit chain
-      const logsRes = await fetch(`http://${host}:8000/api/sovereignty/logs`);
+      const logsRes = await apiFetch(`/api/sovereignty/logs`);
       if (logsRes.ok) {
         const logsData = await logsRes.json();
         if (logsData.success && logsData.logs) {
@@ -123,8 +138,7 @@ export const useSovereigntyStore = create<SovereigntyState>((set, get) => ({
   setDeploymentMode: async (mode) => {
     set({ deploymentMode: mode });
     try {
-      const host = getApiHost();
-      const res = await fetch(`http://${host}:8000/api/network-status/mode?mode=${mode}`, {
+      const res = await apiFetch(`/api/network-status/mode?mode=${mode}`, {
         method: 'POST'
       });
       if (res.ok) {
@@ -148,43 +162,49 @@ export const useSovereigntyStore = create<SovereigntyState>((set, get) => ({
   setAuditLogs: (auditLogs) => set({ auditLogs }),
 
   verifyChainIntegrity: async () => {
-    set({ isVerifyingChain: true, chainVerificationStatus: 'unverified' });
+    set({ isVerifyingChain: true, chainVerificationStatus: 'unverified', chainError: null });
     try {
-      const host = getApiHost();
-      const res = await fetch(`http://${host}:8000/api/sovereignty-audit/export`);
-      if (res.ok) {
-        const cert = await res.json();
-        const isValid = cert.integrity_verification?.valid === true;
+      const res = await apiFetch(`/api/sovereignty-audit/export`);
+      if (!res.ok) {
         set({
           isVerifyingChain: false,
-          chainVerificationStatus: isValid ? 'valid' : 'tampered'
+          chainVerificationStatus: 'unverified',
+          chainError: `Audit endpoint returned HTTP ${res.status}. The chain was NOT verified.`,
         });
         return;
       }
-    } catch {
-      // Fallback
+      const cert = await res.json();
+      const isValid = cert.integrity_verification?.valid === true;
+      set({
+        isVerifyingChain: false,
+        // "valid" means the backend recomputed and re-linked the chain; it is
+        // explicitly not an independent external verification.
+        chainVerificationStatus: isValid ? 'valid' : 'tampered',
+        chainError: isValid ? null : 'The backend reported an invalid chain.',
+        chainProvenance: cert.provenance || cert.integrity_verification?.method || null,
+      });
+      return;
+    } catch (err: any) {
+      // An unreachable backend is NOT a verified chain — stay unverified.
+      set({
+        isVerifyingChain: false,
+        chainVerificationStatus: 'unverified',
+        chainError: err?.message || 'Could not reach the audit endpoint; the chain was not verified.',
+      });
     }
-    await new Promise((r) => setTimeout(r, 400));
-    set({ isVerifyingChain: false, chainVerificationStatus: 'valid' });
   },
 
   exportAuditCertificate: async () => {
+    set({ certificateError: null });
     try {
       const host = getApiHost();
-      const res = await fetch(`http://${host}:8000/api/sovereignty-audit/export`);
-      let certificateData: any;
-      
-      if (res.ok) {
-        certificateData = await res.json();
-      } else {
-        certificateData = {
-          certificate_title: "MRPL Sovereign AI Workbench - Air-Gap Cryptographic Audit Certificate",
-          institution: "Mangalore Refinery and Petrochemicals Limited (MRPL)",
-          timestamp_generated_utc: new Date().toISOString(),
-          air_gap_verdict: get().metrics.verdict,
-          external_packets_transmitted: get().metrics.external_packets
-        };
+      const res = await apiFetch(`/api/sovereignty-audit/export`);
+      if (!res.ok) {
+        // Never synthesise a certificate when the signed artefact is unavailable.
+        set({ certificateError: `Certificate export failed (HTTP ${res.status}). Nothing was downloaded.` });
+        return false;
       }
+      const certificateData = await res.json();
 
       const blob = new Blob([JSON.stringify(certificateData, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -193,8 +213,10 @@ export const useSovereigntyStore = create<SovereigntyState>((set, get) => ({
       a.download = `MRPL_Sovereignty_Audit_Certificate_${Date.now()}.json`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Certificate download error:', err);
+      return true;
+    } catch (err: any) {
+      set({ certificateError: err?.message || 'Certificate export failed; nothing was downloaded.' });
+      return false;
     }
   }
 }));

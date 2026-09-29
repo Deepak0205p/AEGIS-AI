@@ -15,6 +15,8 @@ import {
   Sparkles
 } from 'lucide-react';
 import { useAuthStore } from '@/store/useAuthStore';
+import { getApiBase } from '@/lib/apiBase';
+import { apiFetch } from '@/lib/apiFetch';
 
 interface FeedbackModalProps {
   isOpen: boolean;
@@ -77,7 +79,7 @@ export function FeedbackModal({
     setErrorMsg(null);
 
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/feedback/submit', {
+      const res = await apiFetch(`${getApiBase()}/api/feedback/submit`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -162,7 +164,7 @@ export function FeedbackModal({
             <div className="space-y-1">
               <h4 className="text-base font-bold text-slate-900 dark:text-white">Report Logged Successfully</h4>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Your feedback has been saved to the XAMPP database and queued for Admin review.
+                Your feedback has been saved to the sovereign database and queued for Admin review.
               </p>
             </div>
           </div>

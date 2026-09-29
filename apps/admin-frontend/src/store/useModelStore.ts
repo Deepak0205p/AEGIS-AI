@@ -36,7 +36,7 @@ export interface SwapEvent {
 
 export interface VRAMTelemetry {
   gpu_available?: boolean;
-  gpu_name?: string;
+  gpu_name?: string | null;
   total_mb: number;
   used_mb: number;
   free_mb: number;
@@ -45,8 +45,8 @@ export interface VRAMTelemetry {
   primary_model_mb: number;
   secondary_model_mb: number;
   kv_cache_mb: number;
-  active_profile?: string;
-  max_concurrent_active_models?: number;
+  active_profile?: string | null;
+  max_concurrent_active_models?: number | null;
   loaded_models?: string[];
   temperature_celsius?: number;
   system_ram_total_mb?: number;
@@ -85,6 +85,11 @@ interface ModelState {
   isSwapping: boolean;
   isPolling: boolean;
   isLoadingNodes: boolean;
+  /** Real failure messages surfaced to the UI — never replaced by a fake success. */
+  swapError: string | null;
+  nodesError: string | null;
+  endpointError: string | null;
+  clearOperationError: () => void;
 
   // Actions
   fetchModels: () => Promise<void>;
@@ -96,8 +101,8 @@ interface ModelState {
   fetchVRAM: () => Promise<void>;
   fetchModelStatus: () => Promise<void>;
   updateVRAM: (vram: Partial<VRAMTelemetry>) => void;
-  triggerModelSwap: (targetModelId: string) => Promise<void>;
-  updateModelEndpoint: (modelId: string, endpointUrl: string) => Promise<void>;
+  triggerModelSwap: (targetModelId: string) => Promise<boolean>;
+  updateModelEndpoint: (modelId: string, endpointUrl: string) => Promise<boolean>;
   startPolling: () => void;
   stopPolling: () => void;
   addSwapEvent: (event: SwapEvent) => void;
@@ -107,29 +112,18 @@ let pollingTimer: NodeJS.Timeout | null = null;
 let visibilityHandler: (() => void) | null = null;
 
 export const useModelStore = create<ModelState>((set, get) => ({
+  // Nothing is known until the backend reports it: no demo node, no assumed model.
   models: [],
-  nodes: [
-    {
-      id: 'node-local',
-      name: 'Local Host GPU (Primary Sovereign Node)',
-      host_ip: '127.0.0.1',
-      port: 11434,
-      is_local: true,
-      status: 'online',
-      device_type: 'Local GPU',
-      discovered_models: ['deepseek-v4-pro:4b', 'qwen2.5vl:3b'],
-      latency_ms: 0.8,
-      vram_total_mb: 8029,
-      vram_used_mb: 4200,
-    }
-  ],
-  activeModel: 'deepseek-v4-pro:4b',
-  activePrimaryId: 'deepseek-v4-pro:4b',
-  activeSecondaryId: 'qwen2.5vl:3b',
+  nodes: [],
+  activeModel: '',
+  activePrimaryId: '',
+  activeSecondaryId: null,
   backendType: 'OLLaMA',
   vram: {
     gpu_available: false,
-    gpu_name: 'Detecting hardware...',
+    // No placeholder name: a GPU model is only ever shown once /api/v1/models/vram
+    // reports a real one. "Detecting hardware..." was rendered as a GPU name.
+    gpu_name: null,
     total_mb: 0,
     used_mb: 0,
     free_mb: 0,
@@ -138,8 +132,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
     primary_model_mb: 0,
     secondary_model_mb: 0,
     kv_cache_mb: 0,
-    active_profile: 'edge_laptop_6gb',
-    max_concurrent_active_models: 2,
+    // GET /api/v1/models/vram returns neither of these, so they stay empty
+    // rather than asserting a profile the backend never reported.
+    active_profile: null,
+    max_concurrent_active_models: null,
     loaded_models: [],
     temperature_celsius: 0,
     system_ram_total_mb: 0,
@@ -154,6 +150,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
   isSwapping: false,
   isPolling: false,
   isLoadingNodes: false,
+  swapError: null,
+  nodesError: null,
+  endpointError: null,
+
+  clearOperationError: () => set({ swapError: null, nodesError: null, endpointError: null }),
 
   fetchModels: async () => {
     try {
@@ -191,7 +192,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
       return {
         online: !!result.online,
         models: result.models || [],
-        latency_ms: result.latency_ms || 1.5,
+        latency_ms: result.latency_ms ?? 0,
         message: result.message || 'Ping completed',
       };
     } catch (err: any) {
@@ -205,6 +206,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
   },
 
   addNode: async (nodeData) => {
+    set({ nodesError: null });
     try {
       await api.post('/api/v1/nodes', {
         name: nodeData.name,
@@ -216,34 +218,23 @@ export const useModelStore = create<ModelState>((set, get) => ({
       await get().fetchNodes();
       await get().fetchModels();
       return true;
-    } catch (err) {
-      // Fallback local addition if offline
-      const newNode: ComputeNode = {
-        id: `node-${nodeData.host_ip.replace(/\./g, '-')}`,
-        name: nodeData.name,
-        host_ip: nodeData.host_ip,
-        port: nodeData.port || 11434,
-        is_local: nodeData.host_ip === '127.0.0.1' || nodeData.host_ip === 'localhost',
-        status: 'online',
-        device_type: nodeData.device_type || 'LAN Worker',
-        discovered_models: nodeData.models || ['deepseek-r1:7b', 'llama3.2:3b'],
-        latency_ms: 2.4,
-        last_seen: new Date().toLocaleTimeString(),
-      };
-      set((state) => ({ nodes: [...state.nodes.filter(n => n.id !== newNode.id), newNode] }));
-      return true;
+    } catch (err: any) {
+      // The node was NOT registered — report the failure instead of inventing an online peer.
+      set({ nodesError: err?.message || `Could not register node ${nodeData.host_ip}.` });
+      return false;
     }
   },
 
   deleteNode: async (nodeId: string) => {
+    set({ nodesError: null });
     try {
       await api.delete(`/api/v1/nodes/${nodeId}`);
       await get().fetchNodes();
       await get().fetchModels();
       return true;
-    } catch {
-      set((state) => ({ nodes: state.nodes.filter((n) => n.id !== nodeId) }));
-      return true;
+    } catch (err: any) {
+      set({ nodesError: err?.message || `Could not remove node ${nodeId}.` });
+      return false;
     }
   },
 
@@ -260,19 +251,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
   fetchVRAM: async () => {
     try {
       const data = await api.get<VRAMTelemetry>('/api/v1/models/vram');
-      if (data && data.total_mb) {
+      if (data) {
         set({
-          vram: {
-            ...get().vram,
-            ...data,
-            temperature_celsius: data.temperature_celsius || get().vram.temperature_celsius || 48.0,
-          },
-          gpuTemperatureC: data.temperature_celsius || get().gpuTemperatureC,
-          gpuUtilizationPct: data.usage_percent || get().gpuUtilizationPct,
+          vram: { ...get().vram, ...data },
+          gpuTemperatureC: data.temperature_celsius ?? get().gpuTemperatureC,
+          gpuUtilizationPct: data.usage_percent ?? get().gpuUtilizationPct,
         });
       }
     } catch {
-      // Keep cached telemetry
+      // Keep cached telemetry; never invent readings.
     }
   },
 
@@ -283,15 +270,21 @@ export const useModelStore = create<ModelState>((set, get) => ({
     try {
       const statusData = await api.get<any>('/api/v1/models/status');
       if (statusData) {
+        // GET /api/v1/models/status returns `status`, `active_model`,
+        // `active_domain`, `domain_info` and `models`. The previous reads
+        // (active_primary_model / active_secondary_model / loaded_models /
+        // vram_telemetry) matched no returned key, so all four were undefined
+        // and the store silently kept stale values on every 2s poll.
         set({
-          activePrimaryId: statusData.active_primary_model || get().activePrimaryId,
-          activeSecondaryId: statusData.active_secondary_model || get().activeSecondaryId,
-          loadedModels: statusData.loaded_models || get().loadedModels,
-          activeModel: statusData.active_primary_model || get().activeModel,
+          activePrimaryId: statusData.active_model || get().activePrimaryId,
+          activeSecondaryId: get().activeSecondaryId,
+          loadedModels: Array.isArray(statusData.models)
+            ? statusData.models.filter((m: any) => m?.status === 'active').map((m: any) => m.id)
+            : get().loadedModels,
+          activeModel: statusData.active_model || get().activeModel,
         });
-        if (statusData.vram_telemetry) {
-          get().fetchVRAM();
-        }
+        // VRAM telemetry is a separate endpoint; poll it on the same cadence.
+        get().fetchVRAM();
       }
 
       // Fetch live swap logs
@@ -305,7 +298,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
   },
 
   triggerModelSwap: async (targetModelId: string) => {
-    set({ isSwapping: true });
+    set({ isSwapping: true, swapError: null });
     try {
       const swapEvent = await api.post<SwapEvent>('/api/v1/models/swap', {
         model_id: targetModelId,
@@ -319,49 +312,55 @@ export const useModelStore = create<ModelState>((set, get) => ({
         isSwapping: false,
         swapHistory: [swapEvent, ...state.swapHistory.filter((s) => s.id !== swapEvent.id)],
       }));
-    } catch {
-      // Local fallback simulation
-      await new Promise((r) => setTimeout(r, 650));
-      set((state) => {
-        const target = state.models.find((m) => m.id === targetModelId);
-        const fallbackEvent: SwapEvent = {
-          id: `swap-${Date.now()}`,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          from_model: state.activeSecondaryId || 'qwen2.5-coder-3b',
-          to_model: target?.display_name || targetModelId,
-          duration_ms: 650,
-          status: 'SUCCESS',
-          trigger: 'MANUAL_HOTSWAP',
-          target_met: true,
-        };
-
-        const updatedModels = state.models.map((m) => {
-          if (m.id === targetModelId) return { ...m, status: 'active' as const };
-          if (!m.is_primary && m.status === 'active') return { ...m, status: 'standby' as const };
-          return m;
-        });
-
-        return {
-          models: updatedModels,
-          activeSecondaryId: targetModelId,
-          isSwapping: false,
-          swapHistory: [fallbackEvent, ...state.swapHistory],
-        };
-      });
+      return true;
+    } catch (err: any) {
+      // The swap did NOT happen. Record a genuine FAILED event and surface the reason
+      // instead of fabricating a SUCCESS swap and flipping model states.
+      const message = err?.message || 'Model swap request failed.';
+      set((state) => ({
+        isSwapping: false,
+        swapError: message,
+        swapHistory: [
+          {
+            id: `swap-failed-${Date.now()}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            from_model: state.activeSecondaryId || 'unknown',
+            to_model: targetModelId,
+            duration_ms: 0,
+            status: 'FAILED',
+            trigger: 'MANUAL_HOTSWAP',
+            target_met: false,
+          },
+          ...state.swapHistory,
+        ],
+      }));
+      return false;
     }
   },
 
   updateModelEndpoint: async (modelId: string, endpointUrl: string) => {
+    set({ endpointError: null });
     try {
       await api.post(`/api/v1/models/${modelId}/endpoint`, { endpoint_url: endpointUrl });
       await get().fetchModels();
-    } catch {
-      // Local fallback
+      return true;
+    } catch (err: any) {
+      set({ endpointError: err?.message || `Could not update endpoint for ${modelId}.` });
+      return false;
     }
   },
 
   startPolling: () => {
     if (pollingTimer) return;
+    // A previous run may have installed a visibilitychange handler that is no
+    // longer referenced (the handler nulls pollingTimer when the tab hides, so
+    // the `if (pollingTimer) return` guard above no longer protects us). Remove
+    // any stale listener first, otherwise duplicate 2s polling loops accumulate
+    // on every remount of OverviewDeck.
+    if (visibilityHandler && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', visibilityHandler);
+      visibilityHandler = null;
+    }
     set({ isPolling: true });
 
     // Initial immediate fetch

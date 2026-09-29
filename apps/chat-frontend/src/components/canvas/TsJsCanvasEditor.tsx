@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   FileCode2
 } from 'lucide-react';
+import { runCode, formatRunReport, CodeRunResult } from '@/lib/codeRunner';
 
 interface TsJsCanvasEditorProps {
   deliverable: DeliverableItem;
@@ -26,6 +27,7 @@ export function TsJsCanvasEditor({ deliverable }: TsJsCanvasEditorProps) {
   const [copied, setCopied] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [outputConsole, setOutputConsole] = useState<string | null>(null);
+  const [lastRun, setLastRun] = useState<CodeRunResult | null>(null);
   const [fontSize, setFontSize] = useState(13);
 
   const defaultTsCode =
@@ -33,7 +35,7 @@ export function TsJsCanvasEditor({ deliverable }: TsJsCanvasEditorProps) {
     `/**
  * MRPL Real-Time Yield & Margin Calculation Engine
  * Filename: ${deliverable.filename}
- * Runtime: TypeScript 5.4 / V8 Sandboxed VM
+ * Runtime: Node.js permission sandbox (type stripping)
  */
 
 interface CrudeAssay {
@@ -96,35 +98,13 @@ console.log(JSON.stringify(evaluation, null, 2));
 
   const handleRunJs = async () => {
     setIsRunning(true);
-    setOutputConsole('Executing TypeScript in V8 Isolated Sandbox...');
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    setOutputConsole('Submitting the source to the sovereign Node.js runner...');
 
-    try {
-      const logs: string[] = [];
-      const customConsole = {
-        log: (...args: any[]) =>
-          logs.push(
-            args.map((a) => (typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a))).join(' ')
-          ),
-        error: (...args: any[]) => logs.push(`[ERROR]: ${args.join(' ')}`),
-        warn: (...args: any[]) => logs.push(`[WARN]: ${args.join(' ')}`),
-      };
+    const language = deliverable.filename.toLowerCase().endsWith('.js') ? 'javascript' : 'typescript';
+    const result = await runCode(language, tsCode, { filename: deliverable.filename });
 
-      const runnableJs = tsCode
-        .replace(/import\s+.*?;/g, '')
-        .replace(/export\s+/g, '')
-        .replace(/interface\s+[\s\S]*?}/g, '')
-        .replace(/:\s*[A-Z][a-zA-Z0-9<>\[\]]*/g, '');
-
-      const fn = new Function('console', runnableJs);
-      fn(customConsole);
-
-      setOutputConsole(`[TYPESCRIPT EXECUTION SUCCESS]
-${logs.length > 0 ? logs.join('\n') : 'Script executed successfully with exit code 0 (no stdout).'}`);
-    } catch (err: any) {
-      setOutputConsole(`[RUNTIME ERROR]: ${err.message}\n${err.stack || ''}`);
-    }
-
+    setLastRun(result);
+    setOutputConsole(formatRunReport(result));
     setIsRunning(false);
   };
 
@@ -149,8 +129,8 @@ ${logs.length > 0 ? logs.join('\n') : 'Script executed successfully with exit co
             <FileCode2 className="h-3.5 w-3.5" />
             <span className="font-mono text-xs">{deliverable.filename}</span>
           </div>
-          <span className="text-[11px] text-[#64748b] font-medium hidden sm:inline">
-            TypeScript 5.4 &bull; V8 Sandboxed Engine
+          <span className="text-[11px] text-[#64748b] font-medium hidden sm:inline" title={lastRun?.engine || 'No run yet'}>
+            {lastRun ? lastRun.engine : 'Node.js permission sandbox'}
           </span>
         </div>
 
@@ -226,13 +206,23 @@ ${logs.length > 0 ? logs.join('\n') : 'Script executed successfully with exit co
           <div className="flex items-center justify-between px-4 py-2 bg-[#f1f5f9] border-b border-[#e2e8f0] text-xs text-[#64748b]">
             <div className="flex items-center space-x-1.5 text-[#2563eb] font-bold">
               <Terminal className="h-3.5 w-3.5" />
-              <span>TYPESCRIPT V8 OUTPUT TERMINAL</span>
+              <span>SANDBOX OUTPUT (REAL EXECUTION)</span>
             </div>
             <button onClick={() => setOutputConsole(null)} className="text-[#64748b] hover:text-[#0f172a] text-xs">
               ✕ Close
             </button>
           </div>
-          <pre className="flex-1 p-3 text-xs font-mono text-[#1e293b] whitespace-pre-wrap overflow-auto bg-[#ffffff]">
+          <pre
+            className={`flex-1 p-3 text-xs font-mono whitespace-pre-wrap overflow-auto bg-[#ffffff] ${
+              lastRun?.status === 'SUCCESS'
+                ? 'text-[#1e293b]'
+                : lastRun?.status === 'UNSUPPORTED'
+                  ? 'text-amber-700'
+                  : lastRun
+                    ? 'text-rose-700'
+                    : 'text-[#1e293b]'
+            }`}
+          >
             {outputConsole}
           </pre>
         </div>

@@ -20,16 +20,11 @@ import {
   FolderDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getApiBase } from '@/lib/apiBase';
+import { apiFetch } from '@/lib/apiFetch';
 
 interface PythonCanvasEditorProps {
   deliverable: DeliverableItem;
-}
-
-function getApiBase(): string {
-  if (typeof window !== 'undefined') {
-    return `http://${window.location.hostname}:8000`;
-  }
-  return 'http://localhost:8000';
 }
 
 export function PythonCanvasEditor({ deliverable }: PythonCanvasEditorProps) {
@@ -50,9 +45,9 @@ export function PythonCanvasEditor({ deliverable }: PythonCanvasEditorProps) {
     editedContent[deliverable.id]?.code ||
     (deliverable as any).code ||
     `"""
-AIR-GAPPED SOVEREIGN REFINERY SCRIPT
+MRPL SOVEREIGN REFINERY SCRIPT
 Filename: ` + deliverable.filename + `
-Runtime: Isolated Python 3.11 Execution Engine
+Runtime: local sovereign backend (Docker sandbox when available)
 Compliance: OISD-STD-105 / PESO Statutory Rules
 """
 
@@ -143,7 +138,7 @@ if __name__ == "__main__":
     setGeneratedFiles([]);
 
     try {
-      const res = await fetch(`${getApiBase()}/api/sandbox/run`, {
+      const res = await apiFetch(`${getApiBase()}/api/sandbox/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -164,7 +159,10 @@ if __name__ == "__main__":
 
       setRunSuccess(isSuccess);
       setIsIsolated(Boolean(data.isolated));
-      setExecutionTime(data.execution_time_sec ? Math.round(data.execution_time_sec * 1000) : 45);
+      // Report the measured time only. The old fallback invented "45 ms"
+      // whenever the backend reported 0.
+      const measured = Number(data.execution_time_sec);
+      setExecutionTime(Number.isFinite(measured) && measured > 0 ? Math.round(measured * 1000) : 0);
       if (data.generated_files && Array.isArray(data.generated_files)) {
         setGeneratedFiles(data.generated_files);
       }
@@ -211,7 +209,9 @@ if __name__ == "__main__":
             <Cpu className="h-3.5 w-3.5 text-emerald-400 shrink-0 animate-pulse" />
             <span className="font-semibold text-white">Python 3.11</span>
             <span className="text-slate-500">•</span>
-            <span className="text-emerald-400 font-medium">Air-Gapped Sandbox</span>
+            <span className="text-emerald-400 font-medium">
+              {isIsolated ? 'Docker Sandbox' : 'Local Process Runner'}
+            </span>
           </div>
         </div>
 
@@ -316,8 +316,8 @@ if __name__ == "__main__":
                   </span>
                 )}
                 {!isIsolated && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-emerald-400 font-mono">
-                    Air-Gapped Sandbox
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-amber-300 font-mono">
+                    Local subprocess (no container)
                   </span>
                 )}
                 {runSuccess === false && (
@@ -406,8 +406,18 @@ if __name__ == "__main__":
           <span>Encoding: <strong className="text-slate-300">UTF-8</strong></span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-emerald-400 font-sans font-medium text-[11px]">Python Sandbox Ready</span>
+          <span
+            className={`h-2 w-2 rounded-full ${runSuccess === false ? 'bg-rose-400' : isIsolated ? 'bg-emerald-400' : 'bg-amber-400'}`}
+          />
+          <span
+            className={`font-sans font-medium text-[11px] ${runSuccess === false ? 'text-rose-300' : isIsolated ? 'text-emerald-400' : 'text-amber-400'}`}
+          >
+            {runSuccess === false
+              ? 'Last run failed'
+              : isIsolated
+                ? 'Python Sandbox (Docker, --network none)'
+                : 'Python runner: local subprocess, no container isolation'}
+          </span>
         </div>
       </div>
     </div>

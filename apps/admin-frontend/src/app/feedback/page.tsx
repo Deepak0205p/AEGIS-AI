@@ -124,8 +124,11 @@ export default function AdminFeedbackPage() {
   };
 
   useEffect(() => {
+    // searchQuery was part of the request but not a dependency, so typing in the
+    // search box did nothing until a filter pill was toggled.
     fetchReports();
-  }, [typeFilter, statusFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typeFilter, statusFilter, searchQuery]);
 
   const handleSelectReport = (r: FeedbackReport) => {
     setSelectedReport(r);
@@ -185,7 +188,7 @@ export default function AdminFeedbackPage() {
               </div>
               <h1 className="text-xl font-bold tracking-tight">Operator Feedback & Error Triage Hub</h1>
               <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50 text-[10px] font-mono">
-                XAMPP MySQL Live
+                Live Database
               </Badge>
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -298,7 +301,7 @@ export default function AdminFeedbackPage() {
             {isLoading && reports.length === 0 ? (
               <div className="p-12 text-center bg-white dark:bg-[#111111] border border-gray-200 dark:border-[#262626] rounded-2xl">
                 <Loader2 className="h-6 w-6 animate-spin mx-auto text-gray-400 mb-2" />
-                <p className="text-xs text-gray-500">Loading feedback records from XAMPP MySQL...</p>
+                <p className="text-xs text-gray-500">Loading feedback records from the sovereign database...</p>
               </div>
             ) : reports.length === 0 ? (
               <div className="p-12 text-center bg-white dark:bg-[#111111] border border-gray-200 dark:border-[#262626] rounded-2xl space-y-2">

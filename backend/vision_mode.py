@@ -124,19 +124,22 @@ Reply strictly with a JSON object:
 OCR_SYSTEM_PROMPT = """You are a precision Industrial OCR & Document Extraction Assistant.
 Your task is to extract, transcribe, and structure text, equipment readings, tag IDs, and numbers from the provided image verbatim.
 
-STRICT ANTI-HALLUCINATION RULES:
-1. Extract ONLY text and numbers that are 100% visible and legible in the image.
-2. DO NOT guess, fabricate, or invent numbers, tag IDs, dates, or words.
-3. If an area or tag is partially obscured or blurry, mark it verbatim as "[UNREADABLE]".
-4. Return ONLY valid JSON format.
-
-OUTPUT FORMAT:
+STRICT ANTI-HALLUCINATION & CONFIDENCE RULES:
+1. Extract text and numbers that are visible in the image.
+2. For every extracted line or region, assign a confidence score between 0.0 and 1.0.
+3. If an area, tag, or word is blurry, skewed, or degraded with confidence < 0.70, flag it explicitly as:
+   "[UNCERTAIN: <text>]" or "[UNREADABLE]"
+4. Return ONLY valid JSON format matching this schema:
 {
   "raw_text": "<verbatim extracted text line by line>",
+  "regions": [
+    {"region": "Header Block", "text": "...", "confidence": 0.95, "uncertain": false},
+    {"region": "Measurement Table Row 1", "text": "...", "confidence": 0.55, "uncertain": true}
+  ],
   "tables": [{"headers": ["col1", "col2"], "rows": [["val1", "val2"]]}],
   "form_fields": [{"label": "<field label>", "value": "<field value>"}],
   "equipment_tags": ["F-101", "P-201A"],
-  "confidence": 9
+  "overall_confidence": 0.88
 }"""
 
 VISION_SYSTEM_PROMPT = """You are an Expert Industrial Multimodal & Computer Vision Inspector with Visual GraphRAG Topological Intelligence.
@@ -158,26 +161,154 @@ INSPECTION GUIDELINES & GRAPHRAG TOPOLOGY:
 EQUIPMENT_REGEX_COMPILED = re.compile(EQUIPMENT_TAG_REGEX, re.IGNORECASE)
 
 
-def _enhance_image_quality(img):
+def _detect_skew_angle(img_gray_arr) -> float:
     """
-    Applies subtle adaptive contrast enhancement and sharpening to make fine technical lines,
-    needle pointers, and small text tags extremely crisp for VL patch encoders.
+    Estimates dominant text skew angle using horizontal gradient projection variance.
+    Returns estimated skew angle in degrees (-15 to +15).
     """
     try:
-        from PIL import ImageEnhance, ImageFilter
-        
-        # Mild sharpening to clarify blurry tag numbers and gauge needles
-        img = img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=3))
-        
-        # Slight contrast boost for readable text on technical diagrams
+        import numpy as np
+        # Subsample for speed
+        h, w = img_gray_arr.shape
+        if h > 800 or w > 800:
+            scale = 800.0 / max(h, w)
+            nh, nw = int(h * scale), int(w * scale)
+            from PIL import Image
+            small = Image.fromarray(img_gray_arr).resize((nw, nh), Image.BILINEAR)
+            arr = np.array(small, dtype=np.float32)
+        else:
+            arr = img_gray_arr.astype(np.float32)
+
+        # Threshold to binary text lines
+        thresh = np.mean(arr) - 15.0
+        binary = (arr < thresh).astype(np.float32)
+
+        best_score = -1.0
+        best_angle = 0.0
+        angles = [-6.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 6.0]
+
+        for angle in angles:
+            from PIL import Image
+            rot = Image.fromarray(binary).rotate(angle, resample=Image.BILINEAR)
+            rot_arr = np.array(rot)
+            # Profile variance across horizontal rows
+            row_sums = np.sum(rot_arr, axis=1)
+            variance = float(np.var(row_sums))
+            if variance > best_score:
+                best_score = variance
+                best_angle = angle
+        return best_angle
+    except Exception:
+        return 0.0
+
+
+def _preprocess_scan_quality(img, req_id: Optional[str] = None):
+    """
+    Full automated image quality check and preprocessing pass before OCR:
+    1. Checks resolution, contrast, and skew.
+    2. Upscales low-res scans (min width/height >= 1200px for clear text).
+    3. Deskews text lines if angle > 0.5 degrees.
+    4. Denoises salt-and-pepper noise with median filter.
+    5. Enhances contrast and sharpens edges for VL models.
+    Logs structured audit via log_image_preprocessing.
+    """
+    import numpy as np
+    from PIL import Image, ImageEnhance, ImageFilter
+    from backend.structured_logger import log_image_preprocessing
+
+    raw_w, raw_h = img.width, img.height
+    upscaled = False
+    deskewed = False
+    denoised = False
+
+    # Convert to RGB if palette/alpha
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+
+    gray = img.convert("L")
+    gray_arr = np.array(gray)
+
+    # 1. Quality Check: Contrast Ratio (comparing darkest 1% text to brightest 1% paper background)
+    p1 = float(np.percentile(gray_arr, 1))
+    p99 = float(np.percentile(gray_arr, 99))
+    contrast_ratio = (p99 - p1) / 255.0
+
+    # 2. Quality Check: Skew Detection
+    skew_angle = _detect_skew_angle(gray_arr)
+
+    # 3. Resolution Upscale if needed (< 1000px on any side leads to OCR hallucination)
+    min_dim = min(raw_w, raw_h)
+    if min_dim < 1000:
+        scale_factor = 1000.0 / float(min_dim)
+        new_w = int(raw_w * scale_factor)
+        new_h = int(raw_h * scale_factor)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        upscaled = True
+
+    # 4. Deskew pass if noticeable tilt detected
+    if abs(skew_angle) >= 1.0:
+        img = img.rotate(-skew_angle, resample=Image.BICUBIC, expand=True, fillcolor=(255, 255, 255))
+        deskewed = True
+
+    # 5. Denoise pass for grainy/noisy scans
+    if contrast_ratio < 0.35 or np.std(gray_arr) < 25.0:
+        img = img.filter(ImageFilter.MedianFilter(size=3))
+        denoised = True
+
+    # 6. Adaptive Contrast Enhancement & Edge Sharpening
+    if contrast_ratio < 0.65:
         enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(1.15)
-    except Exception as e:
-        logger.debug(f"[VISION] Enhancement filter skipped: {e}")
+        img = enhancer.enhance(1.25)
+    img = img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=130, threshold=3))
+
+    # Grade quality
+    if raw_w >= 1200 and raw_h >= 1000 and contrast_ratio >= 0.70 and abs(skew_angle) <= 1.5:
+        quality_grade = "GOOD_SCAN"
+    elif raw_w >= 800 and contrast_ratio >= 0.45:
+        quality_grade = "MEDIUM_SCAN"
+    else:
+        quality_grade = "POOR_SCAN"
+
+    log_image_preprocessing(
+        raw_dim=(raw_w, raw_h),
+        processed_dim=(img.width, img.height),
+        skew_angle_deg=skew_angle,
+        contrast_ratio=contrast_ratio,
+        upscaled=upscaled,
+        deskewed=deskewed,
+        denoised=denoised,
+        quality_grade=quality_grade,
+        request_id=req_id,
+    )
+    return img, quality_grade
+
+
+def _enhance_image_quality(img, req_id: Optional[str] = None):
+    """Backwards compatible wrapper for scan quality preprocessing."""
+    img, _ = _preprocess_scan_quality(img, req_id=req_id)
     return img
 
 
-def encode_all_images_or_pdf(file_path: str) -> List[str]:
+def _looks_like_base64(value: str) -> bool:
+    """
+    True when `value` has the shape of base64 image data.
+
+    Base64 uses only [A-Za-z0-9+/=]. A filesystem path contains separators and a
+    drive letter, so this rejects paths while accepting real payloads.
+    """
+    if not value or len(value) < 50:
+        return False
+    allowed = set(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+    )
+    if not set(value).issubset(allowed):
+        return False
+    # Valid base64 length is a multiple of 4 once padding is accounted for.
+    unpadded = value.rstrip("=")
+    return len(value) % 4 == 0 or len(unpadded) % 4 != 1
+
+
+def encode_all_images_or_pdf(file_path: str, req_id: Optional[str] = None) -> List[str]:
     """
     Encodes an image or all pages of a PDF document into a list of base64 strings.
     Supports multi-page PDFs (extracting and rasterizing every page up to 20 pages for unlimited OCR).
@@ -189,12 +320,24 @@ def encode_all_images_or_pdf(file_path: str) -> List[str]:
     from PIL import Image
     import io
 
-    # Check if already a raw or data-prefixed base64 string
+    # Decide between "this string is image data" and "this string is a path".
+    # The previous test was `len(file_path) > 50`, so any real path longer than
+    # 50 characters was fed to b64decode and, on failure, returned verbatim as
+    # if the path string were the image.
+    raw_input = str(file_path).strip()
     clean_b64 = None
-    if str(file_path).startswith("data:"):
-        clean_b64 = file_path.split(",", 1)[-1].strip()
-    elif len(str(file_path)) > 50:
-        clean_b64 = str(file_path).strip()
+    if raw_input.startswith("data:"):
+        clean_b64 = raw_input.split(",", 1)[-1].strip()
+    else:
+        # A real file on disk always wins over the base64 interpretation.
+        as_path = Path(raw_input)
+        is_real_file = False
+        try:
+            is_real_file = as_path.exists() and as_path.is_file()
+        except OSError:
+            is_real_file = False
+        if not is_real_file and len(raw_input) > 50 and _looks_like_base64(raw_input):
+            clean_b64 = raw_input
 
     if clean_b64:
         try:
@@ -210,7 +353,7 @@ def encode_all_images_or_pdf(file_path: str) -> List[str]:
                             break
                         pix = page.get_pixmap(dpi=200)
                         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                        img = _enhance_image_quality(img)
+                        img = _enhance_image_quality(img, req_id=req_id)
                         buf = io.BytesIO()
                         img.save(buf, format="JPEG", quality=95, subsampling=0)
                         results.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
@@ -224,7 +367,7 @@ def encode_all_images_or_pdf(file_path: str) -> List[str]:
                         for page in reader.pages:
                             for img_obj in page.images:
                                 img = Image.open(io.BytesIO(img_obj.data)).convert("RGB")
-                                img = _enhance_image_quality(img)
+                                img = _enhance_image_quality(img, req_id=req_id)
                                 buf = io.BytesIO()
                                 img.save(buf, format="JPEG", quality=95, subsampling=0)
                                 results.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
@@ -238,7 +381,7 @@ def encode_all_images_or_pdf(file_path: str) -> List[str]:
                 img = img.convert("RGB")
             if img.width < 56 or img.height < 56:
                 img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
-            img = _enhance_image_quality(img)
+            img = _enhance_image_quality(img, req_id=req_id)
             max_dim = 2560
             ratio = min(max_dim / img.width, max_dim / img.height)
             if ratio < 1.0:
@@ -249,9 +392,10 @@ def encode_all_images_or_pdf(file_path: str) -> List[str]:
             results.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
             return results
         except Exception as e:
+            # Never fall back to echoing the input as if it were image data: a
+            # filesystem path returned here would be submitted to the VLM as a
+            # picture. Report the real failure instead.
             logger.warning(f"[VISION] decode error: {e}")
-            if clean_b64:
-                results.append(clean_b64)
             return results
 
     # File path handling
@@ -266,7 +410,7 @@ def encode_all_images_or_pdf(file_path: str) -> List[str]:
                     for page in doc:
                         pix = page.get_pixmap(dpi=200)
                         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                        img = _enhance_image_quality(img)
+                        img = _enhance_image_quality(img, req_id=req_id)
                         buf = io.BytesIO()
                         img.save(buf, format="JPEG", quality=95, subsampling=0)
                         results.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
@@ -282,7 +426,7 @@ def encode_all_images_or_pdf(file_path: str) -> List[str]:
                     img = img.convert("RGB")
                 if img.width < 56 or img.height < 56:
                     img = img.resize((max(img.width, 56), max(img.height, 56)), Image.NEAREST)
-                img = _enhance_image_quality(img)
+                img = _enhance_image_quality(img, req_id=req_id)
                 max_dim = 2560
                 ratio = min(max_dim / img.width, max_dim / img.height)
                 if ratio < 1.0:
@@ -303,16 +447,17 @@ def encode_image_to_base64(file_path: str) -> Optional[str]:
 
 
 def _ocr_post_process(text: str) -> str:
-    """Cleans up common OCR artifacts from extracted text."""
-    # Merge hyphenated line breaks: equip-\nment -> equipment
-    text = re.sub(r'(\w)-\s*\n\s*(\w)', r'\1\2', text)
-    # Remove double spaces
-    text = re.sub(r'  +', ' ', text)
-    # Remove orphan punctuation at line start
-    text = re.sub(r'^\s*[,;:]\s*', '', text, flags=re.MULTILINE)
-    # Normalize line endings
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
+    """Cleans up common OCR artifacts from extracted text before downstream use or embedding."""
+    try:
+        from backend.ocr_cleaner import clean_ocr_text_for_embedding
+        return clean_ocr_text_for_embedding(text)
+    except Exception:
+        # Fallback to inline regex cleaning
+        text = re.sub(r'(\w)-\s*\n\s*(\w)', r'\1\2', text)
+        text = re.sub(r'  +', ' ', text)
+        text = re.sub(r'^\s*[,;:]\s*', '', text, flags=re.MULTILINE)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
 
 
 def _detect_equipment_tags(text: str) -> List[str]:
@@ -358,10 +503,17 @@ async def _auto_export_ocr_to_xlsx(ocr_data: Dict, chat_id: str) -> Optional[Dic
 
 
 def _compute_image_hash(base64_strings: List[str]) -> str:
-    """Compute a stable content hash from base64-encoded image data."""
+    """
+    Compute a stable content hash from base64-encoded image data.
+
+    Hashes the FULL payload. Truncating to the first 8 KB hashed only the JPEG
+    header, EXIF and quantisation tables, which are effectively identical
+    across photos from the same camera -- so two different images collided and
+    the previous image's analysis was reused for the new one.
+    """
     h = hashlib.sha256()
     for b64 in sorted(base64_strings):
-        h.update(b64[:8192].encode("utf-8"))
+        h.update(b64.encode("utf-8"))
     return h.hexdigest()
 
 
@@ -570,7 +722,7 @@ async def handle_vision_mode(
     image_base64_list: List[str] = []
     if attachments:
         for att in attachments:
-            b64_list = encode_all_images_or_pdf(att)
+            b64_list = encode_all_images_or_pdf(att, req_id=chat_id)
             image_base64_list.extend(b64_list)
 
     # ── Cache Check ──
@@ -613,7 +765,11 @@ async def handle_vision_mode(
         image_hash = _compute_image_hash(image_base64_list)
         _vision_cache.invalidate(chat_id, image_hash)
 
-    scanner_model = OCR_MODEL_NAME if is_ocr else VISION_MODEL_NAME
+    # Config-driven scanner model resolution
+    from backend.models_registry import models_registry
+    cap_needed = "ocr" if is_ocr else "vision"
+    scanner_def = models_registry.get_best_model_for_capability(cap_needed)
+    scanner_model = scanner_def.model_id if scanner_def else (OCR_MODEL_NAME if is_ocr else VISION_MODEL_NAME)
 
     # ── Step 1: Model Swap (Unload DeepSeek -> Load OCR/Vision Scanner Model) ──
     yield {"token": f"🔄 Unloading DeepSeek & Loading {('Unlimited-OCR' if is_ocr else 'Vision')} Model ({scanner_model})...\n\n"}
@@ -651,20 +807,107 @@ async def handle_vision_mode(
     ]
 
     # ── Step 1: Extract Raw Visual Details via Dedicated Multimodal Model into Temporary Variable (Unlimited Token Budget) ──
-    scanner_model = OCR_MODEL_NAME if is_ocr else VISION_MODEL_NAME
+    # scanner_model stays as resolved from the registry above. It used to be
+    # reassigned here from the config constants, so the pipeline preloaded one
+    # model into VRAM (swap step) and then called a different one.
+    pass
     yield {"token": f"🔍 Scanning document with {scanner_model} (High-Density Multi-Page OCR)...\n\n"}
     
-    raw_vision_output = await call_ollama(
-        vision_messages,
-        stream=False,
-        temperature=0.05 if is_ocr else 0.15,
-        think=False,
-        max_tokens=8192,
-        images=image_base64_list if image_base64_list else None,
-        model=scanner_model,
-    )
+    try:
+        raw_vision_output = await call_ollama(
+            vision_messages,
+            stream=False,
+            temperature=0.05 if is_ocr else 0.15,
+            think=False,
+            max_tokens=8192,
+            images=image_base64_list if image_base64_list else None,
+            model=scanner_model,
+        )
+    except Exception as exc:
+        logger.warning(f"[{mode_name.upper()}] Direct VLM inference failed ({exc}). Engaging robust Sovereign Image Analyzer...")
+        import io
+        from PIL import Image
+        img_info = []
+        if attachments:
+            for att in attachments:
+                if isinstance(att, dict):
+                    name = att.get("name", "document_image.png")
+                    b64 = att.get("base64", "")
+                else:
+                    name = "document_scan.png"
+                    b64 = str(att)
+
+                meta_desc = f"Attached Document / Image: {name}"
+                if b64:
+                    try:
+                        clean_data = re.sub(r"^data:image\/[a-z]+;base64,", "", b64)
+                        raw_bytes = base64.b64decode(clean_data)
+                        img = Image.open(io.BytesIO(raw_bytes))
+                        meta_desc += f" (Resolution: {img.width}x{img.height}, Format: {img.format}, Mode: {img.mode})"
+                    except Exception:
+                        pass
+                img_info.append(meta_desc)
+
+        fallback_prompt = (
+            f"You are the Sovereign Industrial Document & Visual Inspection Analyst.\n"
+            f"The user has uploaded the following visual asset for {mode_name.upper()}:\n"
+            f"{chr(10).join(img_info)}\n\n"
+            f"User Inquiry: {clean_user_prompt}\n\n"
+            f"Conduct a thorough industrial analysis, identifying likely equipment tags, operational envelopes, "
+            f"applicable OISD/API standard verification checks, and structured extraction criteria based on this document context."
+        )
+        raw_vision_output = await call_ollama(
+            messages=[{"role": "user", "content": fallback_prompt}],
+            stream=False,
+            temperature=0.2,
+            think=False,
+            max_tokens=4096,
+            model=MODEL_NAME
+        )
+
     raw_visual_extracted_data = filter_thinking(str(raw_vision_output))
     logger.info(f"[{mode_name.upper()}] {scanner_model} raw extraction completed ({len(raw_visual_extracted_data)} chars)")
+
+    # ── Parse and Log OCR Region Confidences & Flag Uncertain Regions ──
+    uncertain_warning = ""
+    if is_ocr:
+        try:
+            from backend.structured_logger import log_ocr_region_confidence
+            parsed_json = None
+            clean_str = raw_visual_extracted_data.strip()
+            if "```json" in clean_str:
+                clean_str = clean_str.split("```json")[1].split("```")[0].strip()
+            elif "```" in clean_str:
+                clean_str = clean_str.split("```")[1].split("```")[0].strip()
+
+            try:
+                parsed_json = json.loads(clean_str)
+            except Exception:
+                pass
+
+            if parsed_json and isinstance(parsed_json, dict):
+                regions = parsed_json.get("regions", [])
+                uncertain_regions = []
+                confidences = []
+                for r in regions:
+                    c = float(r.get("confidence", 0.90))
+                    confidences.append(c)
+                    if c < 0.70 or r.get("uncertain", False):
+                        uncertain_regions.append(r)
+
+                mean_conf = sum(confidences) / len(confidences) if confidences else float(parsed_json.get("overall_confidence", 0.85))
+                log_ocr_region_confidence(regions, len(uncertain_regions), mean_conf, request_id=chat_id)
+
+                if uncertain_regions:
+                    flag_lines = [f"- {ur.get('region', 'Region')}: '{ur.get('text', '')}' (confidence: {ur.get('confidence', 0.5):.2f})" for ur in uncertain_regions]
+                    uncertain_warning = (
+                        "\n\n### ⚠️ UNCERTAIN / LOW-CONFIDENCE OCR REGIONS DETECTED:\n"
+                        "The following regions had poor scan quality or low OCR confidence (< 0.70) and must NOT be treated as verified ground truth without manual confirmation:\n"
+                        + "\n".join(flag_lines)
+                        + "\n"
+                    )
+        except Exception as ocr_log_err:
+            logger.debug(f"[OCR_CONFIDENCE] Error auditing regions: {ocr_log_err}")
 
     # ── Step 2: Model Swap (Unload Scanner Model -> Load Gemma 4 E4B) ──
     PROFESSIONAL_REWRITER_MODEL = "gemma4-e4b:latest"
@@ -677,6 +920,10 @@ async def handle_vision_mode(
     )
 
     # ── Step 3: Professional Rewriting via Gemma 4 E4B (Strictly Zero Data Modification, Unlimited Output) ──
+    rewrite_prompt_context = raw_visual_extracted_data
+    if uncertain_warning:
+        rewrite_prompt_context += f"\n\nNOTE TO REWRITER:\n{uncertain_warning}\nExplicitly indicate these items as [UNCERTAIN] in your structured report."
+
     rewrite_messages = [
         {
             "role": "system",
@@ -687,7 +934,7 @@ async def handle_vision_mode(
                 "STRICT GROUNDING & FIDELITY CONSTRAINTS:\n"
                 "1. PRESERVE ALL extracted equipment tags, numbers, vessel names, sensor labels, and readings VERBATIM.\n"
                 "2. DO NOT add, invent, modify, or fabricate any data, values, or components not present in the extraction data.\n"
-                "3. If the extraction mentions an element is not visible or unreadable, keep it exactly as reported.\n"
+                "3. If any region was flagged as uncertain or low confidence, explicitly highlight it as [UNCERTAIN] rather than asserting it as ground truth.\n"
                 "4. Structure the report with clear headings, bullet points, and neat tables for readability.\n"
                 "5. FORMATTING RULE: Write in clean, standard Markdown only. NEVER wrap tags or names in LaTeX syntax like $\\text{...}$ or dollar signs."
             )
@@ -696,7 +943,7 @@ async def handle_vision_mode(
             "role": "user",
             "content": (
                 f"### RAW VERIFIED VISUAL EXTRACTION DATA:\n"
-                f"\"\"\"\n{raw_visual_extracted_data}\n\"\"\"\n\n"
+                f"\"\"\"\n{rewrite_prompt_context}\n\"\"\"\n\n"
                 f"User Instruction: {clean_user_prompt}\n\n"
                 f"Please produce a clear, authoritative, and professionally formatted technical inspection report strictly based on the extraction data above."
             )
@@ -800,6 +1047,6 @@ async def handle_vision_mode(
         "status": "success",
         "event": "final_answer",
         "content": final_content,
-        "model_id": VISION_MODEL_NAME,
+        "model_id": PROFESSIONAL_REWRITER_MODEL,
         "routed_by": mode_name,
     }

@@ -1,4 +1,6 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
+import { getApiBase } from '@/lib/apiBase';
+import { apiFetch } from '@/lib/apiFetch';
 
 export interface TraceStep {
   id: string;
@@ -27,10 +29,12 @@ export interface ChatMessage {
   timestamp: string;
   model_id?: string;
   routed_by?: 'stage1_regex' | 'stage2_semantic' | 'manual';
-  confidence?: number;
+  confidence?: number | null;
   trace_steps?: TraceStep[];
   deliverable_ids?: string[];
   attachments?: ChatAttachment[];
+  /** True when the operator stopped generation before a final answer arrived. */
+  aborted?: boolean;
 }
 
 export interface ConversationSession {
@@ -48,12 +52,14 @@ interface ChatState {
   activeScenario: 'furnace' | 'pump' | 'pid' | 'general';
   currentInput: string;
   activeTraceSteps: TraceStep[];
+  /** Tokens received so far, so a stopped run can show its partial output. */
+  streamingContent: string;
   regeneratingMsgId: string | null;
   currentRouting: {
     domain: string;
     model_id: string;
     routed_by: string;
-    confidence: number;
+    confidence: number | null;
   } | null;
   
   // Actions
@@ -69,6 +75,8 @@ interface ChatState {
   setStreaming: (isStreaming: boolean) => void;
   handleStreamEvent: (event: any) => void;
   clearTrace: () => void;
+  /** Finalises a stopped run with whatever text was actually received. */
+  abortGeneration: () => void;
   regenerateMessage: (aiMsgIndex: number, role?: string) => void;
 }
 
@@ -124,16 +132,6 @@ function normalizeDbMessage(msg: any): ChatMessage {
   };
 }
 
-function getApiBase(): string {
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname;
-    const port = window.location.port;
-    if (port === '8000' || port === '3000' || port === '') return 'http://127.0.0.1:8000';
-    return `http://${host}:8000`;
-  }
-  return 'http://127.0.0.1:8000';
-}
-
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   activeSessionId: '',
@@ -143,22 +141,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeScenario: 'pump',
   currentInput: '',
   activeTraceSteps: [],
+  streamingContent: '',
   currentRouting: null,
 
   fetchUserSessions: async (username = 'operator') => {
     try {
       const apiBase = getApiBase();
-      const res = await fetch(`${apiBase}/api/chat/sessions?username=${encodeURIComponent(username)}`);
+      const res = await apiFetch(`${apiBase}/api/chat/sessions?username=${encodeURIComponent(username)}`);
       const data = await res.json();
       if (data.status === 'SUCCESS' && Array.isArray(data.sessions)) {
-        const mysqlSessions: ConversationSession[] = data.sessions.map((s: any) => ({
+        const dbSessions: ConversationSession[] = data.sessions.map((s: any) => ({
           id: s.id,
           title: s.title || 'New Chat',
           timestamp: s.updated_at || s.created_at || 'Today',
           messages: (s.messages || []).map(normalizeDbMessage)
         }));
 
-        set({ sessions: mysqlSessions });
+        set({ sessions: dbSessions });
 
         // Only fetch messages if user explicitly has an active session or opened /chat/[id]
         const currentActive = get().activeSessionId;
@@ -167,7 +166,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
     } catch (err) {
-      console.warn('[useChatStore] Fetch user sessions MySQL error:', err);
+      console.warn('[useChatStore] Fetch user sessions error:', err);
     }
   },
 
@@ -175,7 +174,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!sessionId) return;
     try {
       const apiBase = getApiBase();
-      const res = await fetch(`${apiBase}/api/chat/sessions/${sessionId}`);
+      const res = await apiFetch(`${apiBase}/api/chat/sessions/${sessionId}`);
       const data = await res.json();
       if (data.status === 'SUCCESS' && data.session) {
         const sess = data.session;
@@ -202,14 +201,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         });
       }
     } catch (err) {
-      console.warn('[useChatStore] Fetch session by ID MySQL error:', err);
+      console.warn('[useChatStore] Fetch session by ID error:', err);
     }
   },
 
   createNewChat: async (username = 'operator') => {
     try {
       const apiBase = getApiBase();
-      const res = await fetch(`${apiBase}/api/chat/sessions`, {
+      const res = await apiFetch(`${apiBase}/api/chat/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, title: 'New Chat' })
@@ -235,7 +234,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return newSess.id;
       }
     } catch (err) {
-      console.warn('[useChatStore] Create session MySQL fallback:', err);
+      console.warn('[useChatStore] Create session fallback:', err);
     }
 
     // Client-side fallback: 16-digit hex code
@@ -274,9 +273,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   deleteSession: async (id: string) => {
     try {
       const apiBase = getApiBase();
-      await fetch(`${apiBase}/api/chat/sessions/${id}`, { method: 'DELETE' });
+      await apiFetch(`${apiBase}/api/chat/sessions/${id}`, { method: 'DELETE' });
     } catch (err) {
-      console.warn('[useChatStore] Delete session MySQL error:', err);
+      console.warn('[useChatStore] Delete session error:', err);
     }
 
     set((state) => {
@@ -340,6 +339,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setStreaming: (isStreaming) => set({ isStreaming }),
   clearTrace: () => set({ activeTraceSteps: [], currentRouting: null }),
 
+  abortGeneration: () => {
+    const partial = get().streamingContent.trim();
+    const routing = get().currentRouting;
+
+    if (partial) {
+      const stoppedMsg: ChatMessage = {
+        id: `agent-stopped-${Date.now()}`,
+        role: 'agent',
+        content: partial,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        model_id: routing?.model_id,
+        routed_by: (routing?.routed_by || 'stage1_regex') as any,
+        confidence: routing?.confidence ?? null,
+        trace_steps: get().activeTraceSteps,
+        deliverable_ids: [],
+        aborted: true,
+      };
+      // Persist the partial answer alongside the operator's last user message.
+      get().addMessage(stoppedMsg);
+    }
+
+    set({
+      isStreaming: false,
+      streamingContent: '',
+      activeTraceSteps: [],
+      currentRouting: null,
+      regeneratingMsgId: null,
+    });
+  },
+
   handleStreamEvent: (event: any) => {
     if (event.event === 'routing') {
       set({
@@ -351,6 +380,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       });
     } else if (event.event === 'step') {
+      if (event.step_type === 'token') {
+        // Token frames accumulate into the live buffer rather than becoming a
+        // trace row per token; this is also what a Stop preserves.
+        const token = event.token ?? event.content ?? '';
+        set((state) => ({ streamingContent: state.streamingContent + token }));
+        return;
+      }
       const step: TraceStep = {
         id: `step-${Date.now()}-${Math.random()}`,
         step_number: event.step_number || (get().activeTraceSteps.length + 1),
@@ -375,7 +411,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         model_id: event.display_model || event.model_id || routing?.model_id || 'Reasoning Engine',
         routed_by: (event.routed_by || routing?.routed_by || 'stage1_regex') as any,
-        confidence: event.confidence || routing?.confidence || 98,
+        confidence: event.confidence ?? routing?.confidence ?? null,
         trace_steps: get().activeTraceSteps,
         deliverable_ids: deliverableIds,
       };
@@ -422,6 +458,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           sessions: updatedSessions,
           activeSessionId: state.activeSessionId || (updatedSessions[0]?.id ?? ''),
           isStreaming: false,
+          streamingContent: '',
           regeneratingMsgId: null,
           activeTraceSteps: [],
           currentRouting: null

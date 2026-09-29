@@ -7,6 +7,7 @@ Guarantees the LLM never generates raw file bytes.
 import os
 import uuid
 import re
+import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -31,6 +32,21 @@ from pptx.dml.color import RGBColor as PPTRGBColor
 
 from backend.config import GENERATED_DIR, logger
 from backend.db import save_file_record
+
+
+def grid_width(rows: Any) -> int:
+    """
+    Number of columns needed for a table block, using the WIDEST row.
+
+    Model-generated tables are frequently ragged (a short header row followed by
+    a longer body row). Sizing the grid from `rows[0]` alone made the builder
+    index past the created cells and crash with `IndexError: list index out of
+    range`, so every table builder sizes from the maximum row width instead.
+    """
+    if not isinstance(rows, (list, tuple)):
+        return 0
+    widths = [len(r) for r in rows if isinstance(r, (list, tuple))]
+    return max(widths) if widths else 0
 
 
 def sanitize_filename(name: str, default_ext: str = ".bin") -> str:
@@ -284,12 +300,18 @@ def build_docx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
                 doc.add_paragraph(it, style="List Bullet")
                 
         elif b_type == "table" and rows:
-            table = doc.add_table(rows=len(rows), cols=len(rows[0]))
+            # Size the grid from the widest row, then keep every write in bounds.
+            num_cols = grid_width(rows)
+            if num_cols == 0:
+                continue
+            table = doc.add_table(rows=len(rows), cols=num_cols)
             table.alignment = WD_TABLE_ALIGNMENT.CENTER
             table.style = 'Table Grid'
             
             for r_idx, row in enumerate(rows):
-                for c_idx, cell_value in enumerate(row):
+                if not isinstance(row, (list, tuple)):
+                    row = [row]
+                for c_idx, cell_value in enumerate(list(row)[:num_cols]):
                     cell = table.cell(r_idx, c_idx)
                     cell.text = str(cell_value)
                     for p in cell.paragraphs:
@@ -364,12 +386,14 @@ def _build_xlsx_sheet(ws, blocks: List, header_fill, header_font, title_font, th
             
         elif b_type == "table" and rows:
             start_table_row = current_row
-            num_cols = len(rows[0]) if rows else 0
+            num_cols = grid_width(rows)
             if num_cols == 0:
                 continue
             
             for r_idx, row_data in enumerate(rows):
-                for c_idx, val in enumerate(row_data):
+                if not isinstance(row_data, (list, tuple)):
+                    row_data = [row_data]
+                for c_idx, val in enumerate(list(row_data)[:num_cols]):
                     try:
                         cell = ws.cell(row=current_row, column=c_idx + 1)
                         
@@ -491,7 +515,8 @@ def _build_xlsx_sheet(ws, blocks: List, header_fill, header_font, title_font, th
                 chart = BarChart()
                 chart.title = b.get("title") or text or "Analysis Chart"
                 chart.style = 10
-                data_ref = Reference(ws, min_col=2, min_row=chart_start_row, max_col=len(rows[0]), max_row=chart_start_row + len(rows) - 1)
+                chart_cols = grid_width(rows) or 1
+                data_ref = Reference(ws, min_col=2, min_row=chart_start_row, max_col=chart_cols, max_row=chart_start_row + len(rows) - 1)
                 cats_ref = Reference(ws, min_col=1, min_row=chart_start_row + 1, max_row=chart_start_row + len(rows) - 1)
                 chart.add_data(data_ref, titles_from_data=True)
                 chart.set_categories(cats_ref)
@@ -777,14 +802,19 @@ def build_pptx(plan: Dict[str, Any], chat_id: str) -> Tuple[str, str, Path]:
             _add_slide_footer(table_slide, title, slide_counter, style)
             
             rows_cnt = len(rows)
-            cols_cnt = len(rows[0])
+            # Ragged model tables: size from the widest row, not rows[0].
+            cols_cnt = grid_width(rows)
+            if rows_cnt == 0 or cols_cnt == 0:
+                continue
             table_shape = table_slide.shapes.add_table(
                 rows_cnt, cols_cnt,
                 PPTInches(0.8), PPTInches(1.3), PPTInches(8.4), PPTInches(min(5.2, rows_cnt * 0.5))
             )
             table = table_shape.table
             for r_i, r_data in enumerate(rows):
-                for c_i, c_val in enumerate(r_data):
+                if not isinstance(r_data, (list, tuple)):
+                    r_data = [r_data]
+                for c_i, c_val in enumerate(list(r_data)[:cols_cnt]):
                     cell = table.cell(r_i, c_i)
                     cell.text = str(c_val)
                     if r_i == 0:
@@ -908,19 +938,37 @@ def create_deliverable_file(plan: Dict[str, Any], mode: str, chat_id: str) -> Di
     persists it, records in database, and returns metadata with download URL.
     Only important documents are flagged for 2-step verification.
     """
-    mode = mode.lower()
-    if mode == "docs":
-        file_id, filename, file_path = build_docx(plan, chat_id)
-        file_type = "docx"
-    elif mode == "excel":
-        file_id, filename, file_path = build_xlsx(plan, chat_id)
-        file_type = "xlsx"
-    elif mode == "ppt":
-        file_id, filename, file_path = build_pptx(plan, chat_id)
-        file_type = "pptx"
-    else:
-        file_id, filename, file_path = build_docx(plan, chat_id)
-        file_type = "docx"
+    start_t = time.time()
+    err_out = None
+    try:
+        mode = mode.lower()
+        if mode == "docs":
+            file_id, filename, file_path = build_docx(plan, chat_id)
+            file_type = "docx"
+        elif mode == "excel":
+            file_id, filename, file_path = build_xlsx(plan, chat_id)
+            file_type = "xlsx"
+        elif mode == "ppt":
+            file_id, filename, file_path = build_pptx(plan, chat_id)
+            file_type = "pptx"
+        else:
+            file_id, filename, file_path = build_docx(plan, chat_id)
+            file_type = "docx"
+    except Exception as e:
+        err_out = e
+        try:
+            from backend.structured_logger import log_tool_call
+            log_tool_call(
+                tool_name=f"deliverable_builder_{mode}",
+                arguments={"mode": mode, "chat_id": chat_id, "title": plan.get("title")},
+                return_value=None,
+                elapsed_ms=(time.time() - start_t) * 1000.0,
+                success=False,
+                error=e
+            )
+        except Exception:
+            pass
+        raise
         
     is_important = is_critical_important_document(plan, filename, mode)
     initial_status = "PENDING_STAGE_1" if is_important else "VERIFIED"
@@ -937,6 +985,20 @@ def create_deliverable_file(plan: Dict[str, Any], mode: str, chat_id: str) -> Di
     
     logger.info(f"[DELIVERABLE REGISTRY] Registered {filename} (file_id={file_id}, is_important={is_important}, status={initial_status})")
     
+    # Structured tool logging
+    try:
+        from backend.structured_logger import log_tool_call
+        file_size = file_path.stat().st_size if file_path.exists() else 0
+        log_tool_call(
+            tool_name=f"deliverable_builder_{mode}",
+            arguments={"mode": mode, "chat_id": chat_id, "title": plan.get("title"), "blocks": len(plan.get("blocks", []))},
+            return_value={"filename": filename, "file_id": file_id, "file_size_bytes": file_size},
+            elapsed_ms=(time.time() - start_t) * 1000.0,
+            success=True
+        )
+    except Exception:
+        pass
+
     return {
         "file_id": file_id,
         "filename": filename,

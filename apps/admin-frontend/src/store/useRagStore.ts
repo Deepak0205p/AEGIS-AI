@@ -5,7 +5,8 @@ export interface VectorStats {
   totalChunks: number;
   documentCount: number;
   lastIndexed: string;
-  dimensions: number;
+  /** Null when no embedding model is in use (no vector dimensions exist). */
+  dimensions: number | null;
   activeCollection: string;
   denseEngine: string;
   bm25Indexed: boolean;
@@ -14,8 +15,12 @@ export interface VectorStats {
 export interface ChunkConfig {
   chunkSize: number;
   overlap: number;
+  /**
+   * Retained for UI compatibility only. The backend always builds its BM25
+   * lexical index, so this is not sent and cannot be switched off remotely.
+   */
   enableBM25: boolean;
-  embeddingModel: string;
+  embeddingModel: string | null;
 }
 
 export interface IngestedDocumentItem {
@@ -24,7 +29,10 @@ export interface IngestedDocumentItem {
   category: string;
   chunks: number;
   sizeKb: number;
-  timestamp: string;
+  timestamp: string | null;
+  provenance?: string;
+  authoritative?: boolean;
+  source?: string;
 }
 
 export type ReindexStage =
@@ -36,8 +44,37 @@ export type ReindexStage =
   | 'completed'
   | 'error';
 
+/** What the backend actually reported for an ingestion run. */
+export interface IngestOutcome {
+  files_submitted: number;
+  documents: {
+    filename: string;
+    status?: 'INGESTED' | 'FAILED';
+    chunks_created: number;
+    bytes: number;
+    error?: string;
+  }[];
+  failures: { filename: string; error: string }[];
+  chunks_indexed: number;
+  total_master_sops: number | null;
+  message: string;
+  persistence_note?: string;
+}
+
+/** How retrieval is actually scoring, as reported by the backend. */
+export interface RetrievalInfo {
+  method: string;
+  dense_available: boolean;
+  embedding_model: string | null;
+  embedding_status: string;
+  lexical_index: string;
+  notice?: string;
+  persistence_note?: string;
+}
+
 interface RagState {
   vectorStats: VectorStats;
+  retrievalInfo: RetrievalInfo | null;
   chunkConfig: ChunkConfig;
   documentsList: IngestedDocumentItem[];
   isReindexing: boolean;
@@ -47,35 +84,33 @@ interface RagState {
   reindexError: string | null;
 
   // Actions
-  fetchVectorStats: () => Promise<void>;
-  setChunkConfig: (config: Partial<ChunkConfig>) => void;
-  triggerGlobalReindex: (files: File[], customConfig?: Partial<ChunkConfig>) => Promise<boolean>;
+  fetchVectorStats: () => Promise<void>;  setChunkConfig: (config: Partial<ChunkConfig>) => void;
+  triggerGlobalReindex: (files: File[], customConfig?: Partial<ChunkConfig>) => Promise<IngestOutcome | null>;
   resetReindex: () => void;
 }
 
 export const useRagStore = create<RagState>((set, get) => ({
   vectorStats: {
-    totalChunks: 1420,
-    documentCount: 8,
-    lastIndexed: 'Live On-Premise',
-    dimensions: 1024,
-    activeCollection: 'mrpl_refinery_sops_master',
-    denseEngine: 'BAAI/bge-m3-gguf (Sovereign Local)',
-    bm25Indexed: true,
+    // Nothing is claimed until the backend reports live index statistics.
+    totalChunks: 0,
+    documentCount: 0,
+    lastIndexed: 'Never indexed (awaiting backend)',
+    dimensions: null,
+    activeCollection: 'unknown',
+    denseEngine: 'unknown',
+    bm25Indexed: false,
   },
   chunkConfig: {
     chunkSize: 512,
     overlap: 100,
     enableBM25: true,
-    embeddingModel: 'bge-m3-gguf',
+    // No default embedding model. /api/rag-admin/stats reports the real one
+    // (or null when dense embeddings are unavailable); 'bge-m3-gguf' was a
+    // value the backend explicitly documents as never having been used.
+    embeddingModel: null,
   },
-  documentsList: [
-    { id: 'doc-1', name: 'SOP-MRPL-FURNACE-01 (Decoking & Emergency Shutdown)', category: 'Refinery Ops', chunks: 284, sizeKb: 1450, timestamp: '14:20:10' },
-    { id: 'doc-2', name: 'API 610 Centrifugal Pumps Reliability Standard', category: 'Maintenance', chunks: 310, sizeKb: 2100, timestamp: '12:15:00' },
-    { id: 'doc-3', name: 'OISD-STD-105 Work Permit System & Hot Work SOP', category: 'HSE & Fire', chunks: 195, sizeKb: 980, timestamp: '10:05:40' },
-    { id: 'doc-4', name: 'MRPL Turnaround Management Master Guidelines', category: 'Engineering', chunks: 410, sizeKb: 3400, timestamp: 'Yesterday' },
-    { id: 'doc-5', name: 'MRPL Anti-Bribery & Whistle Blower Policy', category: 'Vigilance', chunks: 221, sizeKb: 720, timestamp: 'Yesterday' },
-  ],
+  documentsList: [],
+  retrievalInfo: null,
   isReindexing: false,
   reindexProgress: 0,
   reindexStage: 'idle',
@@ -88,108 +123,118 @@ export const useRagStore = create<RagState>((set, get) => ({
   fetchVectorStats: async () => {
     try {
       const data = await api.get<any>('/api/rag-admin/stats');
-      if (data && data.total_chunks) {
+      if (data && data.total_chunks !== undefined) {
         set({
           vectorStats: {
             totalChunks: data.total_chunks,
             documentCount: data.document_count || get().vectorStats.documentCount,
-            lastIndexed: data.last_indexed || new Date().toLocaleTimeString(),
-            dimensions: data.dimensions || 1024,
-            activeCollection: data.collection_name || 'mrpl_refinery_sops_master',
-            denseEngine: data.embedding_model || 'BAAI/bge-m3-gguf',
+            lastIndexed: data.last_indexed || 'No upload ingested in this process',
+            // Dimensions only exist when real embeddings are in use; a missing
+            // value is reported as "n/a" rather than a made-up 1024.
+            dimensions: typeof data.dimensions === 'number' ? data.dimensions : null,
+            activeCollection: data.collection_name || 'in_process_knowledge_corpus',
+            denseEngine: data.embedding_model || 'none (lexical BM25 only)',
             bm25Indexed: data.bm25_enabled ?? true,
+          },
+          retrievalInfo: {
+            method: data.retrieval_method || 'unknown',
+            dense_available: Boolean(data.dense_embeddings_enabled),
+            embedding_model: data.embedding_model ?? null,
+            embedding_status: data.embedding_status || 'not reported',
+            lexical_index: data.lexical_index || 'unknown',
+            notice: data.notice,
+            persistence_note: data.persistence_note,
           },
         });
       }
+
+      // Fetch authentic document inventory from server
+      const docData = await api.get<any>('/api/rag-admin/documents');
+      if (docData && Array.isArray(docData.documents)) {
+        set({ documentsList: docData.documents });
+      }
     } catch {
-      // Keep healthy dev fallback stats
+      // Keep state
     }
   },
 
   triggerGlobalReindex: async (files: File[], customConfig?: Partial<ChunkConfig>) => {
     const config = { ...get().chunkConfig, ...customConfig };
+
+    if (!files.length) {
+      set({ reindexError: 'No documents selected for ingestion.' });
+      return null;
+    }
+
     set({
       isReindexing: true,
-      reindexProgress: 5,
+      reindexProgress: 10,
       reindexStage: 'parsing',
-      reindexStatusMessage: `Initiating ingestion for ${files.length} master SOP manual(s)...`,
+      reindexStatusMessage: `Submitting ${files.length} document(s) to the ingestion endpoint...`,
       reindexError: null,
     });
 
     try {
-      // Stage 1: Parsing documents (Progress 25%)
-      await new Promise((r) => setTimeout(r, 600));
-      set({
-        reindexProgress: 25,
-        reindexStage: 'parsing',
-        reindexStatusMessage: `Parsing document structure, clauses, and OISD/API tables (Chunk Size: ${config.chunkSize})...`,
-      });
-
-      // Stage 2: Extracting Tables & Schematics (Progress 50%)
-      await new Promise((r) => setTimeout(r, 800));
-      set({
-        reindexProgress: 50,
-        reindexStage: 'extracting',
-        reindexStatusMessage: 'Extracting engineering diagrams, P&ID equipment tags, and clause metadata...',
-      });
-
-      // Stage 3: Embedding generation (Progress 75%)
-      await new Promise((r) => setTimeout(r, 1000));
-      set({
-        reindexProgress: 75,
-        reindexStage: 'embedding',
-        reindexStatusMessage: `Generating ${config.embeddingModel} dense 1024-dim vectors & BM25 inverted lexical index...`,
-      });
-
-      // Attempt backend API dispatch
       const formData = new FormData();
       files.forEach((f) => formData.append('files', f));
       formData.append('chunk_size', String(config.chunkSize));
       formData.append('overlap', String(config.overlap));
-      formData.append('enable_bm25', String(config.enableBM25));
 
-      try {
-        await api.post('/api/rag-admin/ingest-file', formData);
-      } catch {
-        // Fallback progress completion if backend runs in dev sandbox
-      }
+      // A failure here is a real failure — it is never swallowed or faked.
+      const response: any = await api.post('/api/rag-admin/ingest-file', formData);
 
-      // Stage 4: Committing to ChromaDB (Progress 100%)
-      await new Promise((r) => setTimeout(r, 600));
-      
-      const addedChunks = files.length * Math.floor(config.chunkSize / 3) || 320;
-      const newDocs: IngestedDocumentItem[] = files.map((f, i) => ({
-        id: `doc-${Date.now()}-${i}`,
-        name: f.name,
-        category: 'Master SOP Manual',
-        chunks: Math.floor(f.size / 1024 / 2) || 120,
-        sizeKb: Math.floor(f.size / 1024) || 500,
-        timestamp: new Date().toLocaleTimeString(),
-      }));
+      set({
+        reindexProgress: 80,
+        reindexStage: 'committing',
+        reindexStatusMessage: 'Server accepted the upload; refreshing live index statistics...',
+      });
 
-      set((state) => ({
+      // Pull the genuine post-ingest numbers instead of computing our own.
+      await get().fetchVectorStats();
+
+      const ingested: IngestOutcome['documents'] = Array.isArray(response?.files) ? response.files : [];
+      const failures: IngestOutcome['failures'] = Array.isArray(response?.failures)
+        ? response.failures
+        : ingested
+            .filter((d) => d?.status === 'FAILED')
+            .map((d) => ({ filename: d.filename, error: d.error || 'Unknown ingestion failure.' }));
+      // Only server-confirmed chunks are counted.
+      const chunksIndexed = ingested.reduce(
+        (sum, doc) => sum + (doc?.status === 'INGESTED' ? Number(doc?.chunks_created) || 0 : 0),
+        0
+      );
+
+      const outcome: IngestOutcome = {
+        files_submitted: files.length,
+        documents: ingested,
+        failures,
+        chunks_indexed: chunksIndexed,
+        total_master_sops: typeof response?.total_master_sops === 'number' ? response.total_master_sops : null,
+        message: response?.message || `Ingested ${chunksIndexed} chunk(s).`,
+        persistence_note: response?.persistence_note,
+      };
+
+      const failureNote = failures.length
+        ? ` ${failures.length} file(s) failed: ${failures.map((f) => `${f.filename} (${f.error})`).join('; ')}`
+        : '';
+
+      set({
         isReindexing: false,
         reindexProgress: 100,
-        reindexStage: 'completed',
-        reindexStatusMessage: `Successfully ingested ${files.length} document(s) into ChromaDB (${addedChunks} new chunks indexed).`,
-        documentsList: [...newDocs, ...state.documentsList],
-        vectorStats: {
-          ...state.vectorStats,
-          totalChunks: state.vectorStats.totalChunks + addedChunks,
-          documentCount: state.vectorStats.documentCount + files.length,
-          lastIndexed: new Date().toLocaleTimeString(),
-        },
-      }));
+        reindexStage: failures.length ? 'error' : 'completed',
+        reindexStatusMessage: `${outcome.message} ${chunksIndexed} chunk(s) created (server reported).${failureNote}`,
+        reindexError: failures.length ? failureNote.trim() : null,
+      });
 
-      return true;
+      return outcome;
     } catch (err: any) {
       set({
         isReindexing: false,
         reindexStage: 'error',
-        reindexError: err.message || 'Global re-indexing failed.',
-        reindexStatusMessage: 'Re-indexing encountered an error.',
+        reindexError: err?.message || 'Ingestion failed.',
+        reindexStatusMessage: 'Ingestion failed - no documents were indexed.',
       });
-      return false;
+      return null;
     }
   },
 

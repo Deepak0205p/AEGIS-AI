@@ -1,6 +1,8 @@
-import { useChatStore, TraceStep } from '@/store/useChatStore';
+﻿import { useChatStore, TraceStep } from '@/store/useChatStore';
 import { useSovereigntyStore } from '@/store/useSovereigntyStore';
 import { useModelStore } from '@/store/useModelStore';
+import { useAuthStore } from '@/store/useAuthStore';
+import { getApiHost, getWsBase } from '@/lib/apiBase';
 
 /**
  * WebSocketClientManager handles real-time dual-channel streaming:
@@ -15,16 +17,38 @@ class WebSocketClientManager {
   private auditWs: WebSocket | null = null;
   private auditReconnectTimer: NodeJS.Timeout | null = null;
   private isFallbackMode: boolean = false;
+  private chatGeneration: number = 0;
 
   public getWsHost(): string {
-    if (typeof window !== 'undefined') {
-      const hostname = window.location.hostname;
-      // Sanitize hostname to prevent injection - only allow localhost, valid IPs, or local names
-      if (/^[a-zA-Z0-9.-]+$/.test(hostname)) {
-        return hostname;
+    return getApiHost();
+  }
+
+  /**
+   * Builds the `?token=` query string the backend requires on every WebSocket.
+   * Unauthenticated sockets are closed with 4401 by the backend.
+   */
+  private authQuery(): string {
+    const token = useAuthStore.getState().token;
+    return token ? `?token=${encodeURIComponent(token)}` : '?token=';
+  }
+
+  /**
+   * Aborts the in-flight generation for real: invalidates the current socket's
+   * callbacks and closes it, which makes the backend's send raise and stops the
+   * /api/chat/stream pipeline.
+   */
+  public abortChatTask(): boolean {
+    const hadActiveTask = this.chatWs !== null && this.chatWs.readyState === WebSocket.OPEN;
+    this.chatGeneration += 1;
+    if (this.chatWs) {
+      try {
+        this.chatWs.close();
+      } catch {
+        // already closing
       }
+      this.chatWs = null;
     }
-    return '127.0.0.1';
+    return hadActiveTask;
   }
 
   /**
@@ -33,28 +57,37 @@ class WebSocketClientManager {
   public connectAuditStream() {
     if (typeof window === 'undefined') return;
 
-    const host = this.getWsHost();
-    const wsUrl = `ws://${host}:8000/api/audit-stream`;
+    // Idempotent: this is called from a mount effect on every admin page, and
+    // the previous socket was never closed. Each navigation added another live
+    // socket, and because every one of them scheduled its own reconnect on
+    // close, the count grew monotonically. Close any existing socket (and
+    // cancel its pending reconnect) before opening a new one.
+    this.disconnectAuditStream();
+
+    const wsUrl = `${getWsBase()}/api/audit-stream${this.authQuery()}`;
 
     try {
-      this.auditWs = new WebSocket(wsUrl);
+      const socket = new WebSocket(wsUrl);
+      this.auditWs = socket;
 
-      this.auditWs.onopen = () => {
+      socket.onopen = () => {
         this.isFallbackMode = false;
       };
 
-      this.auditWs.onmessage = (event) => {
+      socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
           if (payload.sovereignty) {
             useSovereigntyStore.getState().updateMetrics({
-              external_packets: payload.sovereignty.external_packets || 0,
-              localhost_packets: payload.sovereignty.localhost_packets || 0,
-              lan_hotspot_packets: payload.sovereignty.lan_hotspot_packets || 0,
+              // Preserve null: a null packet count means "not measured", and
+              // coercing it to 0 would assert that zero traffic was observed.
+              external_packets: payload.sovereignty.external_packets ?? null,
+              localhost_packets: payload.sovereignty.localhost_packets ?? null,
+              lan_hotspot_packets: payload.sovereignty.lan_hotspot_packets ?? null,
               localhost_sockets: payload.sovereignty.localhost_connections || 0,
               lan_hotspot_sockets: payload.sovereignty.lan_hotspot_connections || 0,
               external_sockets: payload.sovereignty.external_internet_connections || 0,
-              verdict: payload.sovereignty.verdict || '100% AIR-GAPPED & SOVEREIGN',
+              verdict: payload.sovereignty.verdict || 'UNKNOWN - no verdict reported',
               daemon_heartbeat_hz: payload.sovereignty.daemon_heartbeat_hz || 1.0,
             });
             if (payload.sovereignty.sockets) {
@@ -72,13 +105,16 @@ class WebSocketClientManager {
         }
       };
 
-      this.auditWs.onerror = () => {
+      socket.onerror = () => {
         this.activateAuditFallback();
       };
 
-      this.auditWs.onclose = () => {
+      socket.onclose = () => {
         this.activateAuditFallback();
-        // Retry connection in 3 seconds
+        // Only auto-reconnect if this socket is still the current one; a socket
+        // we deliberately closed in disconnectAuditStream() must not resurrect
+        // itself.
+        if (this.auditWs !== socket) return;
         if (this.auditReconnectTimer) clearTimeout(this.auditReconnectTimer);
         this.auditReconnectTimer = setTimeout(() => this.connectAuditStream(), 3000);
       };
@@ -87,12 +123,40 @@ class WebSocketClientManager {
     }
   }
 
+  /**
+   * Closes the audit telemetry socket and cancels any pending reconnect.
+   * Previously no such method existed, so a page unmount left the socket (and
+   * its reconnect timer) running.
+   */
+  public disconnectAuditStream() {
+    if (this.auditReconnectTimer) {
+      clearTimeout(this.auditReconnectTimer);
+      this.auditReconnectTimer = null;
+    }
+    const socket = this.auditWs;
+    this.auditWs = null;
+    if (socket) {
+      // Detach handlers first so closing does not trigger a reconnect.
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      try {
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close();
+        }
+      } catch (err) {
+        // Closing an already-dead socket is not an error worth surfacing.
+      }
+    }
+  }
+
   private activateAuditFallback() {
     this.isFallbackMode = true;
-    // Keep UI healthy with local baseline data
+    // The stream is unavailable, so telemetry is unknown - it is NOT zero.
     const currentSov = useSovereigntyStore.getState().metrics;
-    if (currentSov.external_packets !== 0) {
-      useSovereigntyStore.getState().updateMetrics({ external_packets: 0 });
+    if (currentSov.external_packets !== null) {
+      useSovereigntyStore.getState().updateMetrics({ external_packets: null });
     }
   }
 
@@ -100,27 +164,39 @@ class WebSocketClientManager {
    * Submits a prompt and optional attachments over ws://<host>:8000/api/chat/stream
    */
   public sendChatTask(prompt: string, attachments: any[] = [], role?: string) {
-    const host = this.getWsHost();
-    const wsUrl = `ws://${host}:8000/api/chat/stream`;
+    const wsUrl = `${getWsBase()}/api/chat/stream${this.authQuery()}`;
 
     const chatStore = useChatStore.getState();
     chatStore.setStreaming(true);
 
     let wsConnected = false;
+    const currentGeneration = ++this.chatGeneration;
 
     try {
       if (this.chatWs) {
         this.chatWs.close();
       }
 
-      this.chatWs = new WebSocket(wsUrl);
+      const socket = new WebSocket(wsUrl);
+      this.chatWs = socket;
 
-      this.chatWs.onopen = () => {
+      socket.onopen = () => {
         wsConnected = true;
-        this.chatWs?.send(JSON.stringify({ prompt, attachments, role }));
+        // A newer task superseded this one before the socket opened.
+        if (currentGeneration !== this.chatGeneration) {
+          try {
+            socket.close();
+          } catch {
+            // already closing
+          }
+          return;
+        }
+        socket.send(JSON.stringify({ prompt, attachments, role }));
       };
 
-      this.chatWs.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        // Drop frames from a task that was aborted or superseded.
+        if (currentGeneration !== this.chatGeneration) return;
         try {
           const frame = JSON.parse(event.data);
           chatStore.handleStreamEvent(frame);
@@ -129,7 +205,8 @@ class WebSocketClientManager {
         }
       };
 
-      this.chatWs.onerror = () => {
+      socket.onerror = () => {
+        if (currentGeneration !== this.chatGeneration) return;
         if (!wsConnected) {
           chatStore.setStreaming(false);
           chatStore.addMessage({
@@ -142,7 +219,8 @@ class WebSocketClientManager {
         }
       };
 
-      this.chatWs.onclose = () => {
+      socket.onclose = () => {
+        if (currentGeneration !== this.chatGeneration) return;
         chatStore.setStreaming(false);
       };
     } catch (err) {

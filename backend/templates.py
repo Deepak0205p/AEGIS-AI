@@ -4,6 +4,7 @@ Maps intents to structured document templates with mandatory sections.
 Templates enforce NEEDS_INPUT protocol — never invent data.
 """
 
+import re
 from typing import Dict, Any, List, Optional
 
 
@@ -468,10 +469,19 @@ def detect_template(message: str) -> Optional[str]:
     """
     Detects the document template intent from a message.
     Returns template key or None if no template match.
+
+    Intents are matched on word boundaries, not as bare substrings. The previous
+    `if intent in text` test meant the key "pr" (Purchase Requisition) matched
+    "pressure", "procedure", "approve" and "compress", and — because the loop is
+    first-match-wins in insertion order — it also shadowed every later key.
     """
     text = message.strip().lower()
+    if not text:
+        return None
     for intent, template in INTENT_TO_TEMPLATE.items():
-        if intent in text:
+        # Multi-word intents match literally; single tokens require boundaries.
+        pattern = r"(?<!\w)" + re.escape(intent) + r"(?!\w)"
+        if re.search(pattern, text):
             return template
     return None
 

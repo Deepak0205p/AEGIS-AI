@@ -81,7 +81,14 @@ def get_friendly_service_name(conn, proc_name: str) -> str:
     return f"Project Service ({proc_name})"
 
 def is_ip_allowed(ip_str: Optional[str]) -> bool:
-    """Allows only Localhost (127.0.0.1, ::1, 0.0.0.0) and RFC 1918 Private LAN subnets."""
+    """
+    Allows only loopback and the three RFC 1918 private LAN subnets.
+
+    `ipaddress.is_private` is far wider than RFC 1918: it is also True for
+    CGNAT 100.64.0.0/10, the TEST-NET documentation ranges, 240.0.0.0/4 and
+    255.255.255.255. Those were being reported to the Sovereignty dashboard as
+    `tier="LAN_HOTSPOT" / PERMITTED`, i.e. non-RFC1918 space shown as compliant.
+    """
     if not ip_str or ip_str == "—" or ip_str == "*":
         return True
     clean_ip = ip_str.split(":")[0].strip()
@@ -89,9 +96,14 @@ def is_ip_allowed(ip_str: Optional[str]) -> bool:
         return True
     try:
         ip_obj = ipaddress.ip_address(clean_ip)
-        return ip_obj.is_private or ip_obj.is_loopback
     except ValueError:
         return False
+    if ip_obj.is_loopback:
+        return True
+    # Explicit RFC 1918 check rather than the broad `is_private` flag.
+    return ip_obj in ipaddress.ip_network("10.0.0.0/8") \
+        or ip_obj in ipaddress.ip_network("172.16.0.0/12") \
+        or ip_obj in ipaddress.ip_network("192.168.0.0/16")
 
 def inspect_and_guard_project_sockets(current_pid: int) -> List[Dict[str, Any]]:
     """

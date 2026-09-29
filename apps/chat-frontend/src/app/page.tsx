@@ -747,6 +747,10 @@ export default function GeminiReplicaChatApp() {
   };
 
   const handleStop = () => {
+    // Really stop generation: close the stream socket (the backend pipeline
+    // unwinds with it) and keep whatever text had already arrived.
+    socketManager.abortChatTask();
+    useChatStore.getState().abortGeneration();
     setStreaming(false);
   };
 
@@ -1320,6 +1324,14 @@ export default function GeminiReplicaChatApp() {
                                 
                                 {/* Card Content with High-Grade Formatting */}
                                 <MarkdownContent content={msg.content} />
+
+                                {/* Operator aborted generation: the answer above is incomplete */}
+                                {msg.aborted && (
+                                  <div className="flex items-center gap-2 pt-1 text-[11px] font-mono text-amber-700 dark:text-amber-400 border-t border-amber-200/70 dark:border-amber-800/50 pt-2">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                                    <span>Stopped by operator — this response was truncated and no final answer was produced.</span>
+                                  </div>
+                                )}
                               </div>
                             )}
 
@@ -1342,7 +1354,6 @@ export default function GeminiReplicaChatApp() {
                                     );
                                     const displayName = matchedDeliv?.filename || (cleanId.includes('.') ? cleanId : `${cleanId}.docx`);
                                     const rawExt = displayName.split('.').pop()?.toLowerCase() || 'docx';
-                                    const downloadUrl = `/api/files/${cleanId}`;
 
                                     // Dynamic badge color per file extension
                                     const isSheet = ['xlsx', 'xls', 'csv'].includes(rawExt);
@@ -1450,15 +1461,22 @@ export default function GeminiReplicaChatApp() {
                                           >
                                             Open ↗
                                           </button>
-                                          <a
-                                            href={downloadUrl}
-                                            download
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              // A plain <a href> cannot carry the
+                                              // Authorization header, so the
+                                              // backend's auth gate rejected
+                                              // every transcript download.
+                                              const targetId = matchedDeliv?.id || cleanId;
+                                              downloadDeliverable(targetId);
+                                            }}
                                             title={`Download ${displayName}`}
                                             className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/[0.08] text-slate-400 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                                            onClick={(e) => e.stopPropagation()}
                                           >
                                             <Download className="h-4 w-4" />
-                                          </a>
+                                          </button>
                                         </div>
                                       </div>
                                     );

@@ -52,12 +52,19 @@ export function OverviewDeck({ onNavigate }: OverviewDeckProps) {
     api.get<any>('/api/sandbox/status')
       .then(data => {
         if (data) {
+          // Every field here is read from the live response. This block used to
+          // read `image_present`, `image_name` and `cpu_quota` - none of which
+          // the endpoint returns any more - and tested for the hardcoded
+          // 'STRICT_NONE' value, so the deck silently displayed defaults.
+          const isDocker = Boolean(data.docker_available);
           setSandboxInfo({
-            runtime: data.image_present ? data.image_name : 'python:3.11',
-            mode: data.network_isolation === 'STRICT_NONE' ? '--net none' : 'isolated',
-            backend: data.active_backend || 'hardened_isolated_subprocess',
-            isDocker: Boolean(data.docker_available && data.image_present),
-            cpu: `${data.cpu_quota || 2} vCPU`,
+            runtime: data.image || (isDocker ? 'sandbox image' : 'local process'),
+            mode: data.network_isolation === 'container_network_none'
+              ? '--net none'
+              : (data.job_object_available ? 'job object + netguard' : 'netguard only'),
+            backend: data.active_backend || 'unknown',
+            isDocker,
+            cpu: data.docker_available ? '1 vCPU' : 'CPU-time capped',
             ram: `${data.memory_limit || '512m'}`.toUpperCase()
           });
         }
@@ -123,8 +130,8 @@ export function OverviewDeck({ onNavigate }: OverviewDeckProps) {
               />
             </div>
             <div className="mt-2 flex justify-between text-[11px] text-gray-500">
-              <span className="truncate max-w-[150px]" title={vram.gpu_name}>
-                {vram.gpu_name || 'NVIDIA GPU'}
+              <span className="truncate max-w-[150px]" title={vram.gpu_name ?? undefined}>
+                {vram.gpu_name || (vram.gpu_available ? 'GPU' : 'No GPU detected')}
               </span>
               <span className="font-mono shrink-0">{vramPercent}% used</span>
             </div>
@@ -170,11 +177,18 @@ export function OverviewDeck({ onNavigate }: OverviewDeckProps) {
             <Shield className="w-4 h-4 text-emerald-600" />
           </div>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-xl font-bold font-mono text-emerald-600">{metrics?.external_packets ?? 0} Packets</span>
-            
+            <span className="text-xl font-bold font-mono text-gray-900">
+              {typeof metrics?.external_packets === 'number'
+                ? metrics.external_packets.toLocaleString()
+                : '—'}
+            </span>
+            <span className="text-xs text-gray-500">
+              {typeof metrics?.external_packets === 'number' ? 'external packets' : 'packets not measured'}
+            </span>
           </div>
           <p className="mt-2 text-[11px] text-gray-500 leading-tight">
-            psutil active watchdog confirms zero external IP connections across all workbench processes.
+            psutil counts live sockets ({metrics?.external_sockets ?? 0} external observed).
+            Packet totals are not counted on this deployment, so no packet figure is claimed.
           </p>
           
         </div>

@@ -9,14 +9,25 @@ const app = next({ dev, dir: __dirname });
 const handle = app.getRequestHandler();
 
 const pfxPath = path.join(__dirname, 'certificate.pfx');
+// The PFX passphrase is a secret and must come from the environment. It is
+// deliberately not stored in the repository: anyone with the repo had the old
+// hard-coded value. Set PFX_PASSPHRASE to enable the HTTPS listener.
+const pfxPassphrase = process.env.PFX_PASSPHRASE;
 
 let httpsOptions = null;
 try {
   if (fs.existsSync(pfxPath)) {
-    httpsOptions = {
-      pfx: fs.readFileSync(pfxPath),
-      passphrase: 'reveal2026'
-    };
+    if (!pfxPassphrase) {
+      console.warn(
+        '> ⚠️  certificate.pfx found but PFX_PASSPHRASE is not set - skipping the HTTPS listener on :3443.\n' +
+        '>     Set PFX_PASSPHRASE in the environment to enable HTTPS.'
+      );
+    } else {
+      httpsOptions = {
+        pfx: fs.readFileSync(pfxPath),
+        passphrase: pfxPassphrase
+      };
+    }
   }
 } catch (e) {
   console.warn('HTTPS Certificate load warning:', e.message);

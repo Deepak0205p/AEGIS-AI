@@ -74,8 +74,9 @@ export const useAuthStore = create<AuthState>()(
             localStorage.setItem('mrpl_auth_token', token);
             localStorage.setItem('mrpl_user', JSON.stringify(user));
             localStorage.setItem('mrpl_auth_last_active', String(Date.now()));
-            // Set cookie for browser session persistence
-            document.cookie = `mrpl_auth_token=${encodeURIComponent(token)}; path=/; max-age=86400; SameSite=Lax`;
+            // No JS-readable auth cookie: the token stays in localStorage, which
+            // cannot be exfiltrated by a cookie-stealing payload as easily and is
+            // never attached to cross-site requests automatically.
           } catch (e) {
             console.error('Failed to save auth to browser storage:', e);
           }
@@ -94,6 +95,7 @@ export const useAuthStore = create<AuthState>()(
             localStorage.removeItem('mrpl_auth_token');
             localStorage.removeItem('mrpl_user');
             localStorage.removeItem('mrpl_auth_last_active');
+            // Also clear any legacy cookie left by an earlier build.
             document.cookie = 'mrpl_auth_token=; path=/; max-age=0; SameSite=Lax';
           } catch (e) {
             console.error('Failed to clear browser storage:', e);

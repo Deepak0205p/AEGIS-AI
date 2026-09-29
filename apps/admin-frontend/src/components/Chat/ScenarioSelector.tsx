@@ -21,7 +21,7 @@ export function ScenarioSelector() {
   return (
     /* Reserved height min-h-[48px] to prevent CLS */
     <div className="flex items-center space-x-2 overflow-x-auto pb-1 text-xs min-h-[48px]">
-      <span className="text-[11px] font-mono text-[#666666] shrink-0">Demo Scenarios:</span>
+      <span className="text-[11px] font-mono text-[#666666] shrink-0">Quick Prompts:</span>
       
       {/* 44px minimum touch targets with :active scale(0.97) micro-motion */}
       <Button
@@ -31,7 +31,7 @@ export function ScenarioSelector() {
         className="min-h-[44px] h-10 px-3.5 text-xs shrink-0 hover:border-[#f5a623] active:scale-[0.97] transition-transform"
       >
         <Flame className="h-4 w-4 mr-2 text-[#f5a623]" />
-        <span>Scenario 1: Furnace SOP &rarr; Word Memo</span>
+        <span>Furnace SOP &rarr; Word Memo</span>
       </Button>
 
       <Button
@@ -41,7 +41,7 @@ export function ScenarioSelector() {
         className="min-h-[44px] h-10 px-3.5 text-xs shrink-0 hover:border-[#0070f3] active:scale-[0.97] transition-transform"
       >
         <Activity className="h-4 w-4 mr-2 text-[#0070f3]" />
-        <span>Scenario 2: Pump Coding &rarr; Docker Sandbox</span>
+        <span>Pump Hydraulics &rarr; Sandbox</span>
       </Button>
 
       <Button
@@ -51,7 +51,7 @@ export function ScenarioSelector() {
         className="min-h-[44px] h-10 px-3.5 text-xs shrink-0 hover:border-[#00e599] active:scale-[0.97] transition-transform"
       >
         <FileSpreadsheet className="h-4 w-4 mr-2 text-[#00e599]" />
-        <span>Scenario 3: P&ID Drawing &rarr; Excel Register</span>
+        <span>P&ID Drawing &rarr; Excel Register</span>
       </Button>
     </div>
   );

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { useDeliverableStore } from './useDeliverableStore';
 import { useAuthStore } from './useAuthStore';
+import { apiFetch } from '@/lib/apiFetch';
 
 export interface PendingVerificationItem {
   file_id: string;
@@ -31,6 +32,8 @@ interface VerificationState {
   isLoading: boolean;
   selectedFilter: 'ALL' | 'PENDING_STAGE_1' | 'PENDING_STAGE_2' | 'REJECTED' | 'VERIFIED';
   isActing: boolean;
+  /** Server-reported reason for the last failed action (empty when none). */
+  lastError: string | null;
 
   // Actions
   openVerificationModal: (item?: PendingVerificationItem) => void;
@@ -43,14 +46,22 @@ interface VerificationState {
   editAndApprove: (fileId: string, stage: 1 | 2, filename?: string, notes?: string) => Promise<boolean>;
 }
 
-function getApiHost(): string {
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    if (/^[a-zA-Z0-9.-]+$/.test(hostname)) {
-      return hostname;
-    }
+/**
+ * Every verification endpoint is role-gated server-side, so requests go through
+ * the shared authenticated helper. Failures are surfaced verbatim — a denied or
+ * unauthenticated call is never reported as a silent no-op.
+ */
+async function authFetch(path: string, init?: RequestInit): Promise<Response> {
+  return apiFetch(path, init);
+}
+
+async function readError(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    return data?.detail || data?.message || `Request failed (HTTP ${res.status})`;
+  } catch {
+    return `Request failed (HTTP ${res.status})`;
   }
-  return '127.0.0.1';
 }
 
 export const useVerificationStore = create<VerificationState>((set, get) => ({
@@ -63,6 +74,7 @@ export const useVerificationStore = create<VerificationState>((set, get) => ({
   isLoading: false,
   selectedFilter: 'ALL',
   isActing: false,
+  lastError: null,
 
   openVerificationModal: (item) => {
     set({ isModalOpen: true, activeItem: item || null });
@@ -78,43 +90,39 @@ export const useVerificationStore = create<VerificationState>((set, get) => ({
   },
 
   fetchPendingVerifications: async () => {
-    set({ isLoading: true });
-    const host = getApiHost();
-    const user = useAuthStore.getState().user;
-    const roleParam = user?.role ? `?role=${encodeURIComponent(user.role)}` : '';
+    set({ isLoading: true, lastError: null });
 
     try {
-      const res = await fetch(`http://${host}:8000/api/verification/pending${roleParam}`);
-      if (res.ok) {
-        const data = await res.json();
-        set({
-          pendingItems: data.items || [],
-          totalPending: data.total_pending || 0,
-          stage1Count: data.stage1_pending || 0,
-          stage2Count: data.stage2_pending || 0,
-          isLoading: false
-        });
+      // No role query parameter: the backend derives the role from the token.
+      const res = await authFetch('/api/verification/pending');
+      if (!res.ok) {
+        set({ isLoading: false, lastError: await readError(res) });
+        return;
       }
-    } catch (err) {
-      console.warn('[useVerificationStore] fetch pending error:', err);
-      set({ isLoading: false });
+      const data = await res.json();
+      set({
+        pendingItems: data.items || [],
+        totalPending: data.total_pending || 0,
+        stage1Count: data.stage1_pending || 0,
+        stage2Count: data.stage2_pending || 0,
+        isLoading: false
+      });
+    } catch (err: any) {
+      set({ isLoading: false, lastError: err?.message || 'Could not reach the verification service.' });
     }
   },
 
   approveStage1: async (fileId: string, notes: string = '') => {
-    set({ isActing: true });
-    const host = getApiHost();
+    set({ isActing: true, lastError: null });
     const user = useAuthStore.getState().user;
     const verifierName = user?.full_name || user?.username || 'Process Lead';
 
     try {
-      const res = await fetch(`http://${host}:8000/api/verification/${fileId}/stage1/approve`, {
+      const res = await authFetch(`/api/verification/${fileId}/stage1/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           verifier: verifierName,
-          notes: notes || 'Approved in Step 1 (Process & Quality Check)',
-          role: user?.role || 'PROCESS_LEAD'
+          notes: notes || 'Approved in Step 1 (Process & Quality Check)'
         })
       });
 
@@ -125,27 +133,25 @@ export const useVerificationStore = create<VerificationState>((set, get) => ({
         set({ isActing: false });
         return true;
       }
-    } catch (e) {
-      console.error('[useVerificationStore] approveStage1 failed:', e);
+      set({ isActing: false, lastError: await readError(res) });
+      return false;
+    } catch (e: any) {
+      set({ isActing: false, lastError: e?.message || 'Approval request failed.' });
+      return false;
     }
-    set({ isActing: false });
-    return false;
   },
 
   approveStage2: async (fileId: string, notes: string = '') => {
-    set({ isActing: true });
-    const host = getApiHost();
+    set({ isActing: true, lastError: null });
     const user = useAuthStore.getState().user;
     const verifierName = user?.full_name || user?.username || 'Refinery Admin';
 
     try {
-      const res = await fetch(`http://${host}:8000/api/verification/${fileId}/stage2/approve`, {
+      const res = await authFetch(`/api/verification/${fileId}/stage2/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           verifier: verifierName,
-          notes: notes || 'Final Step 2 Approval & Compliance Sign-Off',
-          role: user?.role || 'SUPER_ADMIN'
+          notes: notes || 'Final Step 2 Approval & Compliance Sign-Off'
         })
       });
 
@@ -155,27 +161,25 @@ export const useVerificationStore = create<VerificationState>((set, get) => ({
         set({ isActing: false });
         return true;
       }
-    } catch (e) {
-      console.error('[useVerificationStore] approveStage2 failed:', e);
+      set({ isActing: false, lastError: await readError(res) });
+      return false;
+    } catch (e: any) {
+      set({ isActing: false, lastError: e?.message || 'Approval request failed.' });
+      return false;
     }
-    set({ isActing: false });
-    return false;
   },
 
   rejectItem: async (fileId: string, reason: string) => {
-    set({ isActing: true });
-    const host = getApiHost();
+    set({ isActing: true, lastError: null });
     const user = useAuthStore.getState().user;
     const rejectedBy = user?.full_name || user?.username || 'Reviewer';
 
     try {
-      const res = await fetch(`http://${host}:8000/api/verification/${fileId}/reject`, {
+      const res = await authFetch(`/api/verification/${fileId}/reject`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rejected_by: rejectedBy,
-          reason: reason || 'Document requirements or quality parameters not satisfied',
-          role: user?.role
+          reason: reason || 'Document requirements or quality parameters not satisfied'
         })
       });
 
@@ -185,29 +189,27 @@ export const useVerificationStore = create<VerificationState>((set, get) => ({
         set({ isActing: false });
         return true;
       }
-    } catch (e) {
-      console.error('[useVerificationStore] rejectItem failed:', e);
+      set({ isActing: false, lastError: await readError(res) });
+      return false;
+    } catch (e: any) {
+      set({ isActing: false, lastError: e?.message || 'Rejection request failed.' });
+      return false;
     }
-    set({ isActing: false });
-    return false;
   },
 
   editAndApprove: async (fileId: string, stage: 1 | 2, filename?: string, notes?: string) => {
-    set({ isActing: true });
-    const host = getApiHost();
+    set({ isActing: true, lastError: null });
     const user = useAuthStore.getState().user;
     const verifierName = user?.full_name || user?.username || 'Reviewer';
 
     try {
-      const res = await fetch(`http://${host}:8000/api/verification/${fileId}/edit-and-approve`, {
+      const res = await authFetch(`/api/verification/${fileId}/edit-and-approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           verifier: verifierName,
           notes: notes || `Edited and approved in Step ${stage}`,
           stage,
-          filename,
-          role: user?.role
+          filename
         })
       });
 
@@ -217,10 +219,11 @@ export const useVerificationStore = create<VerificationState>((set, get) => ({
         set({ isActing: false });
         return true;
       }
-    } catch (e) {
-      console.error('[useVerificationStore] editAndApprove failed:', e);
+      set({ isActing: false, lastError: await readError(res) });
+      return false;
+    } catch (e: any) {
+      set({ isActing: false, lastError: e?.message || 'Edit-and-approve request failed.' });
+      return false;
     }
-    set({ isActing: false });
-    return false;
   }
 }));

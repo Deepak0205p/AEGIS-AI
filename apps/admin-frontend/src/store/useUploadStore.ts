@@ -1,4 +1,6 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
+import { getApiHost } from '@/lib/apiBase';
+import { apiFetch } from '@/lib/api';
 
 export interface ExtractedFinding {
   key: string;
@@ -49,16 +51,6 @@ interface UploadState {
   resetPipeline: () => void;
 }
 
-function getApiHost(): string {
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    if (/^[a-zA-Z0-9.-]+$/.test(hostname)) {
-      return hostname;
-    }
-  }
-  return '127.0.0.1';
-}
-
 export const useUploadStore = create<UploadState>((set, get) => ({
   documents: [],
   selectedDocId: null,
@@ -90,7 +82,6 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
     set({ validationError: null, currentStage: 'uploading', stageProgress: 20, stageMessage: 'Validating magic-bytes & transmitting to gateway...' });
     
-    const host = getApiHost();
     let actualFile: File | Blob;
 
     if ('rawFile' in fileInput && fileInput.rawFile) {
@@ -113,7 +104,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
       set({ currentStage: 'ocr_processing', stageProgress: 50, stageMessage: 'Running local PaddleOCR CPU & entity parser...' });
 
-      const res = await fetch(`http://${host}:8000/api/upload`, {
+      const res = await apiFetch(`/api/upload`, {
         method: 'POST',
         body: formData
       });

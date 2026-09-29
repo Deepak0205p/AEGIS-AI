@@ -1,4 +1,6 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
+import { getApiHost } from '@/lib/apiBase';
+import { apiFetch } from '@/lib/apiFetch';
 
 export interface ModelInfo {
   id: string;
@@ -51,25 +53,17 @@ interface ModelState {
   vram: VRAMTelemetry;
   swapHistory: SwapEvent[];
   isSwapping: boolean;
-  
+  /** Real failure reason for the last swap attempt (no fabricated success). */
+  swapError: string | null;
+
   // Actions
   fetchModels: () => Promise<void>;
   fetchVRAM: () => Promise<void>;
   setActivePrimary: (id: string) => void;
   setActiveSecondary: (id: string | null) => void;
   updateVRAM: (vram: Partial<VRAMTelemetry>) => void;
-  triggerModelSwap: (targetModelId: string) => Promise<void>;
+  triggerModelSwap: (targetModelId: string) => Promise<boolean>;
   addSwapEvent: (event: SwapEvent) => void;
-}
-
-function getApiHost(): string {
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    if (/^[a-zA-Z0-9.-]+$/.test(hostname)) {
-      return hostname;
-    }
-  }
-  return '127.0.0.1';
 }
 
 export const useModelStore = create<ModelState>((set, get) => ({
@@ -88,11 +82,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
   },
   swapHistory: [],
   isSwapping: false,
+  swapError: null,
 
   fetchModels: async () => {
     try {
-      const host = getApiHost();
-      const res = await fetch(`http://${host}:8000/api/models`);
+      const res = await apiFetch(`/api/models`);
       if (res.ok) {
         const data: ModelInfo[] = await res.json();
         const pri = data.find(m => m.is_primary)?.id || (data.length > 0 ? data[0].id : '');
@@ -106,8 +100,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
   fetchVRAM: async () => {
     try {
-      const host = getApiHost();
-      const res = await fetch(`http://${host}:8000/api/models/vram`);
+      const res = await apiFetch(`/api/models/vram`);
       if (res.ok) {
         const data: VRAMTelemetry = await res.json();
         set({ vram: data });
@@ -123,12 +116,30 @@ export const useModelStore = create<ModelState>((set, get) => ({
   addSwapEvent: (event) => set((state) => ({ swapHistory: [event, ...state.swapHistory] })),
 
   triggerModelSwap: async (targetModelId: string) => {
-    set({ isSwapping: true });
-    const host = getApiHost();
+    set({ isSwapping: true, swapError: null });
+
+    const recordFailure = (message: string) =>
+      set((state) => ({
+        isSwapping: false,
+        swapError: message,
+        swapHistory: [
+          {
+            id: `swap-failed-${Date.now()}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            from_model: state.activeSecondaryId || 'unknown',
+            to_model: targetModelId,
+            duration_ms: 0,
+            status: 'failed',
+            trigger: 'manual_override',
+            target_met: false,
+          },
+          ...state.swapHistory,
+        ],
+      }));
 
     try {
       // 1. Call real backend POST /api/models/swap
-      const res = await fetch(`http://${host}:8000/api/models/swap`, {
+      const res = await apiFetch(`/api/models/swap`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -148,12 +159,17 @@ export const useModelStore = create<ModelState>((set, get) => ({
           isSwapping: false,
           swapHistory: [swapEvent, ...state.swapHistory]
         }));
-        return;
+        return true;
       }
-    } catch {
-      // Fallback local swap handler if backend unreachable
-    }
 
-    set({ isSwapping: false });
+      // Non-2xx: the swap did not happen — report the server's own reason.
+      const errData = await res.json().catch(() => ({}));
+      recordFailure(errData?.detail || `Swap rejected by the backend (HTTP ${res.status}).`);
+      return false;
+    } catch (err: any) {
+      // Backend unreachable: the model did NOT change. Never fake a successful swap.
+      recordFailure(err?.message || 'Backend unreachable — the model was not swapped.');
+      return false;
+    }
   }
 }));

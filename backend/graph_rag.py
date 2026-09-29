@@ -1,11 +1,17 @@
 """
-Enterprise GraphRAG Knowledge Graph & Topological Hybrid Retrieval Engine.
-Replaces flat vector RAG with a structured multi-layer Knowledge Graph + Entity-Relation Network.
-Integrates:
-1. Entity-Relation Triplets: Equipment <-> Subsystems <-> Standards <-> Safety Limits <-> Chemical Hazards
-2. Multi-hop Graph Traversal: Identifies upstream/downstream dependencies, cascading trips, and cross-standard compliances.
-3. Hybrid Graph + Dense Semantic Search: Returns grounded SOP chunks + structured Entity Graph context + Mermaid flow diagrams.
-4. Active Domain Awareness: Refinery, PSU Manufacturing, Defence, and Government sub-graphs.
+Enterprise GraphRAG Knowledge Graph & Topological Retrieval Engine.
+
+Provides a structured entity/relation network traversed alongside the text
+chunks returned by `backend.knowledge_base`.
+
+IMPORTANT (honesty constraint):
+The entity/relation registry below is **bundled reference topology** authored
+for this project. Its `properties` values (skin-temperature limits, vibration
+trip points, TLVs, ...) are illustrative sample numbers, not values extracted
+from a controlled plant document, and some of them contradict the bundled demo
+SOP text. They are therefore **never injected into the model context**; only
+entity identity and topology are. Any numeric limit used in an answer must come
+from a retrieved document chunk, and the context block says so explicitly.
 """
 
 import re
@@ -14,6 +20,13 @@ import json
 from typing import Dict, Any, List, Optional, Set, Tuple
 from pydantic import BaseModel, Field
 from backend.config import logger, MIN_RAG_SCORE, EQUIPMENT_TAG_REGEX
+
+BUNDLED_GRAPH_NOTICE = (
+    "The entity topology below is BUNDLED REFERENCE DATA bundled with the "
+    "application. It carries no verified engineering values. Any operating "
+    "limit, trip point or procedure must be taken from a retrieved document "
+    "chunk, never from this graph."
+)
 
 
 class KnowledgeEntity(BaseModel):
@@ -267,8 +280,12 @@ class GraphRAGEngine:
 
     def build_graph_context_block(self, query: str, active_domain: str = "refinery") -> Tuple[str, List[Dict[str, Any]]]:
         """
-        Builds a rich GraphRAG contextual knowledge block with entities,
-        relations, connected dependencies, and Mermaid diagram.
+        Builds the graph topology context for a query: matched entities, their
+        one-hop relations and a Mermaid diagram.
+
+        Entity `properties` are deliberately omitted. Those bundled values are
+        unverified sample numbers that can contradict the retrieved documents,
+        so they must not reach the model as if they were authoritative limits.
         """
         matched_entities = self.extract_entities_from_query(query)
         if not matched_entities:
@@ -283,8 +300,9 @@ class GraphRAGEngine:
             return "", []
 
         lines = [
-            "=== VERIFIED KNOWLEDGE GRAPH (GRAPHRAG) TOPOLOGY ===",
-            "The following entity-relationship graph network was traversed for this query:"
+            "=== KNOWLEDGE GRAPH TOPOLOGY (bundled reference graph) ===",
+            BUNDLED_GRAPH_NOTICE,
+            f"Entities and relations mentioned by this query (active domain: {active_domain}):"
         ]
 
         graph_triplets = []
@@ -293,9 +311,6 @@ class GraphRAGEngine:
 
         for ent in matched_entities:
             lines.append(f"\n[ENTITY: {ent.id}] ({ent.category} — {ent.name})")
-            if ent.properties:
-                props_str = ", ".join([f"{k}: {v}" for k, v in ent.properties.items()])
-                lines.append(f"  • Properties & Safe Limits: {props_str}")
 
             mermaid_nodes.add(ent.id)
 
@@ -304,10 +319,10 @@ class GraphRAGEngine:
             for rel, other_ent in related:
                 rel_desc = f"{rel.source} --({rel.relation})--> {rel.target}"
                 lines.append(f"  • Graph Relation: {rel_desc} [{other_ent.category}: {other_ent.name}]")
-                if other_ent.properties:
-                    other_props = ", ".join([f"{k}: {v}" for k, v in other_ent.properties.items() if k in ["top_temp_limit", "max_skin_temp", "validity_hours", "vibration_alarm", "vibration_trip", "cas", "tlv_twa", "min_ic_make_i", "drum_level_hh_trip"]])
-                    if other_props:
-                        lines.append(f"    - Linked Parameters: {other_props}")
+                if rel.metadata:
+                    meta = ", ".join(f"{k}: {v}" for k, v in rel.metadata.items())
+                    if meta:
+                        lines.append(f"    - Relation context: {meta}")
 
                 graph_triplets.append({
                     "source": rel.source,

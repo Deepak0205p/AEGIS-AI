@@ -23,7 +23,16 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-IMAGE_TAG = "mrpl-sandbox-runtime:latest"
+# Built image tag. Read from backend.config so the builder and the runners
+# (`backend/sandbox.py`, `backend/code_runner.py`) can never disagree: they
+# previously hardcoded `mrpl-sandbox-runtime:latest` and `python-sandbox`
+# respectively, so `docker run` looked for an image nothing had ever built.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+try:
+    from backend.config import SANDBOX_DOCKER_IMAGE as IMAGE_TAG
+except Exception:  # pragma: no cover - config import must not block the builder
+    IMAGE_TAG = "mrpl-sandbox-runtime:latest"
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE_PATH = PROJECT_ROOT / "sandbox" / "Dockerfile.sandbox"
 

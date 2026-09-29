@@ -10,7 +10,10 @@ import { ShieldCheck, Wifi, Laptop, GlobeLock, Radio } from 'lucide-react';
 export function SovereigntyBanner() {
   const { metrics, deploymentMode, hostIp, port } = useSovereigntyStore();
 
+  // Only a *measured* zero counts as zero. A null packet count is "unknown".
   const isExternalZero = metrics.external_packets === 0 && metrics.external_sockets === 0;
+  const packetText = (value: number | null) =>
+    typeof value === 'number' ? value.toLocaleString() : '—';
 
   return (
     <div className="space-y-3">
@@ -38,13 +41,13 @@ export function SovereigntyBanner() {
               <span className="text-xs text-gray-500">active internal sockets</span>
             </div>
             <p className="text-[11px] font-mono text-gray-400 mt-1">
-              FastAPI &harr; Ollama &harr; ChromaDB &harr; Docker
+              Local processes observed via psutil socket inspection
             </p>
           </div>
 
           <div className="pt-2 border-t border-gray-200/60 flex items-center justify-between text-[11px] font-mono text-gray-500">
             <span>Local Packets:</span>
-            <span className="text-gray-900 font-medium">{metrics.localhost_packets.toLocaleString()}</span>
+            <span className="text-gray-900 font-medium">{packetText(metrics.localhost_packets)}</span>
           </div>
         </Card>
 
@@ -78,14 +81,16 @@ export function SovereigntyBanner() {
 
           <div className="pt-2 border-t border-gray-200/60 flex items-center justify-between text-[11px] font-mono text-gray-500">
             <span>Private LAN Packets:</span>
-            <span className="text-gray-900 font-medium">{metrics.lan_hotspot_packets.toLocaleString()}</span>
+            <span className="text-gray-900 font-medium">{packetText(metrics.lan_hotspot_packets)}</span>
           </div>
         </Card>
 
-        {/* Tier 3: External Internet Egress (The Proof Metric) */}
+        {/* Tier 3: External Internet Egress (measured sockets) */}
         <Card className={`p-4 flex flex-col justify-between border ${
-          isExternalZero 
-            ? 'border-emerald-600/40 bg-emerald-50' 
+          isExternalZero
+            ? 'border-emerald-600/40 bg-emerald-50'
+            : metrics.external_packets === null
+            ? 'border-gray-300 bg-gray-50'
             : 'border-red-600 bg-red-600/10'
         }`}>
           <div className="flex items-center justify-between pb-2 border-b border-gray-200">
@@ -99,30 +104,44 @@ export function SovereigntyBanner() {
               <motion.span
                 animate={{ scale: [1, 1.3, 1], opacity: [1, 0.6, 1] }}
                 transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
-                className="h-2 w-2 rounded-full bg-emerald-600 inline-block"
+                className={`h-2 w-2 rounded-full inline-block ${isExternalZero ? 'bg-emerald-600' : 'bg-gray-400'}`}
               />
-              <span className="text-[10px] font-mono font-bold text-emerald-600 tracking-wider uppercase">
-                Zero Egress
+              <span className={`text-[10px] font-mono font-bold tracking-wider uppercase ${isExternalZero ? 'text-emerald-600' : 'text-gray-500'}`}>
+                {isExternalZero ? 'No External Sockets' : metrics.external_packets === null ? 'Not Measured' : 'Egress Observed'}
               </span>
             </div>
           </div>
 
           <div className="py-3">
             <div className="flex items-baseline space-x-2">
-              <span className="text-3xl font-black font-mono text-emerald-600">
-                {metrics.external_packets}
+              <span className="text-3xl font-black font-mono text-gray-900">
+                {packetText(metrics.external_packets)}
               </span>
-              <span className="text-xs text-gray-500">external packets (0 bytes)</span>
+              <span className="text-xs text-gray-500">
+                external packets
+                {typeof metrics.external_bytes === 'number'
+                  ? ` (${metrics.external_bytes.toLocaleString()} bytes)`
+                  : ' (bytes not measured)'}
+              </span>
             </div>
             <p className="text-[11px] font-mono text-emerald-600 mt-1 font-medium flex items-center">
               <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-              100% Air-Gapped &amp; Sovereign
+              {metrics.verdict || 'UNKNOWN - no verdict reported'}
+            </p>
+            <p className="text-[10px] font-mono text-gray-400 mt-1">
+              Socket counts are measured with psutil; packet totals are not counted on this deployment.
             </p>
           </div>
 
           <div className="pt-2 border-t border-gray-200/60 flex items-center justify-between text-[11px] font-mono text-gray-500">
             <span>External Sockets:</span>
-            <span className="text-emerald-600 font-semibold">{metrics.external_sockets} (Blocked)</span>
+            {/* "Blocked" is only accurate when the count is non-zero. The old
+                label printed "0 (Blocked)", which reads as a claim rather than
+                a measurement. */}
+            <span className={metrics.external_sockets > 0 ? 'text-rose-600 font-semibold' : 'text-emerald-600 font-semibold'}>
+              {metrics.external_sockets}
+              {metrics.external_sockets > 0 ? ' (blocked)' : ' (none observed)'}
+            </span>
           </div>
         </Card>
       </div>

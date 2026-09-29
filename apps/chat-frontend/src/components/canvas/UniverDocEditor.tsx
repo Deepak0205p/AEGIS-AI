@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { DeliverableItem } from '@/store/useDeliverableStore';
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { getApiBase } from '@/lib/apiBase';
 import {
   Bold,
   Italic,
@@ -54,6 +55,7 @@ import {
 } from 'lucide-react';
 import { CustomDropdown } from '@/components/ui/CustomDropdown';
 import { motion, AnimatePresence } from 'framer-motion';
+import { apiFetch } from '@/lib/apiFetch';
 
 interface UniverDocEditorProps {
   deliverable: DeliverableItem;
@@ -88,7 +90,7 @@ const PAGE_BG_PRESETS = [
 ];
 
 export function UniverDocEditor({ deliverable }: UniverDocEditorProps) {
-  const { updateEditedContent, editedContent } = useCanvasStore();
+  const { updateEditedContent, hydrateContent, editedContent } = useCanvasStore();
   const editorRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<'home' | 'insert' | 'layout' | 'review' | 'view'>('home');
   const [copied, setCopied] = useState(false);
@@ -263,10 +265,18 @@ export function UniverDocEditor({ deliverable }: UniverDocEditorProps) {
         ${(deliverable.key_metrics || []).map(m => `<li><strong>${m.label}:</strong> ${m.value}</li>`).join('')}
       </ul>
 
-      <h2 style="color: #0369a1; margin-top: 24px; font-size: 16px; font-weight: 700;">3. Referenced SOPs and Regulatory Standards</h2>
+      ${
+        (deliverable.sop_citations || []).length > 0
+          ? `<h2 style="color: #0369a1; margin-top: 24px; font-size: 16px; font-weight: 700;">3. Referenced SOPs and Regulatory Standards</h2>
       <ul style="color: #1e293b; line-height: 1.8; font-size: 14px;">
-        ${(deliverable.sop_citations || ['MRPL Plant Operating Guide', 'OISD-STD-105']).map(c => `<li>${c}</li>`).join('')}
-      </ul>
+        ${deliverable.sop_citations.map(c => `<li>${c}</li>`).join('')}
+      </ul>`
+          : `<h2 style="color: #0369a1; margin-top: 24px; font-size: 16px; font-weight: 700;">3. Referenced SOPs and Regulatory Standards</h2>
+      <p style="color: #475569; font-size: 14px; line-height: 1.8;">
+        None recorded. No controlled source document has been linked to this
+        deliverable yet; verify against the current controlled copy before use.
+      </p>`
+      }
     `;
   };
 
@@ -285,14 +295,14 @@ export function UniverDocEditor({ deliverable }: UniverDocEditorProps) {
       const cleanId = deliverable.id.replace(/^\/api\/files\/(download\/)?/, '').trim();
       if (!cleanId) return;
 
-      const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
       try {
-        const res = await fetch(`http://${host}:8000/api/files/${cleanId}/content`);
+        const res = await apiFetch(`${getApiBase()}/api/files/${cleanId}/content`);
         if (res.ok) {
           const data = await res.json();
           if (data.html) {
             setDocHtml(data.html);
-            updateEditedContent(deliverable.id, { html: data.html });
+            // Seed the buffer without marking the file dirty (no phantom save).
+            hydrateContent(deliverable.id, { html: data.html });
             if (editorRef.current) {
               editorRef.current.innerHTML = data.html;
               updateStats(editorRef.current.innerText || '');

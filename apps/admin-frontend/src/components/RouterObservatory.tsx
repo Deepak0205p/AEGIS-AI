@@ -167,8 +167,11 @@ export function RouterObservatory() {
   const [activeCategory, setActiveCategory] = useState<string>('ALL');
   const [isRouting, setIsRouting] = useState(false);
   const [routeResult, setRouteResult] = useState<any>(null);
+  // The hero latency card shows the last server-measured routing time.
+  const lastLatencyMs = routeResult?.totalLatencyMs ?? null;
   const [history, setHistory] = useState<any[]>([]);
   const [modeOverride, setModeOverride] = useState<string>('auto');
+  const [routeError, setRouteError] = useState<string | null>(null);
 
   // Load default query on first mount
   useEffect(() => {
@@ -179,6 +182,7 @@ export function RouterObservatory() {
     const textToRoute = overrideText !== undefined ? overrideText : testQuery;
     if (!textToRoute.trim()) return;
     setIsRouting(true);
+    setRouteError(null);
 
     const startClientMs = performance.now();
 
@@ -194,15 +198,19 @@ export function RouterObservatory() {
         id: `eval-${Date.now()}`,
         query: textToRoute,
         domain: data.domain || 'CHAT',
-        targetModel: data.targetModel || 'deepseek-v4-pro:4b',
+        targetModel: data.targetModel || 'unknown',
         stage1Match: Boolean(data.stage1Match),
-        routedBy: data.routedBy || 'stage1_regex',
-        totalLatencyMs: data.totalLatencyMs ?? clientLatency,
-        confidence: data.confidence ?? 0.98,
-        isInScope: data.isInScope !== false,
+        routedBy: data.routedBy || 'unmatched_default',
+        // Server-measured latency; the client timing is a labelled fallback.
+        totalLatencyMs: typeof data.totalLatencyMs === 'number' ? data.totalLatencyMs : clientLatency,
+        latencySource: typeof data.totalLatencyMs === 'number' ? 'server' : 'client_fallback',
+        confidence: typeof data.confidence === 'number' ? data.confidence : null,
+        isInScope: typeof data.isInScope === 'boolean' ? data.isInScope : null,
+        stage2Executed: Boolean(data.stage2Executed),
+        stage2Note: data.stage2Note || null,
         department: data.department || { name: 'General', slug: 'general' },
         thinking: Boolean(data.thinking),
-        thinkingReason: data.thinkingReason || 'normal_reasoning',
+        thinkingReason: data.thinkingReason || 'not reported',
         requiredTools: data.requiredTools || [],
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       };
@@ -210,25 +218,9 @@ export function RouterObservatory() {
       setRouteResult(res);
       setHistory(prev => [res, ...prev.slice(0, 9)]);
     } catch (err: any) {
-      const clientLatency = Math.round(performance.now() - startClientMs);
-      const fallbackRes = {
-        id: `eval-${Date.now()}`,
-        query: textToRoute,
-        domain: 'CHAT',
-        targetModel: 'deepseek-v4-pro:4b (Local Fallback)',
-        stage1Match: true,
-        routedBy: 'stage1_heuristic_fallback',
-        totalLatencyMs: clientLatency,
-        confidence: 0.92,
-        isInScope: true,
-        department: { name: 'General Operations', slug: 'operations' },
-        thinking: false,
-        thinkingReason: 'standard_dispatch',
-        requiredTools: [],
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      };
-      setRouteResult(fallbackRes);
-      setHistory(prev => [fallbackRes, ...prev.slice(0, 9)]);
+      // The router did not evaluate the query. Show the real failure instead of a
+      // fabricated 0.92-confidence "heuristic fallback" verdict.
+      setRouteError(err?.message || `Routing request failed (HTTP ${err?.response?.status ?? 'unknown'}).`);
     } finally {
       setIsRouting(false);
     }
@@ -257,19 +249,24 @@ export function RouterObservatory() {
               <span>Intelligent Intent &amp; Model Routing Observatory</span>
             </h1>
             <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-              Every incoming prompt is analyzed in real-time. Stage 1 executes multi-signal regex rules and tag extractors (&lt; 2.0 ms), while Stage 2 leverages neural centroids and Ollama model orchestrator (&lt; 25 ms) with zero cloud egress.
+              Every prompt is resolved by the stage-1 rule and equipment-tag matcher,
+              with the measured routing time shown after each query. This deployment
+              has no dense/semantic second stage, and no calibrated confidence is
+              produced by the router.
             </p>
           </div>
 
-          {/* Quick Metrics Cards in Hero */}
+          {/* Quick Metrics Cards in Hero - each reflects a real measurement */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <div className="p-3.5 rounded-xl bg-gray-50 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a] space-y-1">
               <div className="flex items-center gap-1.5 text-gray-500 dark:text-gray-400 text-xs font-mono">
                 <Clock className="w-3.5 h-3.5 text-emerald-500" />
                 <span>Stage 1 Latency</span>
               </div>
-              <div className="text-lg font-bold font-mono text-emerald-600 dark:text-emerald-400">&lt; 2.0 ms</div>
-              <div className="text-[10px] text-gray-400 font-mono">Deterministic Rules</div>
+              <div className="text-lg font-bold font-mono text-emerald-600 dark:text-emerald-400">
+                {typeof lastLatencyMs === 'number' ? `${lastLatencyMs} ms` : '—'}
+              </div>
+              <div className="text-[10px] text-gray-400 font-mono">Measured, last query</div>
             </div>
 
             <div className="p-3.5 rounded-xl bg-gray-50 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a] space-y-1">
@@ -277,17 +274,17 @@ export function RouterObservatory() {
                 <Cpu className="w-3.5 h-3.5 text-blue-500" />
                 <span>Stage 2 Latency</span>
               </div>
-              <div className="text-lg font-bold font-mono text-blue-600 dark:text-blue-400">&lt; 25.0 ms</div>
-              <div className="text-[10px] text-gray-400 font-mono">Dense Centroid</div>
+              <div className="text-lg font-bold font-mono text-gray-500">Not configured</div>
+              <div className="text-[10px] text-gray-400 font-mono">No dense stage in this build</div>
             </div>
 
             <div className="p-3.5 rounded-xl bg-gray-50 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a] space-y-1 col-span-2 sm:col-span-1">
               <div className="flex items-center gap-1.5 text-gray-500 dark:text-gray-400 text-xs font-mono">
                 <ShieldAlert className="w-3.5 h-3.5 text-purple-500" />
-                <span>Air-Gap Security</span>
+                <span>Routing Confidence</span>
               </div>
-              <div className="text-lg font-bold font-mono text-purple-600 dark:text-purple-400">100% Local</div>
-              <div className="text-[10px] text-gray-400 font-mono">Zero External Calls</div>
+              <div className="text-lg font-bold font-mono text-gray-500">Not computed</div>
+              <div className="text-[10px] text-gray-400 font-mono">Deterministic rules only</div>
             </div>
           </div>
         </div>
@@ -453,35 +450,39 @@ export function RouterObservatory() {
                   <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 font-mono text-[10px] font-semibold border border-blue-500/20">
                     STAGE 1: FAST PATH
                   </span>
-                  <span className="text-[10px] font-mono text-emerald-500">&lt; 2.0 ms</span>
+                  <span className="text-[10px] font-mono text-emerald-500">
+                    {typeof lastLatencyMs === 'number' ? `${lastLatencyMs} ms measured` : 'not measured yet'}
+                  </span>
                 </div>
-                <h4 className="font-bold text-gray-900 dark:text-white">Deterministic Multi-Signal Matching</h4>
+                <h4 className="font-bold text-gray-900 dark:text-white">Deterministic Rule &amp; Tag Matching</h4>
                 <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed">
-                  Evaluates 6 domain intent matrices, equipment tag regex (e.g. <code>P-101A</code>, <code>FV-204</code>), file attachments, and department taxonomy. Zero LLM latency.
+                  Evaluates domain intent rules, equipment tag patterns (e.g. <code>P-101A</code>,
+                  <code> FV-204</code>), attachment presence, and department taxonomy. No model call.
                 </p>
                 <div className="pt-1 flex flex-wrap gap-1 text-[10px] font-mono text-gray-400">
-                  <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a]">Regex Tagging</span>
-                  <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a]">Extension Mappings</span>
+                  <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a]">Rule Matching</span>
+                  <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a]">Equipment Tags</span>
                   <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a]">Exclusion Guards</span>
                 </div>
               </div>
 
-              {/* Stage 2 Card */}
-              <div className="p-4 rounded-xl bg-gradient-to-br from-purple-500/5 to-indigo-500/5 border border-purple-500/20 space-y-2">
+              {/* Stage 2 Card - not configured in this build */}
+              <div className="p-4 rounded-xl bg-gray-50 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a] space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 font-mono text-[10px] font-semibold border border-purple-500/20">
-                    STAGE 2: SEMANTIC FALLBACK
+                  <span className="px-2 py-0.5 rounded bg-gray-100 dark:bg-[#1b1f2b] text-gray-600 dark:text-gray-300 font-mono text-[10px] font-semibold border border-gray-200 dark:border-[#2c3342]">
+                    STAGE 2: NOT CONFIGURED
                   </span>
-                  <span className="text-[10px] font-mono text-blue-500">&lt; 25.0 ms</span>
+                  <span className="text-[10px] font-mono text-gray-500">no latency to report</span>
                 </div>
-                <h4 className="font-bold text-gray-900 dark:text-white">Dense Embeddings &amp; Model Orchestration</h4>
+                <h4 className="font-bold text-gray-900 dark:text-white">No dense/semantic stage in this build</h4>
                 <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed">
-                  Triggered on ambiguous or conversational queries. Utilizes local ONNX semantic centroids and fast Gemma/DeepSeek model reasoning with structured JSON return.
+                  This deployment has no embedding model or centroid classifier wired into the
+                  router, so there is no semantic fallback stage. Unmatched queries take the
+                  documented default route. Configure a local embedding model to enable one.
                 </p>
                 <div className="pt-1 flex flex-wrap gap-1 text-[10px] font-mono text-gray-400">
-                  <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a]">BAAI/bge-small</span>
-                  <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a]">Cos Similarity</span>
-                  <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a]">JSON Classifier</span>
+                  <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a]">Dense embeddings: absent</span>
+                  <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#141824] border border-gray-200 dark:border-[#262c3a]">Cosine similarity: absent</span>
                 </div>
               </div>
             </div>
@@ -507,6 +508,18 @@ export function RouterObservatory() {
                 </span>
               )}
             </div>
+
+            {/* Real routing failure (no fabricated fallback verdict) */}
+            {routeError && (
+              <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-800 dark:text-rose-300 text-xs font-mono flex items-start gap-2">
+                <ShieldAlert className="w-4 h-4 shrink-0" />
+                <span>
+                  <strong>Routing evaluation failed:</strong> {routeError}
+                  <br />
+                  No routing decision was produced — nothing is shown for this query.
+                </span>
+              </div>
+            )}
 
             {routeResult ? (
               <div className="space-y-4">
@@ -569,7 +582,9 @@ export function RouterObservatory() {
                       <span className="text-xs text-gray-500 dark:text-gray-400">Routing Decision Path</span>
                     </div>
                     <span className="text-xs font-mono font-medium text-gray-900 dark:text-white">
-                      {routeResult.stage1Match ? 'Stage 1 (Regex & Rules)' : 'Stage 2 (Dense Centroid)'}
+                      {routeResult.stage1Match
+                        ? 'Stage 1 (rules & equipment tags)'
+                        : 'No rule matched - default route'}
                     </span>
                   </div>
 
@@ -583,11 +598,13 @@ export function RouterObservatory() {
                       <div className="w-16 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                         <div
                           className="h-full bg-emerald-500 rounded-full"
-                          style={{ width: `${routeResult.confidence * 100}%` }}
+                          style={{ width: `${typeof routeResult.confidence === 'number' ? routeResult.confidence * 100 : 0}%` }}
                         />
                       </div>
                       <span className="text-xs font-mono font-bold text-gray-900 dark:text-white">
-                        {(routeResult.confidence * 100).toFixed(1)}%
+                        {typeof routeResult.confidence === 'number'
+                          ? `${(routeResult.confidence * 100).toFixed(1)}%`
+                          : 'n/a'}
                       </span>
                     </div>
                   </div>

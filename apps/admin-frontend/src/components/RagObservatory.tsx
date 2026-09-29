@@ -21,15 +21,18 @@ import {
   Cpu,
   FileCheck,
   Check,
+  AlertTriangle,
 } from 'lucide-react';
 import { CustomDropdown } from './CustomDropdown';
 import { useRagStore } from '@/store/useRagStore';
 import { useAuthStore } from '@/store/useAuthStore';
+import { api } from '@/lib/api';
 
 export function RagObservatory() {
   const { user } = useAuthStore();
   const {
     vectorStats,
+    retrievalInfo: statsRetrievalInfo,
     chunkConfig,
     documentsList,
     isReindexing,
@@ -66,10 +69,30 @@ export function RagObservatory() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
+  const [retrievalInfo, setRetrievalInfo] = useState<any>(null);
 
   useEffect(() => {
     fetchVectorStats();
   }, [fetchVectorStats]);
+
+  // A single honest line describing how retrieval is actually scoring.
+  const retrievalNotice = (() => {
+    const info = retrievalInfo || statsRetrievalInfo;
+    if (!info) return null;
+    const parts: string[] = [];
+    const denseOn = retrievalInfo?.dense?.available ?? info.dense_available;
+    const model = retrievalInfo?.dense?.model ?? info.embedding_model;
+    parts.push(
+      denseOn
+        ? `Retrieval: ${info.method} using local embedding model "${model}".`
+        : `Retrieval: ${info.method} — no local embedding model is available, so scoring is lexical BM25 (no vector similarity is reported).`
+    );
+    if (!denseOn && (info.embedding_status || retrievalInfo?.dense?.reason)) {
+      parts.push(`Reason: ${info.embedding_status || retrievalInfo?.dense?.reason}`);
+    }
+    if (info.persistence_note) parts.push(info.persistence_note);
+    return parts.join(' ');
+  })();
 
   const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -89,8 +112,8 @@ export function RagObservatory() {
 
   const handleStartReindex = async () => {
     if (manualFiles.length === 0) return;
-    const success = await triggerGlobalReindex(manualFiles);
-    if (success) {
+    const outcome = await triggerGlobalReindex(manualFiles);
+    if (outcome) {
       setManualFiles([]);
       setTimeout(() => {
         setShowIngestModal(false);
@@ -104,14 +127,17 @@ export function RagObservatory() {
     setIsIngestingSingle(true);
     setIngestStatus(null);
 
-    const success = await triggerGlobalReindex([uploadFile]);
+    const outcome = await triggerGlobalReindex([uploadFile]);
     setIsIngestingSingle(false);
-    if (success) {
+    if (outcome) {
+      // Only server-reported numbers are shown here, including real failures.
       setIngestStatus({
-        status: 'success',
-        message: `Successfully ingested '${uploadFile.name}' into ChromaDB knowledge base.`,
-        chunks_indexed: 140,
-        total_in_chromadb: vectorStats.totalChunks + 140,
+        status: outcome.failures.length ? 'partial' : 'success',
+        message: `${outcome.message} File: '${uploadFile.name}'.`,
+        chunks_indexed: outcome.chunks_indexed,
+        total_in_corpus: outcome.total_master_sops,
+        failures: outcome.failures,
+        persistence_note: outcome.persistence_note,
       });
       setUploadFile(null);
     } else {
@@ -128,22 +154,30 @@ export function RagObservatory() {
     setHasSearched(true);
 
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/rag-admin/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: searchQuery.trim(), top_k: 5 }),
+      const data = await api.post<any>('/api/rag-admin/search', {
+        query: searchQuery.trim(),
+        top_k: 5,
       });
-      const data = await res.json();
 
       if (data && Array.isArray(data.results)) {
         const formatted = data.results.map((r: any, idx: number) => ({
           id: r.doc_id || `match-${idx}`,
           document: r.title || r.doc_id,
           clause: r.clause || 'General Standard',
-          similarityScore: r.similarity_score || 0.92,
+          // A similarity percentage only exists when real embeddings are in use;
+          // otherwise the backend returns null and we show the lexical score.
+          similarityScore: typeof r.similarity_score === 'number' ? r.similarity_score : null,
+          relevance: typeof r.relevance === 'number' ? r.relevance : null,
+          bm25Score: typeof r.bm25_score === 'number' ? r.bm25_score : null,
+          matchBasis: r.match_basis || 'unknown',
+          provenance: r.provenance || 'unknown',
+          authoritative: Boolean(r.authoritative),
           content: r.content || '',
         }));
         setSearchResults(formatted);
+        if (data.retrieval) {
+          setRetrievalInfo(data.retrieval);
+        }
       } else {
         setSearchResults([]);
       }
@@ -196,36 +230,44 @@ export function RagObservatory() {
           </div>
         </div>
 
-        {/* Real-Time Vector Statistics Grid */}
+        {/* Live Retrieval Statistics — every value comes from the backend */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="p-3 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/70 space-y-1">
-            <span className="text-[10px] font-mono text-gray-400 uppercase">Total Vector Chunks</span>
+            <span className="text-[10px] font-mono text-gray-400 uppercase">Indexed Chunks</span>
             <div className="text-lg font-bold font-mono text-cyan-600 dark:text-cyan-400">
               {vectorStats.totalChunks.toLocaleString()}
             </div>
           </div>
 
           <div className="p-3 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/70 space-y-1">
-            <span className="text-[10px] font-mono text-gray-400 uppercase">Ingested SOP Manuals</span>
+            <span className="text-[10px] font-mono text-gray-400 uppercase">Documents</span>
             <div className="text-lg font-bold font-mono text-emerald-600 dark:text-emerald-400">
               {vectorStats.documentCount} Documents
             </div>
           </div>
 
           <div className="p-3 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/70 space-y-1">
-            <span className="text-[10px] font-mono text-gray-400 uppercase">Embedding Engine</span>
-            <div className="text-xs font-bold font-mono text-gray-900 dark:text-gray-200 truncate">
-              BGE-M3 (1024-dim)
+            <span className="text-[10px] font-mono text-gray-400 uppercase">Retrieval Method</span>
+            <div className="text-xs font-bold font-mono text-gray-900 dark:text-gray-200 truncate"
+                 title={vectorStats.denseEngine}>
+              {vectorStats.denseEngine}
+              {vectorStats.dimensions ? ` (${vectorStats.dimensions}-dim)` : ''}
             </div>
           </div>
 
           <div className="p-3 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/70 space-y-1">
-            <span className="text-[10px] font-mono text-gray-400 uppercase">Index Synchronization</span>
+            <span className="text-[10px] font-mono text-gray-400 uppercase">Last Ingest</span>
             <div className="text-xs font-mono text-gray-900 dark:text-gray-200">
               {vectorStats.lastIndexed}
             </div>
           </div>
         </div>
+
+        {retrievalNotice && (
+          <p className="text-[11px] font-mono text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-lg px-3 py-2">
+            {retrievalNotice}
+          </p>
+        )}
       </div>
 
       {/* 2. SECTION: INGESTION & SEMANTIC SEARCH */}
@@ -273,7 +315,7 @@ export function RagObservatory() {
             className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer font-mono"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isIngestingSingle ? 'animate-spin' : ''}`} />
-            <span>{isIngestingSingle ? 'Vectorizing Clauses...' : 'Vectorize into ChromaDB'}</span>
+            <span>{isIngestingSingle ? 'Parsing & Indexing...' : 'Parse & Index Document'}</span>
           </button>
 
           {ingestStatus && (
@@ -285,18 +327,38 @@ export function RagObservatory() {
               }`}
             >
               <div className="font-semibold flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                {ingestStatus.status === 'success' ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                ) : (
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                )}
                 <span>{ingestStatus.message}</span>
               </div>
+              {typeof ingestStatus.chunks_indexed === 'number' && (
+                <div>
+                  Chunks indexed: {ingestStatus.chunks_indexed}
+                  {typeof ingestStatus.total_in_corpus === 'number'
+                    ? ` | corpus now holds ${ingestStatus.total_in_corpus} chunks`
+                    : ''}
+                </div>
+              )}
+              {(ingestStatus.failures || []).map((f: any, i: number) => (
+                <div key={i} className="text-rose-600 dark:text-rose-400">
+                  {f.filename}: {f.error}
+                </div>
+              ))}
+              {ingestStatus.persistence_note && (
+                <div className="text-amber-700 dark:text-amber-400">{ingestStatus.persistence_note}</div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Semantic Search Tester */}
+        {/* Retrieval Search Tester */}
         <div className="bg-white dark:bg-[#11141c] border border-gray-200 dark:border-[#262c3a] rounded-xl p-5 shadow-sm space-y-4">
           <h3 className="text-xs font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
             <Search className="w-3.5 h-3.5 text-blue-500" />
-            <span>ChromaDB Semantic Vector Search Inspector</span>
+            <span>Knowledge Retrieval Inspector</span>
           </h3>
 
           <div className="flex gap-2">
@@ -322,7 +384,8 @@ export function RagObservatory() {
             <div className="space-y-2 pt-1">
               {searchResults.length === 0 ? (
                 <div className="p-4 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-200 dark:border-gray-800 text-center text-xs text-gray-400 font-mono">
-                  No matching document clauses found in ChromaDB for "{searchQuery}".
+                  No indexed chunk matched &quot;{searchQuery}&quot;. Retrieval found no
+                  overlapping terms in the corpus, so nothing is cited.
                 </div>
               ) : (
                 searchResults.map((res, i) => (
@@ -336,9 +399,37 @@ export function RagObservatory() {
                         <span className="font-semibold text-gray-900 dark:text-gray-100">{res.document}</span>
                         <span className="text-gray-500 text-[11px]">{res.clause}</span>
                       </div>
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-800/50">
-                        Score: {(res.similarityScore * 100).toFixed(1)}%
+                      <span
+                        className="text-[10px] px-2 py-0.5 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-800/50"
+                        title={
+                          typeof res.similarityScore === 'number'
+                            ? `Dense cosine similarity ${(res.similarityScore * 100).toFixed(1)}% (real embeddings)`
+                            : 'No embedding model available - no vector similarity exists for this result'
+                        }
+                      >
+                        {typeof res.similarityScore === 'number'
+                          ? `Cosine: ${(res.similarityScore * 100).toFixed(1)}%`
+                          : typeof res.relevance === 'number'
+                          ? `Relevance: ${(res.relevance * 100).toFixed(0)}% (lexical)`
+                          : 'Score: n/a'}
                       </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-[10px] text-gray-500 pl-5">
+                      <span
+                        className={`px-1.5 py-0.5 rounded border ${
+                          res.authoritative
+                            ? 'border-emerald-700/50 text-emerald-500'
+                            : 'border-amber-700/50 text-amber-500'
+                        }`}
+                      >
+                        {res.provenance === 'user_uploaded'
+                          ? 'user upload (not verified)'
+                          : 'bundled demo corpus (not a controlled SOP)'}
+                      </span>
+                      {typeof res.bm25Score === 'number' && (
+                        <span>BM25 {res.bm25Score.toFixed(2)}</span>
+                      )}
+                      <span>match: {res.matchBasis}</span>
                     </div>
                     <p className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed pl-5">
                       "{res.content}"
@@ -374,23 +465,31 @@ export function RagObservatory() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 text-[11px]">
-                {documentsList.map((doc) => (
-                  <tr key={doc.id} className="hover:bg-gray-50 dark:hover:bg-[#151924]">
-                    <td className="py-2 px-3 font-medium text-gray-900 dark:text-gray-100">
-                      {doc.name}
-                    </td>
-                    <td className="py-2 px-3 text-gray-500">{doc.category}</td>
-                    <td className="py-2 px-3 text-cyan-600 dark:text-cyan-400 font-semibold">
-                      {doc.chunks} chunks
-                    </td>
-                    <td className="py-2 px-3 text-right text-gray-400">{doc.sizeKb} KB</td>
-                    <td className="py-2 px-3 text-right">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
-                        GROUNDED
-                      </span>
+                {documentsList.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-6 text-center text-gray-400 font-sans text-xs">
+                      No documents ingested yet. Upload SOP manuals above to index.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  documentsList.map((doc) => (
+                    <tr key={doc.id} className="hover:bg-gray-50 dark:hover:bg-[#151924]">
+                      <td className="py-2 px-3 font-medium text-gray-900 dark:text-gray-100">
+                        {doc.name}
+                      </td>
+                      <td className="py-2 px-3 text-gray-500">{doc.category}</td>
+                      <td className="py-2 px-3 text-cyan-600 dark:text-cyan-400 font-semibold">
+                        {doc.chunks} chunks
+                      </td>
+                      <td className="py-2 px-3 text-right text-gray-400">{doc.sizeKb} KB</td>
+                      <td className="py-2 px-3 text-right">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                          GROUNDED
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>

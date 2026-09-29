@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { DeliverableItem } from '@/store/useDeliverableStore';
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { getApiBase } from '@/lib/apiBase';
 import {
   Plus,
   Trash2,
@@ -32,6 +33,7 @@ import {
 } from 'lucide-react';
 import { CustomDropdown } from '@/components/ui/CustomDropdown';
 import { motion, AnimatePresence } from 'framer-motion';
+import { apiFetch } from '@/lib/apiFetch';
 
 interface UniverSheetEditorProps {
   deliverable: DeliverableItem;
@@ -74,7 +76,7 @@ const CELL_BG_PALETTE = [
 ];
 
 export function UniverSheetEditor({ deliverable }: UniverSheetEditorProps) {
-  const { updateEditedContent, editedContent } = useCanvasStore();
+  const { updateEditedContent, hydrateContent, editedContent } = useCanvasStore();
   const [activeRibbonTab, setActiveRibbonTab] = useState<'home' | 'insert' | 'formulas' | 'data' | 'view'>('home');
   const [activeSheetIndex, setActiveSheetIndex] = useState(0);
   const [selectedCell, setSelectedCell] = useState<{ row: number; col: number }>({ row: 1, col: 1 });
@@ -166,7 +168,7 @@ export function UniverSheetEditor({ deliverable }: UniverSheetEditorProps) {
               { value: 'Risk Rating', isHeader: true, style: { bold: true, align: 'center', bgColor: '#f1f5f9', color: '#0f172a' } },
             ],
             [
-              { value: 'Unit-001 / Sample Processing', style: { align: 'left' } },
+              { value: 'CDU-1 / Atmospheric Distillation', style: { align: 'left' } },
               { value: '14', style: { align: 'right' } },
               { value: '1', style: { align: 'right' } },
               { value: '0', style: { align: 'right' } },
@@ -230,15 +232,15 @@ export function UniverSheetEditor({ deliverable }: UniverSheetEditorProps) {
       const cleanId = deliverable.id.replace(/^\/api\/files\/(download\/)?/, '').trim();
       if (!cleanId) return;
 
-      const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
       try {
         setIsLoadingContent(true);
-        const res = await fetch(`http://${host}:8000/api/files/${cleanId}/content`);
+        const res = await apiFetch(`${getApiBase()}/api/files/${cleanId}/content`);
         if (res.ok) {
           const data = await res.json();
           if (data.sheets && Array.isArray(data.sheets) && data.sheets.length > 0) {
             setSheets(data.sheets);
-            updateEditedContent(deliverable.id, { sheets: data.sheets });
+            // Seed the buffer without marking the file dirty (no phantom save).
+            hydrateContent(deliverable.id, { sheets: data.sheets });
           }
         }
       } catch (err) {

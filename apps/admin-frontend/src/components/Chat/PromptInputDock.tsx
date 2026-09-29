@@ -4,20 +4,18 @@ import React, { useState } from 'react';
 import { useChatStore } from '@/store/useChatStore';
 import { socketManager } from '@/lib/socket';
 import { Button } from '@/components/ui/button';
-import { ArrowUp, Paperclip, Square, Sparkles, Code, Eye, FileText, FileSpreadsheet, Presentation, ScanText, Layers } from 'lucide-react';
+import { ArrowUp, Paperclip, Square, Sparkles, Code, FileText, FileSpreadsheet, Presentation, Layers } from 'lucide-react';
 
 const MODEL_ROLES = [
   { id: 'orchestrator', label: 'Orchestrator', icon: <Layers className="h-4 w-4" />, color: 'text-blue-400' },
   { id: 'code', label: 'Code', icon: <Code className="h-4 w-4" />, color: 'text-blue-400' },
-  { id: 'vision', label: 'Vision', icon: <Eye className="h-4 w-4" />, color: 'text-emerald-400' },
   { id: 'docs', label: 'Docs', icon: <FileText className="h-4 w-4" />, color: 'text-blue-500' },
   { id: 'excel', label: 'Excel', icon: <FileSpreadsheet className="h-4 w-4" />, color: 'text-emerald-500' },
   { id: 'ppt', label: 'PPT', icon: <Presentation className="h-4 w-4" />, color: 'text-orange-500' },
-  { id: 'ocr', label: 'OCR', icon: <ScanText className="h-4 w-4" />, color: 'text-purple-400' },
 ];
 
 export function PromptInputDock() {
-  const { currentInput, setCurrentInput, addMessage, isStreaming, setStreaming } = useChatStore();
+  const { currentInput, setCurrentInput, addMessage, isStreaming, setStreaming, abortGeneration } = useChatStore();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeModelRole, setActiveModelRole] = useState<string>('orchestrator');
   const [showRoleSelector, setShowRoleSelector] = useState(false);
@@ -43,6 +41,10 @@ export function PromptInputDock() {
   };
 
   const handleStop = () => {
+    // Actually abort: close the stream socket so the backend pipeline stops,
+    // then keep the partial output with an explicit "stopped" marker.
+    socketManager.abortChatTask();
+    abortGeneration();
     setStreaming(false);
   };
 
@@ -88,21 +90,15 @@ export function PromptInputDock() {
                 <div className="fixed inset-0 z-40" onClick={() => setShowRoleSelector(false)} />
                 <div className="absolute bottom-full left-0 mb-2 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-[140px]">
                   {MODEL_ROLES.map((role) => {
-                    const isDisabled = role.id === 'vision' || role.id === 'ocr';
                     return (
                       <button
                         key={role.id}
-                        disabled={isDisabled}
-                        title={isDisabled ? "Coming soon" : undefined}
                         onClick={() => {
-                          if (isDisabled) return;
                           setActiveModelRole(role.id);
                           setShowRoleSelector(false);
                         }}
                         className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${
-                          isDisabled
-                            ? 'opacity-40 cursor-not-allowed grayscale'
-                            : activeModelRole === role.id
+                          activeModelRole === role.id
                             ? 'bg-gray-100 font-semibold cursor-pointer'
                             : 'hover:bg-gray-50 cursor-pointer'
                         }`}
@@ -117,10 +113,12 @@ export function PromptInputDock() {
             )}
           </div>
 
-          <Button 
-            size="sm" 
-            variant="ghost" 
-            className="min-h-[36px] h-8 px-2.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-all"
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled
+            title="Attachment upload is not available in this embedded workspace - use the full Chat app on port 3000"
+            className="min-h-[36px] h-8 px-2.5 text-gray-400 hover:text-gray-400 rounded-lg transition-all cursor-not-allowed"
           >
             <Paperclip className="h-3.5 w-3.5 mr-1.5" />
             <span className="text-[11px] font-mono">Attach</span>

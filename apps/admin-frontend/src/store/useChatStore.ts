@@ -20,9 +20,12 @@ export interface ChatMessage {
   timestamp: string;
   model_id?: string;
   routed_by?: 'stage1_regex' | 'stage2_semantic' | 'manual';
-  confidence?: number;
+  /** Null when the pipeline does not compute a calibrated confidence. */
+  confidence?: number | null;
   trace_steps?: TraceStep[];
   deliverable_ids?: string[];
+  /** True when the operator stopped generation before a final answer arrived. */
+  aborted?: boolean;
 }
 
 interface ChatState {
@@ -31,11 +34,13 @@ interface ChatState {
   activeScenario: 'furnace' | 'pump' | 'pid' | 'general';
   currentInput: string;
   activeTraceSteps: TraceStep[];
+  /** Tokens received so far, so a stopped run can show its partial output. */
+  streamingContent: string;
   currentRouting: {
     domain: string;
     model_id: string;
     routed_by: string;
-    confidence: number;
+    confidence: number | null;
   } | null;
   
   // Actions
@@ -46,22 +51,18 @@ interface ChatState {
   setStreaming: (isStreaming: boolean) => void;
   handleStreamEvent: (event: any) => void;
   clearTrace: () => void;
+  /** Finalises a stopped run with whatever text was actually received. */
+  abortGeneration: () => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
-  messages: [
-    {
-      id: 'msg-seed-1',
-      role: 'agent',
-      content: 'MRPL Sovereign AI Workbench initialized. All models verified offline. 0 external network packets detected.',
-      timestamp: '00:00:01',
-      model_id: 'Reasoning Engine'
-    }
-  ],
+  // No fabricated system greeting: the transcript starts empty.
+  messages: [],
   isStreaming: false,
   activeScenario: 'pump',
   currentInput: '',
   activeTraceSteps: [],
+  streamingContent: '',
   currentRouting: null,
 
   setMessages: (messages) => set({ messages }),
@@ -70,6 +71,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setActiveScenario: (activeScenario) => set({ activeScenario }),
   setStreaming: (isStreaming) => set({ isStreaming }),
   clearTrace: () => set({ activeTraceSteps: [], currentRouting: null }),
+
+  abortGeneration: () => {
+    const partial = get().streamingContent.trim();
+    const routing = get().currentRouting;
+
+    set((state) => {
+      const reset = {
+        isStreaming: false,
+        streamingContent: '',
+        activeTraceSteps: [],
+        currentRouting: null,
+      };
+      if (!partial) return reset;
+
+      const stoppedMsg: ChatMessage = {
+        id: `agent-stopped-${Date.now()}`,
+        role: 'agent',
+        content: partial,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        model_id: routing?.model_id,
+        routed_by: (routing?.routed_by || 'stage1_regex') as any,
+        confidence: routing?.confidence ?? null,
+        trace_steps: state.activeTraceSteps,
+        deliverable_ids: [],
+        aborted: true,
+      };
+      return { ...reset, messages: [...state.messages, stoppedMsg] };
+    });
+  },
 
   handleStreamEvent: (event: any) => {
     if (event.event === 'routing') {
@@ -82,6 +112,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       });
     } else if (event.event === 'step') {
+      if (event.step_type === 'token') {
+        // Token frames accumulate into the live buffer instead of becoming
+        // thousands of trace rows; they are also what a Stop preserves.
+        const token = event.token ?? event.content ?? '';
+        set((state) => ({ streamingContent: state.streamingContent + token }));
+        return;
+      }
       const step: TraceStep = {
         id: `step-${Date.now()}-${Math.random()}`,
         step_number: event.step_number || (get().activeTraceSteps.length + 1),
@@ -105,7 +142,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         model_id: event.display_model || event.model_id || routing?.model_id || 'Reasoning Engine',
         routed_by: (event.routed_by || routing?.routed_by || 'stage1_regex') as any,
-        confidence: event.confidence || routing?.confidence || 98,
+        confidence: event.confidence ?? routing?.confidence ?? null,
         trace_steps: get().activeTraceSteps,
         deliverable_ids: deliverableIds,
       };
@@ -126,6 +163,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set((state) => ({
         messages: [...state.messages, agentMsg],
         isStreaming: false,
+        streamingContent: '',
         activeTraceSteps: [],
         currentRouting: null
       }));

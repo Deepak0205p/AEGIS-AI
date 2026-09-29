@@ -16,6 +16,8 @@ import {
   ShieldCheck,
   RefreshCw
 } from 'lucide-react';
+import { getApiBase } from '@/lib/apiBase';
+import { apiFetch } from '@/lib/api';
 
 export function DocumentConverterObservatory() {
   const [convertFile, setConvertFile] = useState<File | null>(null);
@@ -33,20 +35,29 @@ export function DocumentConverterObservatory() {
       formData.append('file', convertFile);
       formData.append('target_format', targetFormat);
 
-      const res = await fetch('http://127.0.0.1:8000/api/document-converter/convert', {
+      const res = await apiFetch(`${getApiBase()}/api/document-converter/convert`, {
         method: 'POST',
         body: formData,
       });
       const data = await res.json();
 
       if (data && data.status === 'SUCCESS' && data.download_url) {
-        const downloadUrl = `http://127.0.0.1:8000${data.download_url}`;
+        // Fetch the bytes through apiFetch so the Authorization header is
+        // attached. A bare <a href> cannot carry it, so the download 401'd
+        // while the UI still reported success.
+        const fileRes = await apiFetch(`${getApiBase()}${data.download_url}`);
+        if (!fileRes.ok) {
+          throw new Error(`Download rejected by gateway (HTTP ${fileRes.status})`);
+        }
+        const blob = await fileRes.blob();
+        const objectUrl = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = downloadUrl;
+        a.href = objectUrl;
         a.download = data.filename || `converted.${targetFormat}`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
+        URL.revokeObjectURL(objectUrl);
 
         setConvertStatus(`Conversion successful! Downloaded: ${data.filename}`);
       } else {
@@ -71,11 +82,13 @@ export function DocumentConverterObservatory() {
             <h1 className="text-sm font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
               <span>Universal Document Format Converter</span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-800/50">
-                100% AIR-GAPPED CONVERSION
+                ON-PREMISE CONVERSION
               </span>
             </h1>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              Lossless on-premise conversion between PDF, Word, Excel, PowerPoint, Text, and Markdown without cloud leaks.
+              On-premise conversion between PDF, Word, Excel, PowerPoint and Text.
+              Text is extracted and re-rendered into the target format; source
+              layout is not preserved and long inputs are truncated.
             </p>
           </div>
         </div>
@@ -83,16 +96,16 @@ export function DocumentConverterObservatory() {
         {/* Feature Highlights Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 font-mono text-xs">
           <div className="p-3 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/70 space-y-1">
-            <span className="text-[10px] text-gray-400 uppercase">Engine Engine</span>
-            <div className="font-bold text-gray-900 dark:text-gray-200">Pandoc &amp; LibreOffice Headless</div>
+            <span className="text-[10px] text-gray-400 uppercase">Engine</span>
+            <div className="font-bold text-gray-900 dark:text-gray-200">pypdf + python-docx / openpyxl / python-pptx</div>
           </div>
           <div className="p-3 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/70 space-y-1">
             <span className="text-[10px] text-gray-400 uppercase">Supported Sources</span>
             <div className="font-bold text-cyan-600 dark:text-cyan-400">PDF, DOCX, XLSX, PPTX, CSV, TXT</div>
           </div>
           <div className="p-3 rounded-lg bg-gray-50 dark:bg-[#0c0e14] border border-gray-100 dark:border-gray-800/70 space-y-1">
-            <span className="text-[10px] text-gray-400 uppercase">Confidentiality Guarantee</span>
-            <div className="font-bold text-emerald-600 dark:text-emerald-400">0 Network Egress Bytes</div>
+            <span className="text-[10px] text-gray-400 uppercase">Network Egress</span>
+            <div className="font-bold text-emerald-600 dark:text-emerald-400">Loopback only (enforced by socket guard)</div>
           </div>
         </div>
       </div>

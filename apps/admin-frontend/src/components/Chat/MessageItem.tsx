@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { ChatMessage } from '@/store/useChatStore';
+import { useDeliverableStore } from '@/store/useDeliverableStore';
 import { AgentTraceAccordion } from './AgentTraceAccordion';
 import { RouterTagBadge } from './RouterTagBadge';
 import { User, Sparkles, FileText, Download } from 'lucide-react';
@@ -13,6 +14,7 @@ interface MessageItemProps {
 
 export function MessageItem({ message }: MessageItemProps) {
   const isUser = message.role === 'user';
+  const downloadDeliverable = useDeliverableStore((s) => s.downloadDeliverable);
 
   return (
     <div className={`w-full py-4 border-b border-gray-100/60 flex gap-3 sm:gap-4 ${
@@ -64,6 +66,14 @@ export function MessageItem({ message }: MessageItemProps) {
           {message.content}
         </div>
 
+        {/* Operator aborted this run: the text above is incomplete */}
+        {message.aborted && (
+          <div className="flex items-center gap-2 text-[10px] font-mono text-amber-700 border-t border-amber-200/70 pt-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+            <span>Stopped by operator - response truncated, no final answer was produced.</span>
+          </div>
+        )}
+
         {/* Deliverable Download Chips */}
         {message.deliverable_ids && message.deliverable_ids.length > 0 && (
           <div className="pt-2 flex flex-wrap gap-2">
@@ -74,7 +84,7 @@ export function MessageItem({ message }: MessageItemProps) {
               >
                 <FileText className="h-3.5 w-3.5 text-blue-600" />
                 <span className="text-gray-900 font-medium">{delivId}</span>
-                <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px] text-blue-600 hover:text-gray-900 hover:bg-blue-600/20 rounded transition-colors">
+                <Button size="sm" variant="ghost" onClick={() => downloadDeliverable(delivId)} className="h-6 px-2 text-[10px] text-blue-600 hover:text-gray-900 hover:bg-blue-600/20 rounded transition-colors cursor-pointer">
                   <Download className="h-3 w-3 mr-1" />
                   Download
                 </Button>

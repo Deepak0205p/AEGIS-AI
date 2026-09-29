@@ -43,7 +43,8 @@ export function VerificationNotificationModal() {
     stage2Count,
     totalPending,
     selectedFilter,
-    setSelectedFilter
+    setSelectedFilter,
+    lastError
   } = useVerificationStore();
 
   const { user } = useAuthStore();
@@ -71,10 +72,20 @@ export function VerificationNotificationModal() {
 
   if (!isModalOpen) return null;
 
-  // Role permissions check
+  // Role permissions. These mirror the server-side gate exactly:
+  //   Step 1  -> PROCESS_LEAD, MAINTENANCE_ENG, SUPER_ADMIN/ADMIN
+  //   Step 2  -> SUPER_ADMIN/ADMIN only (a FIELD_OPERATOR can never sign off)
+  //   Reject  -> any verification-capable role
   const userRole = user?.role || 'FIELD_OPERATOR';
-  const canVerifyStage1 = ['PROCESS_LEAD', 'MAINTENANCE_ENG', 'SUPER_ADMIN'].includes(userRole);
-  const canVerifyStage2 = ['SUPER_ADMIN', 'FIELD_OPERATOR'].includes(userRole);
+  const canVerifyStage1 = ['PROCESS_LEAD', 'MAINTENANCE_ENG', 'SUPER_ADMIN', 'ADMIN'].includes(userRole);
+  const canVerifyStage2 = ['SUPER_ADMIN', 'ADMIN'].includes(userRole);
+  const canReject = ['PROCESS_LEAD', 'MAINTENANCE_ENG', 'SUPER_ADMIN', 'ADMIN'].includes(userRole);
+  // Whether the signed-in role may act on the item currently open.
+  const canActOnActiveItem = activeItem?.verification_status === 'PENDING_STAGE_1'
+    ? canVerifyStage1
+    : activeItem?.verification_status === 'PENDING_STAGE_2'
+    ? canVerifyStage2
+    : false;
 
   const filteredItems = pendingItems.filter((item) => {
     if (selectedFilter === 'ALL') return true;
@@ -143,10 +154,17 @@ export function VerificationNotificationModal() {
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Multi-stage regulatory sign-off & technical peer approval for industrial documents
+                Multi-stage regulatory sign-off &amp; technical peer approval for industrial documents
               </p>
             </div>
           </div>
+
+          {/* Server-reported failure (auth denied, wrong stage, etc.) */}
+          {lastError && (
+            <div className="mx-6 mb-2 px-3 py-2 rounded-lg bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 text-[11px] font-mono text-rose-700 dark:text-rose-400">
+              {lastError}
+            </div>
+          )}
 
           <div className="flex items-center gap-2">
             <button
@@ -406,7 +424,9 @@ export function VerificationNotificationModal() {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => setRejectPromptItem(activeItem)}
-                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-500/10 dark:hover:bg-rose-500/20 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-500/30 text-xs font-bold transition-all cursor-pointer"
+                      disabled={isActing || !canReject}
+                      title={canReject ? undefined : `Your role (${userRole}) cannot reject documents.`}
+                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-500/10 dark:hover:bg-rose-500/20 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-500/30 text-xs font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <XCircle className="h-4 w-4" />
                       <span>Reject Document</span>
@@ -414,8 +434,11 @@ export function VerificationNotificationModal() {
 
                     <button
                       onClick={() => handleApprove(activeItem)}
-                      disabled={isActing}
-                      className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition-all cursor-pointer disabled:opacity-50"
+                      disabled={isActing || !canActOnActiveItem}
+                      title={canActOnActiveItem
+                        ? undefined
+                        : `Step ${activeItem.verification_status === 'PENDING_STAGE_2' ? '2' : '1'} approval requires a higher role than yours (${userRole}).`}
+                      className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
                     >
                       <CheckCircle2 className="h-4 w-4" />
                       <span>
@@ -425,6 +448,11 @@ export function VerificationNotificationModal() {
                       </span>
                     </button>
                   </div>
+                  {!canActOnActiveItem && (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400 font-mono">
+                      Read-only: this stage requires an authorised verifier, not your role ({userRole}).
+                    </p>
+                  )}
                 </div>
               </div>
             ) : (

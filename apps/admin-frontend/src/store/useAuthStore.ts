@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { getApiBase } from '@/lib/apiBase';
 
 export interface AuthUser {
   username: string;
@@ -44,8 +45,6 @@ interface AuthState {
   initializeAuth: () => Promise<void>;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
-
 export const useAuthStore = create<AuthState>((set, get) => ({
   token: null,
   user: null,
@@ -83,7 +82,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
+      const res = await fetch(`${getApiBase()}/api/v1/auth/me`, {
         headers: {
           Authorization: `Bearer ${savedToken}`,
         },
@@ -117,91 +116,39 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   loginWithCert: async (certPem: string, pin?: string) => {
-    set({ isLoading: true, error: null });
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/cert-login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ certificate_pem: certPem, pin: pin || undefined }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        const errMsg = data.detail || 'SmartCard / Certificate validation failed.';
-        set({ error: errMsg, isLoading: false });
-        return false;
-      }
-
-      const token = data.access_token;
-      const user = data.user;
-
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('reveal_auth_token', token);
-        localStorage.setItem('reveal_auth_method', 'PKI_SMARTCARD');
-      }
-
-      set({
-        token,
-        user,
-        isAuthenticated: true,
-        isLoading: false,
-        authMethod: 'PKI_SMARTCARD',
-        error: null,
-      });
-      return true;
-    } catch (err: any) {
-      const msg = err.message || 'Network error connecting to Sovereign Auth Gateway.';
-      set({ error: msg, isLoading: false });
-      return false;
-    }
+    // PKI / smartcard login is not implemented by the gateway: there is no
+    // /api/v1/auth/cert-login handler, so this used to 404 and surface a
+    // confusing "Not Found". Fail with an honest message instead of pretending
+    // the credential was rejected.
+    void certPem;
+    void pin;
+    set({
+      error:
+        'Smartcard / PKI login is not enabled on this gateway. Use the local ' +
+        'account login (admin, operator, engineer or lead).',
+      isLoading: false,
+    });
+    return false;
   },
 
   loginWithLdap: async (username: string, password: string) => {
-    set({ isLoading: true, error: null });
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/ldap-login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        const errMsg = data.detail || 'Active Directory / LDAP authentication failed.';
-        set({ error: errMsg, isLoading: false });
-        return false;
-      }
-
-      const token = data.access_token;
-      const user = data.user;
-
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('reveal_auth_token', token);
-        localStorage.setItem('reveal_auth_method', 'INTRANET_LDAP');
-      }
-
-      set({
-        token,
-        user,
-        isAuthenticated: true,
-        isLoading: false,
-        authMethod: 'INTRANET_LDAP',
-        error: null,
-      });
-      return true;
-    } catch (err: any) {
-      const msg = err.message || 'Network error connecting to Intranet LDAP Gateway.';
-      set({ error: msg, isLoading: false });
-      return false;
-    }
+    // LDAP bind is not implemented by the gateway: there is no
+    // /api/v1/auth/ldap-login handler, so this used to 404 with "Not Found".
+    void username;
+    void password;
+    set({
+      error:
+        'Intranet LDAP / Active Directory login is not enabled on this ' +
+        'gateway. Use the local account login (admin, operator, engineer or lead).',
+      isLoading: false,
+    });
+    return false;
   },
 
   loginWithStandard: async (username: string, password: string) => {
     set({ isLoading: true, error: null });
     try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+      const res = await fetch(`${getApiBase()}/api/v1/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -259,7 +206,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!token) return;
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
+      const res = await fetch(`${getApiBase()}/api/v1/auth/me`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -281,18 +228,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
-    const token = get().token || (typeof window !== 'undefined' ? localStorage.getItem('reveal_auth_token') : null);
-    if (token) {
-      try {
-        await fetch(`${API_BASE}/api/v1/auth/logout`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-      } catch (err) {
-        console.warn('Logout notification error:', err);
-      }
-    }
-
+    // Session tokens are stateless HMAC assertions, so there is no server-side
+    // session to revoke: the credential stays valid until it expires or the
+    // signing secret changes. Logout is therefore a local-only operation, and
+    // we no longer POST to a /logout route that does not exist.
     if (typeof window !== 'undefined') {
       localStorage.removeItem('reveal_auth_token');
       localStorage.removeItem('reveal_auth_method');

@@ -1,240 +1,265 @@
-"""
+﻿"""
 Database and Conversation History Manager for Air-Gapped Local AI.
-Implements XAMPP MySQL (MariaDB) persistence, 10-message windowing,
-cached summaries for older turns, and context trimming to respect NUM_CTX limits.
+
+Persistence is dialect-agnostic: **PostgreSQL** is the default target and
+**MySQL/MariaDB** (XAMPP) remains supported. All engine-specific SQL lives in
+`backend/db_dialect.py`; this module holds the schema definition and the query
+logic, both of which are written once.
+
+Provides conversation history, rolling summaries, the 2-step human verification
+workflow for deliverables, feedback reports, plant team collaboration channels,
+and the security activity ledger.
 """
 
 import json
 import os
 import re
 import time
-import uuid
-import pymysql
-import pymysql.cursors
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
 from backend.config import (
+    DB_DRIVER,
+    DB_LABEL,
+    IS_POSTGRES,
+    MYSQL_DB,
     MYSQL_HOST,
     MYSQL_PORT,
     MYSQL_USER,
-    MYSQL_PASSWORD,
-    MYSQL_DB,
     NUM_CTX,
+    PG_DB,
+    PG_HOST,
+    PG_PORT,
+    PG_USER,
     logger,
+)
+from backend.db_dialect import (
+    Column,
+    add_column,
+    bool_param,
+    case_insensitive_like,
+    create_index,
+    create_table,
+    ensure_database_exists,
+    epoch_seconds,
+    get_db_connection,
+    insert_ignore,
+    insert_returning_id,
+    substring,
+    upsert,
 )
 
 
-def get_db_connection() -> pymysql.Connection:
-    """Returns a connection to the XAMPP MySQL database with DictCursor."""
-    return pymysql.connect(
-        host=MYSQL_HOST,
-        port=MYSQL_PORT,
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD,
-        database=MYSQL_DB,
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-        autocommit=True
-    )
+def _ensure_column(cursor, table: str, column: str, column_def: str) -> None:
+    """Backwards-compatible wrapper around the dialect-aware column adder."""
+    add_column(cursor, table, column, column_def)
+
+
+def _ts() -> str:
+    """
+    Portable timestamp column type.
+
+    MySQL DATETIME has no timezone; PostgreSQL TIMESTAMP is timezone-aware while
+    TIMESTAMPTZ would change the Python objects returned to callers. Plain
+    TIMESTAMP is used so `str(row["created_at"])` stays identical across drivers.
+    """
+    return "TIMESTAMP"
+
+
+# Columns added after the initial `files` CREATE so older installs pick them up.
+# `is_important` is a real BOOLEAN on PostgreSQL, not TINYINT(1).
+_FILES_MIGRATION_COLUMNS = [
+    ("is_important", "BOOLEAN DEFAULT FALSE" if IS_POSTGRES else "TINYINT(1) DEFAULT 0"),
+    ("verification_status", "VARCHAR(32) DEFAULT 'PENDING_STAGE_1'"),
+    ("stage_1_verifier", "VARCHAR(64) DEFAULT NULL"),
+    ("stage_1_at", f"{_ts()} DEFAULT NULL"),
+    ("stage_1_notes", "TEXT DEFAULT NULL"),
+    ("stage_2_verifier", "VARCHAR(64) DEFAULT NULL"),
+    ("stage_2_at", f"{_ts()} DEFAULT NULL"),
+    ("stage_2_notes", "TEXT DEFAULT NULL"),
+    ("rejected_by", "VARCHAR(64) DEFAULT NULL"),
+    ("rejected_at", f"{_ts()} DEFAULT NULL"),
+    ("reject_reason", "TEXT DEFAULT NULL"),
+    ("sha256_hash", "VARCHAR(64) DEFAULT NULL"),
+    ("size_bytes", "BIGINT DEFAULT NULL"),
+    ("updated_at", f"{_ts()} DEFAULT NULL"),
+]
+
+
+def _init_schema(cursor) -> None:
+    """
+    Creates every table and index if absent.
+
+    Written once against the portable `Column` spec; `db_dialect` renders the
+    identity columns, table options and index statements per engine.
+    """
+    # ── messages ────────────────────────────────────────────────────────
+    create_table(cursor, "messages", [
+        Column("id", "INT", identity=True),
+        Column("chat_id", "VARCHAR(128)", not_null=True),
+        Column("role", "VARCHAR(32)", not_null=True),
+        Column("content", "TEXT", "LONGTEXT", not_null=True),
+        Column("mode", "VARCHAR(32)", not_null=True),
+        Column("timestamp", _ts(), "DATETIME", default="CURRENT_TIMESTAMP"),
+    ])
+    create_index(cursor, "messages", "idx_chat_id", ["chat_id"])
+
+    # ── chat_summaries ──────────────────────────────────────────────────
+    create_table(cursor, "chat_summaries", [
+        Column("chat_id", "VARCHAR(128)", not_null=True),
+        Column("summary", "TEXT", not_null=True),
+        Column("last_msg_id", "INT", not_null=True),
+        Column("updated_at", _ts(), "DATETIME", default="CURRENT_TIMESTAMP"),
+    ], primary_key=["chat_id"])
+    if not IS_POSTGRES:
+        # Preserve the legacy MySQL auto-touch semantics for existing installs.
+        # PostgreSQL has no ON UPDATE CURRENT_TIMESTAMP, so `updated_at` is
+        # stamped explicitly in save_cached_summary() on both paths.
+        try:
+            cursor.execute(
+                "ALTER TABLE `chat_summaries` MODIFY updated_at DATETIME "
+                "DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+            )
+        except Exception:
+            pass
+
+    # ── files (generated deliverables + verification state) ─────────────
+    create_table(cursor, "files", [
+        Column("file_id", "VARCHAR(64)", not_null=True),
+        Column("chat_id", "VARCHAR(128)", not_null=True),
+        Column("filename", "VARCHAR(255)", not_null=True),
+        Column("file_type", "VARCHAR(32)", not_null=True),
+        Column("file_path", "TEXT", not_null=True),
+        Column("verification_status", "VARCHAR(32)", default="'PENDING_STAGE_1'"),
+        Column("stage_1_verifier", "VARCHAR(64)"),
+        Column("stage_1_at", _ts(), "DATETIME"),
+        Column("stage_1_notes", "TEXT"),
+        Column("stage_2_verifier", "VARCHAR(64)"),
+        Column("stage_2_at", _ts(), "DATETIME"),
+        Column("stage_2_notes", "TEXT"),
+        Column("rejected_by", "VARCHAR(64)"),
+        Column("rejected_at", _ts(), "DATETIME"),
+        Column("reject_reason", "TEXT"),
+        Column("created_at", _ts(), "DATETIME", default="CURRENT_TIMESTAMP"),
+    ], primary_key=["file_id"])
+    create_index(cursor, "files", "idx_files_chat_id", ["chat_id"])
+    create_index(cursor, "files", "idx_files_status", ["verification_status"])
+    for col_name, col_def in _FILES_MIGRATION_COLUMNS:
+        add_column(cursor, "files", col_name, col_def)
+
+    # ── feedback_reports ────────────────────────────────────────────────
+    create_table(cursor, "feedback_reports", [
+        Column("id", "INT", identity=True),
+        Column("report_type", "VARCHAR(32)", not_null=True),
+        Column("user_id", "VARCHAR(64)"),
+        Column("username", "VARCHAR(64)", default="'operator'"),
+        Column("chat_id", "VARCHAR(128)"),
+        Column("message_id", "VARCHAR(64)"),
+        Column("message_content", "TEXT", "LONGTEXT"),
+        Column("category", "VARCHAR(64)", default="'GENERAL'"),
+        Column("title", "VARCHAR(255)", not_null=True),
+        Column("description", "TEXT", "LONGTEXT", not_null=True),
+        Column("suggested_fix", "TEXT", "LONGTEXT"),
+        Column("status", "VARCHAR(32)", default="'OPEN'"),
+        Column("admin_notes", "TEXT", "LONGTEXT"),
+        Column("admin_response", "TEXT", "LONGTEXT"),
+        Column("resolved_by", "VARCHAR(64)"),
+        Column("resolved_at", _ts(), "DATETIME"),
+        Column("created_at", _ts(), "DATETIME", default="CURRENT_TIMESTAMP"),
+        Column("updated_at", _ts(), "DATETIME", default="CURRENT_TIMESTAMP"),
+    ])
+    create_index(cursor, "feedback_reports", "idx_fb_type", ["report_type"])
+    create_index(cursor, "feedback_reports", "idx_fb_status", ["status"])
+    create_index(cursor, "feedback_reports", "idx_fb_created", ["created_at"])
+
+    # ── chat_channels ───────────────────────────────────────────────────
+    create_table(cursor, "chat_channels", [
+        Column("id", "VARCHAR(64)", not_null=True),
+        Column("name", "VARCHAR(128)", not_null=True),
+        Column("channel_type", "VARCHAR(32)", default="'CHANNEL'"),
+        Column("description", "TEXT"),
+        Column("department", "VARCHAR(64)", default="'ALL'"),
+        Column("created_by", "VARCHAR(64)", default="'system'"),
+        Column("created_at", _ts(), "DATETIME", default="CURRENT_TIMESTAMP"),
+    ], primary_key=["id"])
+
+    # ── channel_members ─────────────────────────────────────────────────
+    create_table(cursor, "channel_members", [
+        Column("id", "INT", identity=True),
+        Column("channel_id", "VARCHAR(64)", not_null=True),
+        Column("username", "VARCHAR(64)", not_null=True),
+        Column("role", "VARCHAR(64)", default="'OPERATOR'"),
+        Column("joined_at", _ts(), "DATETIME", default="CURRENT_TIMESTAMP"),
+    ], uniques=[["channel_id", "username"]])
+    create_index(cursor, "channel_members", "idx_mem_chan", ["channel_id"])
+    create_index(cursor, "channel_members", "idx_mem_user", ["username"])
+
+    # ── channel_messages ────────────────────────────────────────────────
+    create_table(cursor, "channel_messages", [
+        Column("id", "INT", identity=True),
+        Column("channel_id", "VARCHAR(64)", not_null=True),
+        Column("sender_username", "VARCHAR(64)", not_null=True),
+        Column("sender_role", "VARCHAR(64)", default="'OPERATOR'"),
+        Column("content", "TEXT", "LONGTEXT", not_null=True),
+        Column("message_type", "VARCHAR(32)", default="'TEXT'"),
+        Column("file_id", "VARCHAR(64)"),
+        Column("file_name", "VARCHAR(255)"),
+        Column("file_type", "VARCHAR(64)"),
+        Column("file_size", "INT"),
+        Column("file_url", "TEXT"),
+        Column("created_at", _ts(), "DATETIME", default="CURRENT_TIMESTAMP"),
+    ])
+    create_index(cursor, "channel_messages", "idx_cmsg_chan", ["channel_id"])
+    create_index(cursor, "channel_messages", "idx_cmsg_created", ["created_at"])
+
+    # ── user_activity_logs (security audit ledger) ──────────────────────
+    create_table(cursor, "user_activity_logs", [
+        Column("id", "INT", identity=True),
+        Column("username", "VARCHAR(64)", not_null=True),
+        Column("role", "VARCHAR(64)", default="'OPERATOR'"),
+        Column("activity_type", "VARCHAR(64)", not_null=True),
+        Column("channel_or_chat_id", "VARCHAR(128)"),
+        Column("query_text", "TEXT", "LONGTEXT"),
+        Column("details", "TEXT", "LONGTEXT"),
+        Column("file_meta", "TEXT", "LONGTEXT"),
+        Column("ip_address", "VARCHAR(64)", default="'127.0.0.1'"),
+        Column("risk_level", "VARCHAR(32)", default="'NORMAL'"),
+        Column("created_at", _ts(), "DATETIME", default="CURRENT_TIMESTAMP"),
+    ])
+    create_index(cursor, "user_activity_logs", "idx_act_user", ["username"])
+    create_index(cursor, "user_activity_logs", "idx_act_type", ["activity_type"])
+    create_index(cursor, "user_activity_logs", "idx_act_risk", ["risk_level"])
+    create_index(cursor, "user_activity_logs", "idx_act_created", ["created_at"])
 
 
 def init_db():
-    """Initializes XAMPP MySQL database schema and migrates existing SQLite data if present."""
-    # 1. Ensure database exists
-    root_conn = pymysql.connect(
-        host=MYSQL_HOST,
-        port=MYSQL_PORT,
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD,
-        charset="utf8mb4",
-        autocommit=True
-    )
-    with root_conn.cursor() as cur:
-        cur.execute(f"CREATE DATABASE IF NOT EXISTS `{MYSQL_DB}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
-    root_conn.close()
+    """Creates the database (if absent) and applies the full schema."""
+    ensure_database_exists()
 
-    # 2. Initialize schema tables
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        # Messages table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                chat_id VARCHAR(128) NOT NULL,
-                role VARCHAR(32) NOT NULL,
-                content LONGTEXT NOT NULL,
-                mode VARCHAR(32) NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_chat_id (chat_id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
+    try:
+        with conn.cursor() as cursor:
+            _init_schema(cursor)
+    finally:
+        conn.close()
 
-        # Chat summary cache table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS chat_summaries (
-                chat_id VARCHAR(128) PRIMARY KEY,
-                summary TEXT NOT NULL,
-                last_msg_id INT NOT NULL,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-
-        # Generated deliverable files registry with 2-step human verification columns
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS files (
-                file_id VARCHAR(64) PRIMARY KEY,
-                chat_id VARCHAR(128) NOT NULL,
-                filename VARCHAR(255) NOT NULL,
-                file_type VARCHAR(32) NOT NULL,
-                file_path TEXT NOT NULL,
-                verification_status VARCHAR(32) DEFAULT 'PENDING_STAGE_1',
-                stage_1_verifier VARCHAR(64) DEFAULT NULL,
-                stage_1_at DATETIME DEFAULT NULL,
-                stage_1_notes TEXT DEFAULT NULL,
-                stage_2_verifier VARCHAR(64) DEFAULT NULL,
-                stage_2_at DATETIME DEFAULT NULL,
-                stage_2_notes TEXT DEFAULT NULL,
-                rejected_by VARCHAR(64) DEFAULT NULL,
-                rejected_at DATETIME DEFAULT NULL,
-                reject_reason TEXT DEFAULT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_files_chat_id (chat_id),
-                INDEX idx_files_status (verification_status)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-
-        # Feedback & Error Reports table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS feedback_reports (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                report_type VARCHAR(32) NOT NULL, -- 'ERROR' | 'SUGGESTION'
-                user_id VARCHAR(64) DEFAULT NULL,
-                username VARCHAR(64) DEFAULT 'operator',
-                chat_id VARCHAR(128) DEFAULT NULL,
-                message_id VARCHAR(64) DEFAULT NULL,
-                message_content LONGTEXT DEFAULT NULL,
-                category VARCHAR(64) DEFAULT 'GENERAL',
-                title VARCHAR(255) NOT NULL,
-                description LONGTEXT NOT NULL,
-                suggested_fix LONGTEXT DEFAULT NULL,
-                status VARCHAR(32) DEFAULT 'OPEN', -- 'OPEN', 'IN_REVIEW', 'RESOLVED', 'REJECTED'
-                admin_notes LONGTEXT DEFAULT NULL,
-                admin_response LONGTEXT DEFAULT NULL,
-                resolved_by VARCHAR(64) DEFAULT NULL,
-                resolved_at DATETIME DEFAULT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                INDEX idx_fb_type (report_type),
-                INDEX idx_fb_status (status),
-                INDEX idx_fb_created (created_at)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-
-        # Collaboration Channels table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS chat_channels (
-                id VARCHAR(64) PRIMARY KEY,
-                name VARCHAR(128) NOT NULL,
-                channel_type VARCHAR(32) DEFAULT 'CHANNEL', -- 'CHANNEL' or 'DM'
-                description TEXT DEFAULT NULL,
-                department VARCHAR(64) DEFAULT 'ALL',
-                created_by VARCHAR(64) DEFAULT 'system',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-
-        # Channel Members table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS channel_members (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                channel_id VARCHAR(64) NOT NULL,
-                username VARCHAR(64) NOT NULL,
-                role VARCHAR(64) DEFAULT 'OPERATOR',
-                joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_chan_user (channel_id, username),
-                INDEX idx_mem_chan (channel_id),
-                INDEX idx_mem_user (username)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-
-        # Channel Messages table (supports text, file attachments, and AI @aegis responses)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS channel_messages (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                channel_id VARCHAR(64) NOT NULL,
-                sender_username VARCHAR(64) NOT NULL,
-                sender_role VARCHAR(64) DEFAULT 'OPERATOR',
-                content LONGTEXT NOT NULL,
-                message_type VARCHAR(32) DEFAULT 'TEXT', -- 'TEXT', 'FILE', 'AI_RESPONSE', 'SYSTEM'
-                file_id VARCHAR(64) DEFAULT NULL,
-                file_name VARCHAR(255) DEFAULT NULL,
-                file_type VARCHAR(64) DEFAULT NULL,
-                file_size INT DEFAULT NULL,
-                file_url TEXT DEFAULT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_cmsg_chan (channel_id),
-                INDEX idx_cmsg_created (created_at)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-
-        # User Activity & Security Monitoring Table (tracks searches, chat, file uploads, anomalous activities)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_activity_logs (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                username VARCHAR(64) NOT NULL,
-                role VARCHAR(64) DEFAULT 'OPERATOR',
-                activity_type VARCHAR(64) NOT NULL, -- 'CHAT_QUERY', 'SEARCH_RAG', 'FILE_UPLOAD', 'FILE_DOWNLOAD', 'CHANNEL_MSG', 'LOGIN', 'SECURITY_TRIGGER'
-                channel_or_chat_id VARCHAR(128) DEFAULT NULL,
-                query_text LONGTEXT DEFAULT NULL,
-                details LONGTEXT DEFAULT NULL,
-                file_meta LONGTEXT DEFAULT NULL,
-                ip_address VARCHAR(64) DEFAULT '127.0.0.1',
-                risk_level VARCHAR(32) DEFAULT 'NORMAL', -- 'NORMAL', 'SUSPICIOUS', 'CRITICAL'
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_act_user (username),
-                INDEX idx_act_type (activity_type),
-                INDEX idx_act_risk (risk_level),
-                INDEX idx_act_created (created_at)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-
-
-
-        # Run safe migrations for existing tables if columns are missing
-        columns_to_add = [
-            ("is_important", "TINYINT(1) DEFAULT 0"),
-            ("verification_status", "VARCHAR(32) DEFAULT 'PENDING_STAGE_1'"),
-            ("stage_1_verifier", "VARCHAR(64) DEFAULT NULL"),
-            ("stage_1_at", "DATETIME DEFAULT NULL"),
-            ("stage_1_notes", "TEXT DEFAULT NULL"),
-            ("stage_2_verifier", "VARCHAR(64) DEFAULT NULL"),
-            ("stage_2_at", "DATETIME DEFAULT NULL"),
-            ("stage_2_notes", "TEXT DEFAULT NULL"),
-            ("rejected_by", "VARCHAR(64) DEFAULT NULL"),
-            ("rejected_at", "DATETIME DEFAULT NULL"),
-            ("reject_reason", "TEXT DEFAULT NULL"),
-        ]
-        for col_name, col_def in columns_to_add:
-            try:
-                cursor.execute(f"ALTER TABLE files ADD COLUMN {col_name} {col_def};")
-            except Exception:
-                pass  # Column already exists
-    conn.close()
-    logger.info(f"XAMPP MySQL database '{MYSQL_DB}' initialized on {MYSQL_HOST}:{MYSQL_PORT}")
+    logger.info(f"Database initialized: {DB_LABEL}")
 
 
 def save_message(chat_id: str, role: str, content: str, mode: str = "chat") -> int:
-    """Persists a message to XAMPP MySQL."""
+    """Persists a message to the configured database."""
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "INSERT INTO messages (chat_id, role, content, mode) VALUES (%s, %s, %s, %s)",
-            (chat_id, role, content, mode)
-        )
-        msg_id = cursor.lastrowid
-    conn.close()
+    try:
+        with conn.cursor() as cursor:
+            msg_id = insert_returning_id(
+                cursor,
+                "INSERT INTO messages (chat_id, role, content, mode) "
+                "VALUES (%s, %s, %s, %s)",
+                (chat_id, role, content, mode),
+            )
+    finally:
+        conn.close()
     return msg_id
 
 
@@ -304,21 +329,42 @@ def get_cached_summary(chat_id: str) -> Optional[Tuple[str, int]]:
 
 
 def save_cached_summary(chat_id: str, summary: str, last_msg_id: int):
-    """Caches conversation summary in XAMPP MySQL."""
+    """Caches the rolling conversation summary for a chat."""
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO chat_summaries (chat_id, summary, last_msg_id, updated_at)
-            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-            ON DUPLICATE KEY UPDATE
-                summary=VALUES(summary),
-                last_msg_id=VALUES(last_msg_id),
-                updated_at=CURRENT_TIMESTAMP
-            """,
-            (chat_id, summary, last_msg_id)
-        )
-    conn.close()
+    try:
+        with conn.cursor() as cursor:
+            upsert(
+                cursor,
+                "chat_summaries",
+                {
+                    "chat_id": chat_id,
+                    "summary": summary,
+                    "last_msg_id": last_msg_id,
+                    # Stamped explicitly: PostgreSQL has no ON UPDATE
+                    # CURRENT_TIMESTAMP, so relying on the column default here
+                    # would leave updated_at stale on an update.
+                    "updated_at": "CURRENT_TIMESTAMP",
+                },
+                conflict_columns=["chat_id"],
+                update_columns=["summary", "last_msg_id", "updated_at"],
+                raw_columns=["updated_at"],
+            )
+    finally:
+        conn.close()
+
+
+def file_integrity(file_path: Any) -> Tuple[Optional[str], Optional[int]]:
+    """Returns (sha256_hash, size_bytes) for a deliverable on disk, or (None, None)."""
+    import hashlib
+
+    try:
+        path = Path(str(file_path))
+        if not path.exists() or not path.is_file():
+            return None, None
+        raw = path.read_bytes()
+        return hashlib.sha256(raw).hexdigest(), len(raw)
+    except Exception:
+        return None, None
 
 
 def save_file_record(
@@ -330,23 +376,39 @@ def save_file_record(
     verification_status: str = "PENDING_STAGE_1",
     is_important: bool = True
 ):
-    """Registers a generated deliverable file in XAMPP MySQL."""
+    """Registers a generated deliverable file."""
+    sha256_hash, size_bytes = file_integrity(file_path)
+
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO files (file_id, chat_id, filename, file_type, file_path, verification_status, is_important)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-                filename=VALUES(filename),
-                file_type=VALUES(file_type),
-                file_path=VALUES(file_path),
-                verification_status=VALUES(verification_status),
-                is_important=VALUES(is_important)
-            """,
-            (file_id, chat_id, filename, file_type, str(file_path), verification_status, 1 if is_important else 0)
-        )
-    conn.close()
+    try:
+        with conn.cursor() as cursor:
+            upsert(
+                cursor,
+                "files",
+                {
+                    "file_id": file_id,
+                    "chat_id": chat_id,
+                    "filename": filename,
+                    "file_type": file_type,
+                    "file_path": str(file_path),
+                    "verification_status": verification_status,
+                    "is_important": bool_param(is_important),
+                    "sha256_hash": sha256_hash,
+                    "size_bytes": size_bytes,
+                    "updated_at": "CURRENT_TIMESTAMP",
+                },
+                conflict_columns=["file_id"],
+                update_columns=[
+                    "filename", "file_type", "file_path", "verification_status",
+                    "is_important", "sha256_hash", "size_bytes", "updated_at",
+                ],
+                # A genuine hash/size must never be replaced by a NULL that
+                # results from the file being temporarily unreadable.
+                coalesce_columns=["sha256_hash", "size_bytes"],
+                raw_columns=["updated_at"],
+            )
+    finally:
+        conn.close()
 
 
 def get_file_record(file_id: str) -> Optional[Dict[str, Any]]:
@@ -384,20 +446,49 @@ def get_pending_verifications(user_role: Optional[str] = None) -> List[Dict[str,
         Items in 'PENDING_STAGE_2' (and review pipeline overview)
     """
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        if user_role == "SUPER_ADMIN":
-            cursor.execute("SELECT * FROM files WHERE is_important = 1 AND verification_status IN ('PENDING_STAGE_2', 'PENDING_STAGE_1') ORDER BY FIELD(verification_status, 'PENDING_STAGE_2', 'PENDING_STAGE_1'), created_at DESC")
-        elif user_role in ("PROCESS_LEAD", "MAINTENANCE_ENG", "FIELD_OPERATOR"):
-            cursor.execute("SELECT * FROM files WHERE is_important = 1 AND verification_status = 'PENDING_STAGE_1' ORDER BY created_at DESC")
-        else:
-            cursor.execute("SELECT * FROM files WHERE is_important = 1 AND verification_status IN ('PENDING_STAGE_1', 'PENDING_STAGE_2') ORDER BY created_at DESC")
-        rows = cursor.fetchall()
-    conn.close()
+    try:
+        with conn.cursor() as cursor:
+            if user_role == "SUPER_ADMIN":
+                # MySQL's FIELD(x,'a','b') has no PostgreSQL equivalent, so the
+                # ordering is expressed as a portable CASE. Stage 2 first.
+                if IS_POSTGRES:
+                    order = ("CASE verification_status "
+                             "WHEN 'PENDING_STAGE_2' THEN 0 "
+                             "WHEN 'PENDING_STAGE_1' THEN 1 ELSE 2 END")
+                else:
+                    order = "FIELD(verification_status, 'PENDING_STAGE_2', 'PENDING_STAGE_1')"
+                cursor.execute(
+                    "SELECT * FROM files WHERE is_important = %s "
+                    "AND verification_status IN ('PENDING_STAGE_2', 'PENDING_STAGE_1') "
+                    f"ORDER BY {order}, created_at DESC",
+                    (bool_param(True),),
+                )
+            elif user_role in ("PROCESS_LEAD", "MAINTENANCE_ENG", "FIELD_OPERATOR"):
+                cursor.execute(
+                    "SELECT * FROM files WHERE is_important = %s "
+                    "AND verification_status = 'PENDING_STAGE_1' ORDER BY created_at DESC",
+                    (bool_param(True),),
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM files WHERE is_important = %s "
+                    "AND verification_status IN ('PENDING_STAGE_1', 'PENDING_STAGE_2') "
+                    "ORDER BY created_at DESC",
+                    (bool_param(True),),
+                )
+            rows = cursor.fetchall()
+    finally:
+        conn.close()
     return [dict(r) for r in rows]
 
 
 def verify_file_stage_1(file_id: str, verifier: str, notes: str = "") -> bool:
-    """Stage 1 approval: Transitions file from PENDING_STAGE_1 to PENDING_STAGE_2."""
+    """Stage 1 approval: Transitions file from PENDING_STAGE_1 to PENDING_STAGE_2.
+
+    The status guard is part of the WHERE clause and rowcount is checked, so a
+    caller cannot skip Stage 1 (or approve a nonexistent file) and still be
+    told the transition succeeded.
+    """
     conn = get_db_connection()
     with conn.cursor() as cursor:
         cursor.execute(
@@ -407,16 +498,21 @@ def verify_file_stage_1(file_id: str, verifier: str, notes: str = "") -> bool:
                 stage_1_verifier = %s,
                 stage_1_at = CURRENT_TIMESTAMP,
                 stage_1_notes = %s
-            WHERE file_id = %s
+            WHERE file_id = %s AND verification_status = 'PENDING_STAGE_1'
             """,
             (verifier, notes, file_id)
         )
+        updated = cursor.rowcount
     conn.close()
-    return True
+    return updated > 0
 
 
 def verify_file_stage_2(file_id: str, verifier: str, notes: str = "") -> bool:
-    """Stage 2 approval: Final sign-off transition from PENDING_STAGE_2 to VERIFIED."""
+    """Stage 2 approval: Final sign-off transition from PENDING_STAGE_2 to VERIFIED.
+
+    Only a file that actually reached PENDING_STAGE_2 can be signed off, so the
+    Lower-Post -> Higher-Post hierarchy cannot be short-circuited.
+    """
     conn = get_db_connection()
     with conn.cursor() as cursor:
         cursor.execute(
@@ -426,16 +522,22 @@ def verify_file_stage_2(file_id: str, verifier: str, notes: str = "") -> bool:
                 stage_2_verifier = %s,
                 stage_2_at = CURRENT_TIMESTAMP,
                 stage_2_notes = %s
-            WHERE file_id = %s
+            WHERE file_id = %s AND verification_status = 'PENDING_STAGE_2'
             """,
             (verifier, notes, file_id)
         )
+        updated = cursor.rowcount
     conn.close()
-    return True
+    return updated > 0
 
 
 def reject_file(file_id: str, rejected_by: str, reason: str = "") -> bool:
-    """Rejects deliverable file with reason."""
+    """Rejects deliverable file with reason.
+
+    An already-VERIFIED file is not silently downgraded: a rejection only
+    applies to a file that is still awaiting sign-off. Returns False when the
+    file does not exist or is not in a rejectable state.
+    """
     conn = get_db_connection()
     with conn.cursor() as cursor:
         cursor.execute(
@@ -446,11 +548,13 @@ def reject_file(file_id: str, rejected_by: str, reason: str = "") -> bool:
                 rejected_at = CURRENT_TIMESTAMP,
                 reject_reason = %s
             WHERE file_id = %s
+              AND verification_status IN ('PENDING_STAGE_1', 'PENDING_STAGE_2')
             """,
             (rejected_by, reason, file_id)
         )
+        updated = cursor.rowcount
     conn.close()
-    return True
+    return updated > 0
 
 
 def rename_file_record(file_id: str, new_filename: str) -> bool:
@@ -462,31 +566,100 @@ def rename_file_record(file_id: str, new_filename: str) -> bool:
     old_path = Path(record["file_path"])
     new_path = old_path
     
-    # Clean new filename
+    # Clean new filename. A blank/whitespace name must be rejected outright:
+    # the previous guard fell through and wrote filename = '' with the file_path
+    # unchanged, orphaning the record from the file on disk.
     clean_name = new_filename.strip()
-    if clean_name:
-        # Preserve original extension if user omitted it
-        old_ext = old_path.suffix
-        if not any(clean_name.lower().endswith(ext) for ext in [".docx", ".xlsx", ".pptx", ".py", ".pdf", ".csv", ".json"]):
-            clean_name += old_ext
-        
-        # Rename physical file on disk if exists
-        try:
-            if old_path.exists():
-                candidate_path = old_path.parent / clean_name
-                old_path.rename(candidate_path)
-                new_path = candidate_path
-        except Exception:
-            pass
+    if not clean_name:
+        logger.warning(f"[DB] Refusing to blank the filename for file_id={file_id}")
+        return False
+
+    # Preserve original extension if user omitted it
+    old_ext = old_path.suffix
+    if not any(clean_name.lower().endswith(ext) for ext in [".docx", ".xlsx", ".pptx", ".py", ".pdf", ".csv", ".json"]):
+        clean_name += old_ext
+
+    # Rename physical file on disk if exists
+    try:
+        if old_path.exists():
+            candidate_path = old_path.parent / clean_name
+            old_path.rename(candidate_path)
+            new_path = candidate_path
+    except Exception:
+        pass
 
     conn = get_db_connection()
     with conn.cursor() as cursor:
         cursor.execute(
-            "UPDATE files SET filename = %s, file_path = %s WHERE file_id = %s",
+            "UPDATE files SET filename = %s, file_path = %s, updated_at = CURRENT_TIMESTAMP WHERE file_id = %s",
             (clean_name, str(new_path), file_id)
         )
     conn.close()
     return True
+
+
+def backfill_file_metadata(file_id: str, sha256_hash: Optional[str] = None, size_bytes: Optional[int] = None) -> bool:
+    """Fills in missing integrity metadata for legacy rows without overwriting real values."""
+    conn = get_db_connection()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE files
+            SET sha256_hash = COALESCE(sha256_hash, %s),
+                size_bytes = COALESCE(size_bytes, %s)
+            WHERE file_id = %s
+            """,
+            (sha256_hash, size_bytes, file_id)
+        )
+    conn.close()
+    return True
+
+
+def mark_file_edited(
+    file_id: str,
+    sha256_hash: Optional[str] = None,
+    size_bytes: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Records a Canvas edit and re-opens the human verification gate.
+
+    A deliverable that already reached PENDING_STAGE_2 / VERIFIED (or was
+    REJECTED) is sent back to PENDING_STAGE_1: the approved bytes no longer
+    match what is on disk, so it must pass the 2-step review again. Previously
+    captured sign-off fields are cleared because they applied to other content;
+    the edit itself is recorded in the user activity audit ledger by the caller.
+    """
+    record = get_file_record(file_id)
+    if not record:
+        return {}
+
+    previous_status = record.get("verification_status") or "PENDING_STAGE_1"
+    reverification_required = previous_status in ("PENDING_STAGE_2", "VERIFIED", "REJECTED")
+    new_status = "PENDING_STAGE_1" if reverification_required else previous_status
+
+    conn = get_db_connection()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE files
+            SET sha256_hash = COALESCE(%s, sha256_hash),
+                size_bytes = COALESCE(%s, size_bytes),
+                updated_at = CURRENT_TIMESTAMP,
+                verification_status = %s,
+                stage_1_verifier = NULL, stage_1_at = NULL, stage_1_notes = NULL,
+                stage_2_verifier = NULL, stage_2_at = NULL, stage_2_notes = NULL,
+                rejected_by = NULL, rejected_at = NULL, reject_reason = NULL
+            WHERE file_id = %s
+            """,
+            (sha256_hash, size_bytes, new_status, file_id)
+        )
+    conn.close()
+
+    return {
+        "previous_status": previous_status,
+        "verification_status": new_status,
+        "reverification_required": reverification_required,
+    }
 
 
 # ─── Feedback & Error Reports CRUD ──────────────────────────────────────────
@@ -503,31 +676,33 @@ def create_feedback_report(
     category: str = "GENERAL",
     suggested_fix: Optional[str] = None,
 ) -> int:
-    """Inserts a new error or suggestion report into XAMPP MySQL."""
+    """Inserts a new error or suggestion report."""
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO feedback_reports (
-                report_type, user_id, username, chat_id, message_id,
-                message_content, category, title, description, suggested_fix, status
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN')
-            """,
-            (
-                report_type.upper(),
-                user_id,
-                username,
-                chat_id,
-                message_id,
-                message_content,
-                category.upper(),
-                title,
-                description,
-                suggested_fix,
+    try:
+        with conn.cursor() as cursor:
+            report_id = insert_returning_id(
+                cursor,
+                """
+                INSERT INTO feedback_reports (
+                    report_type, user_id, username, chat_id, message_id,
+                    message_content, category, title, description, suggested_fix, status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN')
+                """,
+                (
+                    report_type.upper(),
+                    user_id,
+                    username,
+                    chat_id,
+                    message_id,
+                    message_content,
+                    category.upper(),
+                    title,
+                    description,
+                    suggested_fix,
+                ),
             )
-        )
-        report_id = cursor.lastrowid
-    conn.close()
+    finally:
+        conn.close()
     return report_id
 
 
@@ -551,7 +726,14 @@ def get_all_feedback_reports(
             params.append(status.upper())
 
         if search and search.strip():
-            query += " AND (title LIKE %s OR description LIKE %s OR username LIKE %s OR category LIKE %s)"
+            # MySQL's default collation made LIKE case-insensitive; PostgreSQL
+            # LIKE is always case-sensitive, so ILIKE is used there to keep
+            # search behaviour identical across the two drivers.
+            like = case_insensitive_like("%s")
+            query += (
+                f" AND (title {like} OR description {like} "
+                f"OR username {like} OR category {like})"
+            )
             pattern = f"%{search.strip()}%"
             params.extend([pattern, pattern, pattern, pattern])
 
@@ -581,38 +763,44 @@ def update_feedback_report(
 ) -> bool:
     """Updates status, admin notes/correction, and resolution info for a report."""
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        is_resolving = status.upper() in ("RESOLVED", "REJECTED")
-        cursor.execute(
-            """
-            UPDATE feedback_reports
-            SET status = %s,
-                admin_notes = COALESCE(%s, admin_notes),
-                admin_response = COALESCE(%s, admin_response),
-                resolved_by = CASE WHEN %s THEN %s ELSE resolved_by END,
-                resolved_at = CASE WHEN %s THEN CURRENT_TIMESTAMP ELSE resolved_at END
-            WHERE id = %s
-            """,
-            (
-                status.upper(),
-                admin_notes,
-                admin_response,
-                is_resolving,
-                resolved_by,
-                is_resolving,
-                report_id,
+    try:
+        with conn.cursor() as cursor:
+            is_resolving = status.upper() in ("RESOLVED", "REJECTED")
+            cursor.execute(
+                """
+                UPDATE feedback_reports
+                SET status = %s,
+                    admin_notes = COALESCE(%s, admin_notes),
+                    admin_response = COALESCE(%s, admin_response),
+                    resolved_by = CASE WHEN %s THEN %s ELSE resolved_by END,
+                    resolved_at = CASE WHEN %s THEN CURRENT_TIMESTAMP ELSE resolved_at END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (
+                    status.upper(),
+                    admin_notes,
+                    admin_response,
+                    # psycopg3 requires a real boolean; MySQL's TINYINT accepts 0/1.
+                    bool_param(is_resolving),
+                    resolved_by,
+                    bool_param(is_resolving),
+                    report_id,
+                )
             )
-        )
-    conn.close()
+    finally:
+        conn.close()
     return True
 
 
 def delete_feedback_report(report_id: int) -> bool:
-    """Deletes a feedback report from XAMPP MySQL."""
+    """Deletes a feedback report."""
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute("DELETE FROM feedback_reports WHERE id = %s", (report_id,))
-    conn.close()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("DELETE FROM feedback_reports WHERE id = %s", (report_id,))
+    finally:
+        conn.close()
     return True
 
 
@@ -622,24 +810,29 @@ def estimate_tokens(text: str) -> int:
 
 
 def list_all_chat_sessions() -> List[Dict[str, Any]]:
-    """Returns list of distinct chat sessions from XAMPP MySQL."""
+    """Returns the list of distinct chat sessions."""
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute("""
-            SELECT 
-                chat_id as id,
-                UNIX_TIMESTAMP(MIN(timestamp)) as created_at,
-                COALESCE(
-                    MAX(CASE WHEN role = 'user' THEN SUBSTRING(content, 1, 50) END),
-                    'Chat'
-                ) as title,
-                COUNT(*) as count
-            FROM messages
-            GROUP BY chat_id
-            ORDER BY MAX(timestamp) DESC
-        """)
-        rows = cursor.fetchall()
-    conn.close()
+    try:
+        with conn.cursor() as cursor:
+            # MySQL's UNIX_TIMESTAMP() / SUBSTRING(s, a, b) have no direct
+            # PostgreSQL spelling; both are rendered by the dialect layer.
+            cursor.execute(f"""
+                SELECT
+                    chat_id as id,
+                    {epoch_seconds("MIN(timestamp)")} as created_at,
+                    COALESCE(
+                        MAX(CASE WHEN role = 'user'
+                                 THEN {substring("content", 1, 50)} END),
+                        'Chat'
+                    ) as title,
+                    COUNT(*) as count
+                FROM messages
+                GROUP BY chat_id
+                ORDER BY MAX(timestamp) DESC
+            """)
+            rows = cursor.fetchall()
+    finally:
+        conn.close()
     return [
         {
             "id": r["id"],
@@ -816,36 +1009,52 @@ KNOWN_PLANT_USERS = [
 
 
 def seed_default_collaboration_channels():
-    """Ensures default plant channels exist in database."""
+    """Ensures the default plant channels exist in the database."""
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        for ch in DEFAULT_CHANNELS:
-            cursor.execute(
-                """
-                INSERT INTO chat_channels (id, name, channel_type, description, department, created_by)
-                VALUES (%s, %s, %s, %s, %s, 'system')
-                ON DUPLICATE KEY UPDATE
-                    name=VALUES(name),
-                    description=VALUES(description),
-                    department=VALUES(department)
-                """,
-                (ch["id"], ch["name"], ch["channel_type"], ch["description"], ch["department"])
-            )
-            # Add default known users as members to public channels
-            for u in KNOWN_PLANT_USERS:
-                cursor.execute(
-                    """
-                    INSERT IGNORE INTO channel_members (channel_id, username, role)
-                    VALUES (%s, %s, %s)
-                    """,
-                    (ch["id"], u["username"], u["role"])
+    try:
+        with conn.cursor() as cursor:
+            for ch in DEFAULT_CHANNELS:
+                upsert(
+                    cursor,
+                    "chat_channels",
+                    {
+                        "id": ch["id"],
+                        "name": ch["name"],
+                        "channel_type": ch["channel_type"],
+                        "description": ch["description"],
+                        "department": ch["department"],
+                        "created_by": "system",
+                    },
+                    conflict_columns=["id"],
+                    update_columns=["name", "description", "department"],
                 )
-    conn.close()
+                # Add default known users as members to public channels
+                for u in KNOWN_PLANT_USERS:
+                    insert_ignore(
+                        cursor,
+                        "channel_members",
+                        {
+                            "channel_id": ch["id"],
+                            "username": u["username"],
+                            "role": u["role"],
+                        },
+                        conflict_columns=["channel_id", "username"],
+                    )
+    finally:
+        conn.close()
 
 
 def get_all_collaboration_channels(username: str = "operator") -> List[Dict[str, Any]]:
-    """Fetches all channels and DMs accessible to the user."""
+    """Fetches all channels and DMs accessible to the user.
+
+    Access is scoped by membership: a DM (or a department-scoped channel) is only
+    returned when `username` is in `channel_members`. The previous version
+    ignored its `username` argument entirely, so every caller received every
+    channel including other users' private DMs and the full text of their most
+    recent message.
+    """
     seed_default_collaboration_channels()
+    viewer = (username or "").strip().lower()
     conn = get_db_connection()
     with conn.cursor() as cursor:
         cursor.execute(
@@ -855,8 +1064,14 @@ def get_all_collaboration_channels(username: str = "operator") -> List[Dict[str,
                    (SELECT content FROM channel_messages msg WHERE msg.channel_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message,
                    (SELECT created_at FROM channel_messages msg WHERE msg.channel_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message_at
             FROM chat_channels c
+            WHERE c.department = 'ALL'
+               OR EXISTS (
+                    SELECT 1 FROM channel_members cm
+                    WHERE cm.channel_id = c.id AND LOWER(cm.username) = %s
+               )
             ORDER BY c.created_at ASC
-            """
+            """,
+            (viewer,)
         )
         rows = cursor.fetchall()
     conn.close()
@@ -885,24 +1100,31 @@ def get_or_create_dm_channel(user1: str, user2: str) -> Dict[str, Any]:
     dm_name = f"{users_sorted[0]} & {users_sorted[1]}"
 
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO chat_channels (id, name, channel_type, description, department, created_by)
-            VALUES (%s, %s, 'DM', %s, 'DIRECT', %s)
-            ON DUPLICATE KEY UPDATE name=VALUES(name)
-            """,
-            (dm_id, dm_name, f"Direct conversation between {users_sorted[0]} and {users_sorted[1]}", user1)
-        )
-        for u in users_sorted:
-            cursor.execute(
-                """
-                INSERT IGNORE INTO channel_members (channel_id, username, role)
-                VALUES (%s, %s, 'MEMBER')
-                """,
-                (dm_id, u)
+    try:
+        with conn.cursor() as cursor:
+            upsert(
+                cursor,
+                "chat_channels",
+                {
+                    "id": dm_id,
+                    "name": dm_name,
+                    "channel_type": "DM",
+                    "description": f"Direct conversation between {users_sorted[0]} and {users_sorted[1]}",
+                    "department": "DIRECT",
+                    "created_by": user1,
+                },
+                conflict_columns=["id"],
+                update_columns=["name"],
             )
-    conn.close()
+            for u in users_sorted:
+                insert_ignore(
+                    cursor,
+                    "channel_members",
+                    {"channel_id": dm_id, "username": u, "role": "MEMBER"},
+                    conflict_columns=["channel_id", "username"],
+                )
+    finally:
+        conn.close()
     return {"id": dm_id, "name": dm_name, "channel_type": "DM"}
 
 
@@ -911,24 +1133,25 @@ def create_new_channel(name: str, description: str, department: str, created_by:
     clean_name = re.sub(r'[^a-zA-Z0-9_-]', '-', name.lower().strip())
     chan_id = f"chan_{clean_name}_{int(time.time())}"
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO chat_channels (id, name, channel_type, description, department, created_by)
-            VALUES (%s, %s, 'CHANNEL', %s, %s, %s)
-            """,
-            (chan_id, clean_name, description, department.upper(), created_by)
-        )
-        # Add creator and known users
-        for u in KNOWN_PLANT_USERS:
+    try:
+        with conn.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT IGNORE INTO channel_members (channel_id, username, role)
-                VALUES (%s, %s, %s)
+                INSERT INTO chat_channels (id, name, channel_type, description, department, created_by)
+                VALUES (%s, %s, 'CHANNEL', %s, %s, %s)
                 """,
-                (chan_id, u["username"], u["role"])
+                (chan_id, clean_name, description, department.upper(), created_by)
             )
-    conn.close()
+            # Add creator and known users
+            for u in KNOWN_PLANT_USERS:
+                insert_ignore(
+                    cursor,
+                    "channel_members",
+                    {"channel_id": chan_id, "username": u["username"], "role": u["role"]},
+                    conflict_columns=["channel_id", "username"],
+                )
+    finally:
+        conn.close()
     return chan_id
 
 
@@ -981,29 +1204,31 @@ def save_channel_message(
 ) -> int:
     """Saves a new message (text, file, or AI response) into the channel history."""
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO channel_messages (
-                channel_id, sender_username, sender_role, content,
-                message_type, file_id, file_name, file_type, file_size, file_url
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                channel_id,
-                sender_username,
-                sender_role,
-                content,
-                message_type,
-                file_id,
-                file_name,
-                file_type,
-                file_size,
-                file_url,
+    try:
+        with conn.cursor() as cursor:
+            msg_id = insert_returning_id(
+                cursor,
+                """
+                INSERT INTO channel_messages (
+                    channel_id, sender_username, sender_role, content,
+                    message_type, file_id, file_name, file_type, file_size, file_url
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    channel_id,
+                    sender_username,
+                    sender_role,
+                    content,
+                    message_type,
+                    file_id,
+                    file_name,
+                    file_type,
+                    file_size,
+                    file_url,
+                ),
             )
-        )
-        msg_id = cursor.lastrowid
-    conn.close()
+    finally:
+        conn.close()
     return msg_id
 
 
@@ -1049,28 +1274,30 @@ def log_user_activity(
     file_meta_str = json.dumps(file_meta) if isinstance(file_meta, dict) else (str(file_meta) if file_meta else None)
 
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO user_activity_logs (
-                username, role, activity_type, channel_or_chat_id,
-                query_text, details, file_meta, ip_address, risk_level
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                username,
-                role,
-                activity_type,
-                channel_or_chat_id,
-                query_text,
-                details,
-                file_meta_str,
-                ip_address,
-                risk_level
+    try:
+        with conn.cursor() as cursor:
+            log_id = insert_returning_id(
+                cursor,
+                """
+                INSERT INTO user_activity_logs (
+                    username, role, activity_type, channel_or_chat_id,
+                    query_text, details, file_meta, ip_address, risk_level
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    username,
+                    role,
+                    activity_type,
+                    channel_or_chat_id,
+                    query_text,
+                    details,
+                    file_meta_str,
+                    ip_address,
+                    risk_level
+                ),
             )
-        )
-        log_id = cursor.lastrowid
-    conn.close()
+    finally:
+        conn.close()
     return log_id
 
 
@@ -1100,7 +1327,8 @@ def get_all_user_activity_logs(
             params.append(risk_level.upper())
 
         if search and search.strip():
-            query += " AND (query_text LIKE %s OR details LIKE %s OR username LIKE %s)"
+            like = case_insensitive_like("%s")
+            query += f" AND (query_text {like} OR details {like} OR username {like})"
             p = f"%{search.strip()}%"
             params.extend([p, p, p])
 

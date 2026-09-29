@@ -95,9 +95,17 @@ function groupChatsByTime(sessions: any[]) {
   const older: any[] = [];
 
   sessions.forEach((s) => {
-    const d = new Date(s.updated_at || s.created_at || now);
-    const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
-    if (diffDays === 0) today.push(s);
+    // `ConversationSession` exposes `timestamp` (a display string), not
+    // updated_at/created_at. Reading those two names yielded undefined, so
+    // `d` was always `now` and Yesterday / Previous 7 days / Older were
+    // permanently empty. Fall back through the real field before giving up and
+    // parsing whatever timestamp we do have.
+    const raw = s.updated_at || s.created_at || s.timestamp;
+    const d = raw ? new Date(raw) : now;
+    const diffDays = Number.isNaN(d.getTime())
+      ? 0
+      : Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays <= 0) today.push(s);
     else if (diffDays === 1) yesterday.push(s);
     else if (diffDays < 7) prev7.push(s);
     else older.push(s);
@@ -778,12 +786,14 @@ export function AppSidebar({ onOpenSearchModal, activePage = 'chat', onOpenFeedb
   return (
     <>
       {/* Mobile: only show drawer, never show rail/expanded */}
-      <div className="md:hidden">
-        <MobileDrawer />
-      </div>
-      {/* Desktop: show rail or expanded, never show drawer */}
+      <div className="md:hidden">{MobileDrawer()}</div>
+      {/* Desktop: show rail or expanded, never show drawer.
+          Invoked as plain function calls rather than <ExpandedView /> because
+          these are declared inside the render body: as JSX elements React saw a
+          new component type on every parent render and remounted the entire
+          sidebar subtree (including AnimatePresence nodes) each time. */}
       <div className="hidden md:block">
-        {isSidebarOpen ? <ExpandedView /> : <RailView />}
+        {isSidebarOpen ? ExpandedView() : RailView()}
       </div>
 
       {/* Role-Gated 2-Step Verification Notification & Action Modal */}

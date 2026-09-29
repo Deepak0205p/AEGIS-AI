@@ -1,10 +1,16 @@
-# Node dependencies
+# ==============================================================================
+# REVEAL 2.0 / AEGIS-AI: Air-Gapped Sovereign AI Workbench
+# Smart India Hackathon (SIH PS 26117) - MRPL & ONGC Operational AI
+# ==============================================================================
+
+# Node dependencies & package manager caches
 node_modules/
 **/node_modules/
 .npm
 .pnpm-store
+package-lock.json
 
-# Next.js & Frontend builds
+# Next.js, Frontend builds & outputs
 .next/
 **/dist/
 **/build/
@@ -12,7 +18,7 @@ node_modules/
 .cache/
 *.tsbuildinfo
 
-# Python
+# Python artifacts & virtual environments
 __pycache__/
 **/__pycache__/
 *.py[cod]
@@ -26,45 +32,55 @@ ENV/
 *.egg-info/
 .eggs/
 
-# Logs & Temporary files
+# Logs & Runtime telemetry
 *.log
+logs/
 server.log
 
-# Environment variables
-.env
-.env*.local
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Test scratch and screenshots
-scratch/
-test_screenshots/
-screenshots/
+# Local Database Runtimes, dumps & temporary storage
+.runtime/
+sandbox_jobs/
+generated/
+data/chroma_db/
+apps/data/chroma_db/
+apps/data/outputs/scripts/
 *.db
 *.db-shm
 *.db-wal
 *.sqlite3
-apps/data/outputs/scripts/
-data/chroma_db/
-apps/data/chroma_db/
 
-Agent.md
+# Environment & Secret files (STRICTLY AIR-GAPPED & PRIVATE)
+.env
+.env*.local
+*.pfx
+*.pem
+*.key
+*.crt
 
-# Excluded folders
-data/
-docs/
+# OS & Editor generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Large Model Weights (GGUF weights must be downloaded locally via Ollama / modelfiles)
 *.gguf
 models/gguf/*.gguf
+models/*.bin
+models/*.safetensors
+
+# Local Scratch, Screen recordings & Test artifacts
+scratch/
+test_screenshots/
+screenshots/
+scratch_*.*
+verify_*.*
 test_output.txt
 chat_greeting_response.png
 sdih 26117.pdf
-sandbox_jobs/
-generated/
-scratch_*.png
-scratch_*.py
-verify_*.py
 test_upload_doc.txt
 tests/
 test_*.py
@@ -72,3 +88,4 @@ reveal_engine.py
 ingest_downloaded_pdfs.py
 generate_datasets.py
 run.sh
+Agent.md

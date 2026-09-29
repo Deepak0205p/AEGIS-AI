@@ -4,7 +4,6 @@ import React, { useEffect } from 'react';
 import Link from 'next/link';
 import { Header } from '@/components/Header';
 import { OverviewDeck } from '@/components/OverviewDeck';
-import { socketManager } from '@/lib/socket';
 import { useModelStore } from '@/store/useModelStore';
 import { useSovereigntyStore } from '@/store/useSovereigntyStore';
 import { useRouter } from 'next/navigation';
@@ -57,7 +56,7 @@ const subsystemTiles = [
     title: 'Operator & User Accounts',
     href: '/users',
     icon: Users,
-    description: 'Provision and manage operator logins with XAMPP MySQL and air-gapped sovereign SQLite sync.'
+    description: 'Provision and manage operator logins against the air-gapped sovereign database.'
   },
   {
     title: 'Security & Activity Sentinel',
@@ -69,7 +68,7 @@ const subsystemTiles = [
     title: 'Feedback & Error Triage',
     href: '/feedback',
     icon: MessageSquare,
-    description: 'Review operator error reports, SOP inaccuracies, and suggestions with live XAMPP MySQL resolution.'
+    description: 'Review operator error reports, SOP inaccuracies, and suggestions, resolved against the live sovereign database.'
   },
 ];
 
@@ -80,7 +79,8 @@ export default function WorkbenchHomePage() {
   const fetchNetworkStatus = useSovereigntyStore((s) => s.fetchNetworkStatus);
 
   useEffect(() => {
-    socketManager.connectAuditStream();
+    // Header already owns the audit stream on this page; connecting again would
+    // open a second socket. The stream is now torn down by Header on unmount.
     fetchModels();
     fetchVRAM();
     fetchNetworkStatus();

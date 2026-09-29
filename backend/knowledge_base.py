@@ -1,15 +1,38 @@
 """
 Knowledge Base & SOP Retrieval Engine for Air-Gapped Local AI Backend.
-Provides deterministic, offline hybrid vector and keyword matching against MRPL/ONGC SOPs.
+
+Retrieval is performed by `backend.rag_engine`:
+  * BM25 lexical ranking over the real chunk text (always available).
+  * Optional dense embeddings from a local Ollama embedding model, used only
+    when that model genuinely exists. There are no synthetic/hash vectors.
+
+Corpus provenance is explicit: the chunks bundled with the application are a
+**demo corpus** written for this project, not controlled/verified refinery
+documents, and every retrieval result carries that provenance so no downstream
+consumer can mistake demo content for an approved SOP.
 """
 
+import json
 import re
 import time
-import math
-import hashlib
+from datetime import datetime
+from contextvars import ContextVar
 from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel
-from backend.config import logger, MIN_RAG_SCORE, RAG_CACHE_TTL_SECONDS
+from backend.config import logger, MIN_RAG_SCORE, MAX_RAG_CHUNKS, RAG_CACHE_TTL_SECONDS
+from backend.structured_logger import log_stage_event, log_retrieved_chunks
+from backend.rag_engine import BM25Index, EmbeddingProvider, cosine_similarity, tokenize
+
+# Provenance labels
+PROVENANCE_DEMO = "bundled_demo_corpus"
+PROVENANCE_UPLOADED = "user_uploaded"
+
+# How the bundled corpus is described in prompts and API responses.
+DEMO_CORPUS_NOTICE = (
+    "BUNDLED DEMO CORPUS - illustrative sample content shipped with the "
+    "application. It is NOT an approved or controlled SOP and must not be "
+    "cited as an operating authority."
+)
 
 
 class SOPChunk(BaseModel):
@@ -21,20 +44,11 @@ class SOPChunk(BaseModel):
     keywords: List[str]
     equipment_tags: List[str]
     domain: str = "refinery"
-    dense_embedding: List[float] = []
-
-
-def _generate_dense_vector(text: str, dim: int = 16) -> List[float]:
-    """Deterministic hash-based dense vector for offline similarity scoring."""
-    h = hashlib.sha256(text.lower().encode("utf-8")).hexdigest()
-    vec = [((int(h[i * 2 : (i + 1) * 2], 16) / 255.0) * 2.0 - 1.0) for i in range(dim)]
-    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-    return [x / norm for x in vec]
-
-
-def _cosine_similarity(v1: List[float], v2: List[float]) -> float:
-    dot = sum(a * b for a, b in zip(v1, v2))
-    return max(0.0, min(1.0, (dot + 1.0) / 2.0))
+    # Where this chunk came from. "bundled_demo_corpus" content is sample data.
+    provenance: str = PROVENANCE_DEMO
+    # True only for a controlled document that has actually been verified.
+    authoritative: bool = False
+    source: str = ""
 
 
 # Master Knowledge Base with Verified Operational Standards across all domains
@@ -503,10 +517,111 @@ MASTER_SOPS: List[SOPChunk] = [
         keywords=item["keywords"],
         equipment_tags=item["equipment_tags"],
         domain=item.get("domain", "refinery"),
-        dense_embedding=_generate_dense_vector(f"{item['title']} {item['content']}"),
+        provenance=PROVENANCE_DEMO,
+        authoritative=False,
+        source="bundled application data",
     )
     for item in _RAW_SOPS
 ]
+
+# ── Retrieval index ──────────────────────────────────────────────────
+# A single BM25 index over the real text of every chunk. Uploaded documents are
+# added incrementally by the ingestion endpoint.
+_bm25_index = BM25Index()
+_embedding_provider = EmbeddingProvider()
+_dense_cache: Dict[str, List[float]] = {}
+
+
+def _index_chunk(chunk: SOPChunk) -> None:
+    _bm25_index.add(chunk.doc_id, chunk.title, chunk.content, chunk.equipment_tags + chunk.keywords)
+
+
+def _index_all() -> None:
+    _bm25_index.reset()
+    for chunk in MASTER_SOPS:
+        _index_chunk(chunk)
+
+
+def add_chunk(chunk: SOPChunk) -> None:
+    """Adds a chunk to the live corpus and indexes it for retrieval."""
+    MASTER_SOPS.append(chunk)
+    _index_chunk(chunk)
+
+
+def corpus_stats() -> Dict[str, Any]:
+    """Real corpus statistics, used by the API and the observatory UI."""
+    by_provenance: Dict[str, int] = {}
+    by_domain: Dict[str, int] = {}
+    for chunk in MASTER_SOPS:
+        by_provenance[chunk.provenance] = by_provenance.get(chunk.provenance, 0) + 1
+        by_domain[chunk.domain] = by_domain.get(chunk.domain, 0) + 1
+    emb = _embedding_provider.status()
+    return {
+        "total_chunks": len(MASTER_SOPS),
+        "chunks_by_provenance": by_provenance,
+        "chunks_by_domain": by_domain,
+        "indexed_documents": len(_bm25_index._doc_tokens),
+        "lexical_index": "bm25",
+        "lexical_indexed": True,
+        "dense_embeddings_enabled": bool(emb["available"]),
+        "embedding_model": emb["model"],
+        "embedding_status": emb["reason"],
+        "authoritative_chunks": sum(1 for c in MASTER_SOPS if c.authoritative),
+        "notice": DEMO_CORPUS_NOTICE,
+    }
+
+
+def distinct_document_count() -> int:
+    """
+    Number of distinct source documents in the corpus.
+
+    Only *uploaded* chunks are named "<DOC>-NN" per section, so the trailing
+    section number is stripped for those. Applying the same rule to the bundled
+    corpus collapsed distinct standards that merely share a prefix
+    (SOP-MRPL-FURNACE-101 and SOP-MRPL-FURNACE-201 counted as one "document"),
+    under-reporting the corpus size.
+    """
+    keys = set()
+    for chunk in MASTER_SOPS:
+        doc_id = chunk.doc_id
+        if getattr(chunk, "provenance", None) == PROVENANCE_UPLOADED:
+            base, _, suffix = doc_id.rpartition("-")
+            keys.add(base if base and suffix.isdigit() else doc_id)
+        else:
+            keys.add(doc_id)
+    return len(keys)
+
+
+_last_ingest_at: Optional[str] = None
+
+
+def last_ingest_at() -> Optional[str]:
+    """ISO timestamp of the last successful upload ingestion, or None."""
+    return _last_ingest_at
+
+
+def mark_ingested() -> None:
+    global _last_ingest_at
+    _last_ingest_at = datetime.now().isoformat(timespec="seconds")
+
+
+def retrieval_status() -> Dict[str, Any]:
+    """Describes exactly how retrieval is scoring, for honest UI labelling."""
+    emb = _embedding_provider.status()
+    return {
+        "method": "bm25+dense" if emb["available"] else "bm25_lexical",
+        "lexical": {"algorithm": "okapi_bm25", "k1": BM25Index.K1, "b": BM25Index.B},
+        "dense": emb,
+        "min_score": MIN_RAG_SCORE,
+        "max_chunks": MAX_RAG_CHUNKS,
+        "score_semantics": (
+            "relevance is scored 0-1 relative to the best match for this query; "
+            "similarity_score is only present when real embeddings are available"
+        ),
+    }
+
+
+_index_all()
 
 # Dynamically merge official downloaded PDF chunks if available
 try:
@@ -516,22 +631,24 @@ try:
         with open(_dynamic_path, "r", encoding="utf-8") as _df:
             _dyn_data = json.load(_df)
             for _item in _dyn_data.get("chunks", []):
-                MASTER_SOPS.append(
-                    SOPChunk(
-                        doc_id=_item["doc_id"],
-                        title=_item["title"],
-                        clause=_item.get("clause", "General"),
-                        page=_item.get("page", "Section 1"),
-                        content=_item["content"],
-                        keywords=_item.get("keywords", []),
-                        equipment_tags=_item.get("equipment_tags", []),
-                        domain=_item.get("domain", "government"),
-                        dense_embedding=_generate_dense_vector(f"{_item['title']} {_item['content']}"),
-                    )
+                _chunk = SOPChunk(
+                    doc_id=_item["doc_id"],
+                    title=_item["title"],
+                    clause=_item.get("clause", "General"),
+                    page=_item.get("page", "Section 1"),
+                    content=_item["content"],
+                    keywords=_item.get("keywords", []),
+                    equipment_tags=_item.get("equipment_tags", []),
+                    domain=_item.get("domain", "government"),
+                    provenance=PROVENANCE_UPLOADED,
+                    authoritative=False,
+                    source="downloaded_graphrag_dataset.json",
                 )
+                MASTER_SOPS.append(_chunk)
+                _index_chunk(_chunk)
         logger.info(f"[RAG/GRAPHRAG] Dynamically loaded {len(_dyn_data.get('chunks', []))} PDF chunks. Total Master SOPs: {len(MASTER_SOPS)}")
 except Exception as _load_err:
-    logger.debug(f"[RAG] Dynamic PDF chunk merge note: {_load_err}")
+    logger.warning(f"[RAG] Dynamic PDF chunk merge failed: {_load_err}")
 
 
 class RAGRetrievalCache:
@@ -560,54 +677,96 @@ class RAGRetrievalCache:
 rag_cache = RAGRetrievalCache()
 
 
-def search_sops(query: str, min_score: float = MIN_RAG_SCORE, top_k: int = 4) -> List[Dict[str, Any]]:
+def search_sops(query: str, min_score: float = MIN_RAG_SCORE, top_k: int = MAX_RAG_CHUNKS) -> List[Dict[str, Any]]:
     """
-    Executes hybrid keyword + vector retrieval against verified SOP chunks.
-    Domain-aware: boosts results from the active domain while allowing cross-domain matches.
-    Returns list of chunks with similarity score >= min_score, ranked descending.
+    Hybrid retrieval over the live corpus.
+
+    Scoring:
+      * BM25 lexical score over the real text (always available).
+      * Dense cosine similarity, only when a local embedding model is present.
+        When it is absent, `similarity_score` is null and the result says so.
+
+    `relevance` is the blended 0-1 score, normalised against the strongest
+    lexical match for this query (1.0 = best match for this query). A query
+    with no lexical evidence returns nothing rather than a spurious hit, unless
+    real embeddings are available and genuinely match.
+
+    Every result carries its provenance so demo content is never presented as a
+    controlled document.
     """
-    # Get active domain for priority boosting
+    effective_top_k = min(top_k, MAX_RAG_CHUNKS) if top_k else MAX_RAG_CHUNKS
     try:
         from backend.domains import get_active_domain
         active_domain = get_active_domain()
     except Exception:
         active_domain = "refinery"
 
-    query_clean = query.lower()
-    query_tokens = set(re.findall(r"\b[a-z0-9\-\_]+\b", query_clean))
-    query_vec = _generate_dense_vector(query_clean)
-    
-    scored_results: List[Tuple[float, SOPChunk]] = []
+    by_id = {c.doc_id: c for c in MASTER_SOPS}
+    candidates: List[SOPChunk] = []
 
-    for chunk in MASTER_SOPS:
-        # 1. Keyword match score
-        chunk_tokens = set(chunk.keywords + [k.lower() for k in chunk.equipment_tags])
-        overlap = len(query_tokens.intersection(chunk_tokens))
-        kw_score = min(1.0, overlap / max(1, len(chunk_tokens) ** 0.5)) if overlap else 0.0
+    # 1. Lexical candidates from the BM25 index (score > 0 = real term overlap)
+    lexical = _bm25_index.search(query, top_k=max(effective_top_k * 5, 15))
+    lexical_scores: Dict[str, float] = {doc_id: score for doc_id, score in lexical}
+    candidates: List[SOPChunk] = [c for c in (by_id.get(doc_id) for doc_id in lexical_scores) if c]
 
-        # Exact equipment tag boost
-        for tag in chunk.equipment_tags:
-            if tag.lower() in query_clean:
-                kw_score = max(kw_score, 0.85)
+    # 2. Dense candidates (only with a real embedding model)
+    dense_scores: Optional[Dict[str, float]] = None
+    if _embedding_provider.probe():
+        probe_chunks = list(MASTER_SOPS)
+        qvec = (_embedding_provider.embed([query]) or [None])[0]
+        if qvec:
+            missing = [c for c in probe_chunks if c.doc_id not in _dense_cache]
+            if missing:
+                vecs = _embedding_provider.embed([f"{c.title}\n{c.content}" for c in missing])
+                if vecs:
+                    for c, v in zip(missing, vecs):
+                        _dense_cache[c.doc_id] = v
+            dense_scores = {
+                c.doc_id: cosine_similarity(_dense_cache.get(c.doc_id, []), qvec)
+                for c in probe_chunks
+            }
+            # Add semantically-close chunks that BM25 did not surface.
+            if lexical_scores:
+                known = set(lexical_scores)
+                for c in probe_chunks:
+                    if c.doc_id not in known and dense_scores.get(c.doc_id, 0.0) >= min_score:
+                        candidates.append(c)
+                        lexical_scores.setdefault(c.doc_id, 0.0)
+            else:
+                candidates = [c for c in probe_chunks if dense_scores.get(c.doc_id, 0.0) >= min_score]
+                lexical_scores = {c.doc_id: 0.0 for c in candidates}
 
-        # 2. Dense vector similarity
-        vec_score = _cosine_similarity(query_vec, chunk.dense_embedding)
+    if not candidates:
+        logger.info(f"[RAG] No corpus match for query {query!r} (lexical=0 terms matched, dense={_embedding_provider.available})")
+        _audit_log(query, 0, 0, 0, active_domain, min_score, effective_top_k, [])
+        return []
 
-        # 3. Hybrid score (60% keyword/tag precision, 40% semantic dense)
-        hybrid_score = round(0.60 * kw_score + 0.40 * vec_score, 4)
+    # 3. Normalise lexical scores against the best lexical match.
+    max_lex = max(lexical_scores.values()) if lexical_scores else 0.0
+    results: List[Dict[str, Any]] = []
+    for chunk in candidates:
+        lex_raw = lexical_scores.get(chunk.doc_id, 0.0)
+        lex_rel = (lex_raw / max_lex) if max_lex > 0 else 0.0
+        dense = dense_scores.get(chunk.doc_id) if dense_scores else None
 
-        # 4. Domain affinity boost: same-domain SOPs get 1.3x boost
-        if chunk.domain == active_domain:
-            hybrid_score = round(hybrid_score * 1.3, 4)
+        if dense is not None:
+            blended = 0.65 * lex_rel + 0.35 * dense
+            basis = "hybrid"
+        else:
+            # Without embeddings the score is purely lexical. A chunk with no
+            # term overlap cannot be justified, so it is dropped rather than
+            # being given a fabricated similarity.
+            if lex_raw <= 0.0:
+                continue
+            blended = lex_rel
+            basis = "lexical_bm25"
 
-        if hybrid_score >= min_score:
-            scored_results.append((hybrid_score, chunk))
+        if blended < min_score:
+            continue
 
-    # Sort descending by score
-    scored_results.sort(key=lambda x: x[0], reverse=True)
+        # Domain affinity boost, applied last and reported in the metadata.
+        boosted = blended * 1.15 if chunk.domain == active_domain else blended
 
-    results = []
-    for score, chunk in scored_results[:top_k]:
         results.append({
             "doc_id": chunk.doc_id,
             "title": chunk.title,
@@ -615,35 +774,133 @@ def search_sops(query: str, min_score: float = MIN_RAG_SCORE, top_k: int = 4) ->
             "page": chunk.page,
             "content": chunk.content,
             "domain": chunk.domain,
-            "similarity_score": score,
+            "relevance": round(min(1.0, boosted), 4),
+            "similarity_score": round(dense, 4) if dense is not None else None,
+            "bm25_score": round(lex_raw, 4),
+            "match_basis": basis,
+            "provenance": chunk.provenance,
+            "authoritative": chunk.authoritative,
+            "source": chunk.source,
         })
 
-    # Log search activity for security audit & monitoring
+    # Count what was actually scored but not returned, so the audit log does not
+    # imply that untouched documents were "dropped below threshold".
+    considered = len(candidates)
+    results.sort(key=lambda r: (r["relevance"], r["bm25_score"]), reverse=True)
+    not_returned = max(0, considered - len(results))
+    if len(results) > effective_top_k:
+        not_returned += len(results) - effective_top_k
+    results = results[:effective_top_k]
+
+    _audit_log(query, len(results), not_returned, considered, active_domain, min_score, effective_top_k, results)
+    return results
+
+
+_CURRENT_ACTOR: ContextVar[Optional[str]] = ContextVar("aegis_rag_actor", default=None)
+_DEFAULT_ACTOR = "operator"
+
+
+def set_retrieval_actor(username: Optional[str]) -> None:
+    """
+    Records who is issuing RAG searches in this async context.
+
+    The audit ledger used to hardcode `username="operator"`, so the Security
+    Monitor could not attribute any search to a real user.
+    """
+    _CURRENT_ACTOR.set((username or "").strip() or None)
+
+
+def get_retrieval_actor() -> str:
+    return _CURRENT_ACTOR.get() or _DEFAULT_ACTOR
+
+
+def _audit_log(
+    query: str,
+    retained: int,
+    not_returned: int,
+    considered: int,
+    active_domain: str,
+    min_score: float,
+    top_k: int,
+    results: List[Dict[str, Any]],
+) -> None:
+    """Persists and structurally logs a retrieval run (best-effort)."""
     try:
         from backend.db import log_user_activity
         log_user_activity(
-            username="operator",
+            username=get_retrieval_actor(),
             activity_type="SEARCH_RAG",
             query_text=query,
-            details=f"Retrieved {len(results)} SOP chunks (top doc: {results[0]['doc_id'] if results else 'None'})"
+            details=(
+                f"Retrieved {retained} of {considered} scored chunks via "
+                f"{retrieval_status()['method']} (top: {results[0]['doc_id'] if results else 'none'})"
+            )
+        )
+    except Exception as audit_err:
+        # An audit write that fails must be visible; a bare pass hid the fact
+        # that the security ledger had silently stopped recording searches.
+        logger.warning(f"[RAG AUDIT] Could not record retrieval to the audit ledger: {audit_err}")
+
+    try:
+        log_retrieved_chunks(
+            query=query,
+            chunks=results,
+            min_score_threshold=min_score,
+            dropped_count=not_returned,
+        )
+    except Exception as log_err:
+        logger.debug(f"[RAG] Structured chunk logging error: {log_err}")
+
+    try:
+        log_stage_event(
+            stage="RETRIEVER",
+            status="SUCCESS" if results else "NO_MATCH",
+            input_summary=f"query={query!r} (domain={active_domain}, min_score={min_score}, cap={top_k})",
+            output_summary=(
+                f"retained {retained} chunks: "
+                f"{[(r['doc_id'], r['relevance'], r['match_basis']) for r in results]}"
+            ),
+            metadata={
+                "chunks_found": retained,
+                "chunks_scored": considered,
+                "chunks_not_returned": not_returned,
+                "top_relevance": results[0]["relevance"] if results else 0.0,
+                "retrieval_method": retrieval_status()["method"],
+            }
         )
     except Exception:
         pass
 
-    return results
-
 
 def format_rag_context_block(chunks: List[Dict[str, Any]], query: Optional[str] = None) -> str:
     """
-    Formats retrieved SOP chunks into standard delimited context block,
-    enriched with GraphRAG entity-relationship topology.
+    Formats retrieved chunks into a delimited context block for the model,
+    enriched with GraphRAG topology. The block states the provenance of the
+    material so the model never cites demo content as an approved procedure.
     """
     if not chunks and not query:
         return ""
 
-    lines = ["[RETRIEVED KNOWLEDGE BASE & GRAPHRAG CONTEXT — answer ONLY from this; if insufficient, say so]"]
+    lines = ["[RETRIEVED KNOWLEDGE CONTEXT - answer ONLY from this; if insufficient, say so]"]
 
-    # 1. GraphRAG Knowledge Graph Topology Context
+    if chunks:
+        provenances = {c.get("provenance", "unknown") for c in chunks}
+        if PROVENANCE_DEMO in provenances:
+            lines.append(
+                "[PROVENANCE WARNING] Some or all of the following chunks come from the "
+                "BUNDLED DEMO CORPUS (sample data shipped with the app). They are "
+                "illustrative only and must not be presented as approved plant "
+                "procedures, limits, or regulatory authority. Say so if asked for "
+                "an authoritative answer.]"
+            )
+        if all(not c.get("authoritative", False) for c in chunks):
+            lines.append(
+                "[VERIFICATION NOTICE] None of the retrieved chunks come from a "
+                "verified controlled document. Confirm any limit or procedure "
+                "against the current controlled copy before acting.]"
+            )
+
+    # 1. GraphRAG topology context
     if query:
         try:
             from backend.graph_rag import graphrag_engine
@@ -655,12 +912,14 @@ def format_rag_context_block(chunks: List[Dict[str, Any]], query: Optional[str] 
         except Exception as e:
             logger.debug(f"[GRAPHRAG] Graph context generation note: {e}")
 
-    # 2. Master SOP Chunks
+    # 2. Retrieved chunks
     if chunks:
         for i, c in enumerate(chunks, 1):
             lines.append(
                 f"--- Document {i}: {c['doc_id']} (Clause: {c['clause']}, Page: {c['page']}) ---\n"
                 f"Title: {c['title']}\n"
+                f"Provenance: {c.get('provenance', 'unknown')}"
+                f"{' (authoritative/verified)' if c.get('authoritative') else ' (not verified)'}\n"
                 f"Content: {c['content']}\n"
                 f"[SOURCE: {c['doc_id']} | Clause: {c['clause']} | Page: {c['page']}]"
             )

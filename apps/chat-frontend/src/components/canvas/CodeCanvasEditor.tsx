@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
 import { DeliverableItem } from '@/store/useDeliverableStore';
@@ -27,6 +27,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { CustomDropdown } from '@/components/ui/CustomDropdown';
+import { runCode, formatRunReport, CodeRunResult } from '@/lib/codeRunner';
 
 interface CodeCanvasEditorProps {
   deliverable: DeliverableItem;
@@ -46,22 +47,24 @@ export type SupportedLang =
   | 'rust'
   | 'markdown';
 
+// Engine labels describe what this deployment can ACTUALLY run — the runner
+// returns the real engine string at execution time (see lib/codeRunner.ts).
 const LANGUAGE_CONFIGS: Record<
   SupportedLang,
   { label: string; ext: string; engine: string; color: string }
 > = {
-  python: { label: 'Python 3.11', ext: '.py', engine: 'PyPy Sandboxed WASM Runtime', color: 'text-purple-400' },
-  javascript: { label: 'JavaScript (ES2024)', ext: '.js', engine: 'V8 Sandboxed Engine', color: 'text-yellow-400' },
-  typescript: { label: 'TypeScript 5.4', ext: '.ts', engine: 'TS Transpiler & VM', color: 'text-blue-400' },
-  sql: { label: 'PostgreSQL / ANSI SQL', ext: '.sql', engine: 'MRPL In-Memory SQLite/Postgres Engine', color: 'text-cyan-400' },
-  json: { label: 'JSON Data Schema', ext: '.json', engine: 'V8 JSON Validator & Formatter', color: 'text-emerald-400' },
-  yaml: { label: 'YAML / K8s Config', ext: '.yaml', engine: 'YAML Parser & Linter', color: 'text-rose-400' },
-  html: { label: 'HTML5 Web Preview', ext: '.html', engine: 'DOM Sandbox Renderer', color: 'text-orange-400' },
-  css: { label: 'CSS3 / Tailwind', ext: '.css', engine: 'CSS Engine', color: 'text-sky-400' },
-  shell: { label: 'Bash / Linux Shell', ext: '.sh', engine: 'POSIX Shell Sandbox', color: 'text-green-400' },
-  cpp: { label: 'C++ 20', ext: '.cpp', engine: 'Clang/LLVM WASM', color: 'text-blue-500' },
-  rust: { label: 'Rust 1.78', ext: '.rs', engine: 'Rust WASM Toolchain', color: 'text-amber-500' },
-  markdown: { label: 'Markdown Docs', ext: '.md', engine: 'CommonMark Parser', color: 'text-slate-300' },
+  python: { label: 'Python 3.11', ext: '.py', engine: 'Container (--network none) or Job Object + network guard', color: 'text-purple-400' },
+  javascript: { label: 'JavaScript (ES2024)', ext: '.js', engine: 'Node.js permission sandbox', color: 'text-yellow-400' },
+  typescript: { label: 'TypeScript 5.4', ext: '.ts', engine: 'Node.js permission sandbox (type stripping)', color: 'text-blue-400' },
+  sql: { label: 'ANSI SQL', ext: '.sql', engine: 'SQL read-only sandbox', color: 'text-cyan-400' },
+  json: { label: 'JSON Data Schema', ext: '.json', engine: 'Server-side RFC 8259 parser', color: 'text-emerald-400' },
+  yaml: { label: 'YAML / K8s Config', ext: '.yaml', engine: 'Schema only - no server runner', color: 'text-rose-400' },
+  html: { label: 'HTML5 Web Preview', ext: '.html', engine: 'Browser sandboxed iframe', color: 'text-orange-400' },
+  css: { label: 'CSS3 / Tailwind', ext: '.css', engine: 'Style sheet - no server runner', color: 'text-sky-400' },
+  shell: { label: 'Bash / Linux Shell', ext: '.sh', engine: 'Docker bash sandbox (if available)', color: 'text-green-400' },
+  cpp: { label: 'C++ 20', ext: '.cpp', engine: 'Local g++/clang++ (if installed)', color: 'text-blue-500' },
+  rust: { label: 'Rust 1.78', ext: '.rs', engine: 'Local rustc (if installed)', color: 'text-amber-500' },
+  markdown: { label: 'Markdown Docs', ext: '.md', engine: 'Documentation - no server runner', color: 'text-slate-300' },
 };
 
 function detectLanguage(filename: string, deliverableType: string): SupportedLang {
@@ -89,7 +92,8 @@ function getDefaultCodeByLang(lang: SupportedLang, filename: string): string {
     case 'sql':
       return `-- MRPL SOVEREIGN SQL REFINERY QUERY
 -- Filename: ${filename}
--- Database: PostgreSQL 16 Air-Gapped Replica
+-- Database: read-only sandbox schema (sih_sql_sandbox)
+-- Only SELECT / WITH / SHOW / EXPLAIN are permitted here
 
 SELECT 
     p.unit_id,
@@ -297,7 +301,7 @@ if __name__ == "__main__":
         print(f"  {key:<30} : {val}")
         
     print("=====================================================")
-    print("  STATUS: 100% AIR-GAPPED LOCAL RUN COMPLETE (42ms)  ")
+    print("  STATUS: LOCAL RUN COMPLETE (runtime printed above)     ")
 `;
   }
 }
@@ -307,8 +311,9 @@ export function CodeCanvasEditor({ deliverable }: CodeCanvasEditorProps) {
   const [copied, setCopied] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [outputConsole, setOutputConsole] = useState<string | null>(null);
-  const [sqlResults, setSqlResults] = useState<{ headers: string[]; rows: (string | number)[][] } | null>(null);
+  const [sqlResults, setSqlResults] = useState<{ headers: string[]; rows: (string | number | null)[][] } | null>(null);
   const [activeViewTab, setActiveViewTab] = useState<'editor' | 'preview'>('editor');
+  const [lastRun, setLastRun] = useState<CodeRunResult | null>(null);
   const [fontSize, setFontSize] = useState(13);
   const [showLineNumbers, setShowLineNumbers] = useState(true);
   const [showFindReplace, setShowFindReplace] = useState(false);
@@ -345,6 +350,7 @@ export function CodeCanvasEditor({ deliverable }: CodeCanvasEditorProps) {
     updateEditedContent(deliverable.id, { code: template });
     setOutputConsole(null);
     setSqlResults(null);
+    setLastRun(null);
   };
 
   const handleCopy = () => {
@@ -394,73 +400,27 @@ export function CodeCanvasEditor({ deliverable }: CodeCanvasEditorProps) {
   };
 
   const handleRunCode = async () => {
-    setIsRunning(true);
-    setOutputConsole(`[SANDBOX EXECUTION INITIALIZING: ${LANGUAGE_CONFIGS[currentLang].label}]...\nEngine: ${LANGUAGE_CONFIGS[currentLang].engine}\nSandbox Constraint: Air-Gapped (--network none, 2 vCPU, 512MB RAM)`);
-
-    await new Promise((resolve) => setTimeout(resolve, 600));
-
-    if (currentLang === 'sql') {
-      setSqlResults({
-        headers: ['UNIT_ID', 'UNIT_NAME', 'OPERATING_TEMP_C', 'PRESSURE_BAR', 'LEL_PCT', 'O2_PCT', 'OISD_STATUS'],
-        rows: [
-          ['Unit-001', 'Sample Distillation', 365.2, 1.84, '0.0%', '20.8%', 'SAFE_AUTHORIZED'],
-          ['Unit-002', 'Sample Processing', 410.0, 0.08, '0.0%', '20.9%', 'SAFE_AUTHORIZED'],
-          ['Unit-003', 'Sample Cracking', 525.0, 2.45, '0.0%', '20.8%', 'SAFE_AUTHORIZED'],
-          ['Unit-004', 'Sample Hydrotreating', 340.5, 45.0, '0.0%', '20.8%', 'SAFE_AUTHORIZED'],
-        ],
-      });
-      setOutputConsole(`[SQL QUERY SUCCESS]
-Query executed in 1.42ms.
-4 rows returned from local in-memory PostgreSQL partition.
-Zero lock contention. Isolation Level: READ COMMITTED.`);
-    } else if (currentLang === 'javascript' || currentLang === 'typescript') {
-      try {
-        const logs: string[] = [];
-        const customConsole = {
-          log: (...args: any[]) => logs.push(args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)).join(' ')),
-          error: (...args: any[]) => logs.push(`[ERROR]: ${args.join(' ')}`),
-          warn: (...args: any[]) => logs.push(`[WARN]: ${args.join(' ')}`),
-        };
-
-        const runnableJs = code.replace(/import\s+.*?;/g, '').replace(/export\s+/g, '').replace(/interface\s+[\s\S]*?}/g, '').replace(/:\s*[A-Z][a-zA-Z0-9<>\[\]]*/g, '');
-        const fn = new Function('console', runnableJs);
-        fn(customConsole);
-
-        setOutputConsole(`[EXECUTION SUCCESS - ${LANGUAGE_CONFIGS[currentLang].label}]
-${logs.length > 0 ? logs.join('\n') : 'Script executed successfully with exit code 0 (no stdout).'}`);
-      } catch (err: any) {
-        setOutputConsole(`[RUNTIME ERROR]: ${err.message}\n${err.stack || ''}`);
-      }
-    } else if (currentLang === 'json') {
-      try {
-        JSON.parse(code);
-        setOutputConsole(`[JSON VALIDATION SUCCESS]
-✓ Schema is 100% valid RFC 8259 JSON.
-✓ Structure verified with 0 syntax warnings.`);
-      } catch (err: any) {
-        setOutputConsole(`[JSON SYNTAX ERROR]: ${err.message}`);
-      }
-    } else if (currentLang === 'html') {
+    // HTML has no server-side runner: the browser iframe is the real renderer.
+    if (currentLang === 'html') {
       setActiveViewTab('preview');
-      setOutputConsole(`[HTML5 LIVE PREVIEW RENDERED]
-Rendered interactive DOM preview in isolated sandbox frame.`);
-    } else {
-      // Python / Shell / C++ / Rust output
-      setOutputConsole(`[SANDBOX EXECUTION SUCCESS: ${LANGUAGE_CONFIGS[currentLang].label}]
-=====================================================
-  MRPL SOVEREIGN PROCESS YIELD & MARGIN CALCULATOR   
-=====================================================
-  api_gravity                    : 28.4
-  sulfur_pct                     : 1.85
-  brent_differential_usd         : 2.4
-  net_grm_usd_per_bbl            : 12.58
-  daily_operating_ebitda_usd     : 3906090.0
-  energy_consumption_mbn         : 54.2
-  oisd_safety_compliant          : True
-  recommendation                 : OPTIMAL_FEEDSTOCK_BLEND
-=====================================================
-  STATUS: 100% AIR-GAPPED LOCAL RUN COMPLETE (38ms)  
-  Process finished with exit code 0.`);
+      setLastRun(null);
+      setOutputConsole(
+        '[HTML PREVIEW]\nRendered by your browser inside a sandboxed iframe (scripts allowed, no network).\nThere is no server-side HTML runner, so nothing was executed on the backend.'
+      );
+      return;
+    }
+
+    setIsRunning(true);
+    setSqlResults(null);
+    setOutputConsole(`Executing ${LANGUAGE_CONFIGS[currentLang].label} on the sovereign backend...`);
+
+    const result = await runCode(currentLang, code, { filename: deliverable.filename });
+
+    setLastRun(result);
+    setOutputConsole(formatRunReport(result));
+
+    if (result.sql) {
+      setSqlResults({ headers: result.sql.columns, rows: result.sql.rows });
     }
 
     setIsRunning(false);
@@ -673,8 +633,21 @@ Rendered interactive DOM preview in isolated sandbox frame.`);
                 <Terminal className="h-3.5 w-3.5" />
                 <span>SANDBOX TERMINAL OUTPUT</span>
               </div>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                100% AIR-GAPPED
+              <span
+                className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+                  !lastRun
+                    ? 'bg-[#14141e] text-[#6b6d76] border-[#262638]'
+                    : lastRun.isolated
+                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                      : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                }`}
+                title={lastRun ? lastRun.engine : 'Nothing has been executed yet'}
+              >
+                {!lastRun
+                  ? 'NOT RUN'
+                  : lastRun.isolated
+                    ? 'SANDBOXED'
+                    : 'NO CONTAINER ISOLATION'}
               </span>
             </div>
 
@@ -692,7 +665,17 @@ Rendered interactive DOM preview in isolated sandbox frame.`);
           {/* Console Text & SQL Results Grid */}
           <div className="flex-1 overflow-auto p-3 font-mono text-xs space-y-3">
             {outputConsole && (
-              <pre className="text-emerald-400 whitespace-pre-wrap leading-relaxed">
+              <pre
+                className={`whitespace-pre-wrap leading-relaxed ${
+                  !lastRun
+                    ? 'text-emerald-400'
+                    : lastRun.status === 'SUCCESS'
+                      ? 'text-emerald-400'
+                      : lastRun.status === 'UNSUPPORTED'
+                        ? 'text-amber-400'
+                        : 'text-rose-400'
+                }`}
+              >
                 {outputConsole}
               </pre>
             )}

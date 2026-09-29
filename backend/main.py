@@ -4,16 +4,22 @@ Implements SSE streaming, exact endpoints, offline logging, and model health ver
 """
 
 import os
+import re
 import sys
 import json
 import uuid
 import time
-from datetime import datetime
+import socket
+import shutil
+import hashlib
+import secrets
+from datetime import datetime, timezone
 import asyncio
 import subprocess
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 
 import psutil
 
@@ -31,6 +37,9 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from backend.config import (
+    DB_DRIVER,
+    DB_LABEL,
+    IS_POSTGRES,
     MODEL_NAME,
     VISION_MODEL_NAME,
     OCR_MODEL_NAME,
@@ -39,6 +48,7 @@ from backend.config import (
     LOGS_DIR,
     GENERATED_DIR,
     MIN_RAG_SCORE,
+    MAX_RAG_CHUNKS,
     logger,
 )
 from backend.db import (
@@ -46,6 +56,7 @@ from backend.db import (
     get_chat_history,
     get_file_record,
     get_db_connection,
+    file_integrity,
 )
 from backend.ollama_client import check_ollama_health, filter_thinking
 from backend.router import (
@@ -70,13 +81,45 @@ from backend.vision_mode import handle_vision_mode
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle."""
     logger.info("Initializing Air-Gapped Sovereign AI Backend...")
-    # Initialize SQLite Database
-    init_db()
+
+    # Surface insecure secret handling loudly rather than silently trusting a
+    # hard-coded key. Tokens issued with an ephemeral secret stop validating on
+    # restart, which forces re-login instead of leaving forged tokens valid.
+    if USING_EPHEMERAL_JWT_SECRET:
+        logger.critical(
+            "[SECURITY] AEGIS_JWT_SECRET is not set. A random per-process signing "
+            "secret is being used, so ALL sessions will be invalidated whenever the "
+            "backend restarts. Set AEGIS_JWT_SECRET in the environment for any "
+            "real deployment."
+        )
+    else:
+        logger.info("[SECURITY] Using the AEGIS_JWT_SECRET supplied by the environment.")
+
+    # Initialize Database (MySQL or degraded mode)
+    try:
+        init_db()
+        logger.info("Database initialized successfully.")
+    except Exception as e:
+        logger.warning(f"Database initialization warning: {e}. Backend running in degraded/in-memory mode.")
     
     # Verify Ollama connectivity and model presence
     try:
         health_info = await check_ollama_health()
         logger.info(f"Ollama connected successfully. Serving model: {health_info['model']}")
+        
+        # Verify ALL models configured in models_registry.json are actually pulled locally in Ollama
+        from backend.models_registry import models_registry
+        available_tags = health_info.get("available_models", [])
+        all_ok, found_models, missing_models = models_registry.verify_all_models_present(available_tags)
+        
+        if missing_models:
+            logger.critical(
+                f"[STARTUP_CONFIG_ALERT] [WARNING] Missing locally pulled models defined in models_registry.json: {missing_models}!\n"
+                f"Available in Ollama: {available_tags}.\n"
+                f"Remediation: Run `ollama pull <model_id>` for each missing model to avoid runtime failovers."
+            )
+        else:
+            logger.info(f"[STARTUP_CONFIG_CHECK] All {len(found_models)} registry models verified in local Ollama: {found_models}")
     except Exception as e:
         logger.warning(f"Ollama health check warning: {e}. Backend running in degraded/offline-ollama mode.")
         
@@ -91,13 +134,85 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS Middleware for local intranet access
+# ══════════════════════════════════════════════════════════════════════
+# Global API authentication gate.
+#
+# Every HTTP route in this application lives under /api, so a single
+# middleware closes the default-open surface in one place instead of relying
+# on each handler remembering to check a token. Only the routes a browser
+# must reach *before* it has a token are public.
+#
+# Note: this middleware is registered BEFORE the CORS middleware below, so CORS
+# ends up outermost and its headers are present even on a 401 response.
+# ══════════════════════════════════════════════════════════════════════
+PUBLIC_API_ROUTES = {
+    ("POST", "/api/v1/auth/login"),
+    ("POST", "/api/auth/login"),
+    ("POST", "/api/v1/auth/ldap-login"),
+    ("POST", "/api/v1/auth/cert-login"),
+    ("GET", "/api/health"),
+    ("GET", "/api/v1/health"),
+    ("GET", "/docs"),
+    ("GET", "/redoc"),
+    ("GET", "/openapi.json"),
+}
+
+
+@app.middleware("http")
+async def enforce_api_auth(request: Request, call_next):
+    path = request.url.path
+    method = request.method.upper()
+
+    # Preflight and non-API paths are not authenticated here.
+    if method == "OPTIONS" or not path.startswith("/api"):
+        return await call_next(request)
+
+    if (method, path) in PUBLIC_API_ROUTES:
+        return await call_next(request)
+
+    caller = _caller_from_request(request)
+    if not caller:
+        logger.warning(
+            f"[AUTH] Rejected unauthenticated {method} {path} from "
+            f"{request.client.host if request.client else 'unknown'}"
+        )
+        return JSONResponse(
+            status_code=401,
+            content={
+                "status": "ERROR",
+                "detail": "Authentication required. Send 'Authorization: Bearer <session token>'.",
+            },
+        )
+
+    # Expose the verified identity to handlers.
+    request.state.caller = caller
+    return await call_next(request)
+
+
+# CORS Middleware for local intranet access.
+# The browser apps run on localhost/LAN origins, so we allow those explicitly
+# (configurable) instead of "*" — a wildcard plus credentials is never safe.
+_DEFAULT_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:3443",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "http://127.0.0.1:3443",
+]
+_env_origins = os.getenv("AEGIS_ALLOWED_ORIGINS", "").strip()
+ALLOWED_ORIGINS = [o.strip() for o in _env_origins.split(",") if o.strip()] or _DEFAULT_ALLOWED_ORIGINS
+# Air-gapped plant deployments reach the workbench over private ranges
+# (10/8, 172.16-31, 192.168/16) on any port.
+ALLOWED_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1|(10\.\d+\.\d+\.\d+)|(192\.168\.\d+\.\d+)|(172\.(1[6-9]|2\d|3[01])\.\d+\.\d+))(:\d+)?$"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 
@@ -128,19 +243,51 @@ class ChatRequest(BaseModel):
 
 # --- API Endpoints ---
 
+def _database_health() -> Dict[str, Any]:
+    """
+    Reports the configured database engine and whether it actually answers.
+
+    The engine label comes from configuration; `connected` is a live probe, so a
+    misconfigured or stopped database is visible here rather than surfacing later
+    as a failed request.
+    """
+    from backend.db_dialect import describe
+    info: Dict[str, Any] = {
+        "driver": DB_DRIVER,
+        "engine": "PostgreSQL" if IS_POSTGRES else "MySQL/MariaDB",
+        "target": describe(),
+        "connected": False,
+    }
+    try:
+        from backend.db_dialect import get_db_connection
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        finally:
+            conn.close()
+        info["connected"] = True
+    except Exception as exc:
+        info["error"] = f"{type(exc).__name__}: {exc}"
+    return info
+
+
 @app.get("/api/health")
 async def get_health():
     """
-    1. GET /api/health -> {status, ollama_connected, model: MODEL_NAME}
+    1. GET /api/health -> {status, ollama_connected, model: MODEL_NAME, database}
     """
+    database = _database_health()
     try:
         health_info = await check_ollama_health()
         return {
-            "status": "ok",
+            "status": "ok" if database["connected"] else "degraded",
             "ollama_connected": True,
             "model": MODEL_NAME,
             "num_ctx": NUM_CTX,
-            "air_gapped": True
+            "air_gapped": True,
+            "database": database,
         }
     except Exception as e:
         return JSONResponse(
@@ -150,6 +297,7 @@ async def get_health():
                 "ollama_connected": False,
                 "model": MODEL_NAME,
                 "error": str(e),
+                "database": database,
                 "fix": f"run: ollama serve && ollama pull {MODEL_NAME}"
             }
         )
@@ -157,6 +305,10 @@ async def get_health():
 
 # In-memory tracking of the last execution route per chat session
 SESSION_LAST_ROUTE: Dict[str, str] = {}
+
+# Per-request actor for the RAG audit ledger, so a retrieval triggered by this
+# turn is attributed to the authenticated caller rather than a fixed "operator".
+SESSION_ACTOR: ContextVar[Optional[str]] = ContextVar("aegis_session_actor", default=None)
 
 
 async def generate_chat_events(
@@ -174,7 +326,27 @@ async def generate_chat_events(
     3. {"token": "..."} repeatedly
     4. {"done": True, ...}
     """
+    # ── STRUCTURED LOGGING: Single request_id propagated through all downstream calls ──
+    from backend.structured_logger import (
+        set_current_request_id,
+        log_stage_event,
+        log_model_selection,
+    )
+    from backend.knowledge_base import set_retrieval_actor
+    req_id = set_current_request_id(chat_id)
+    # Attribute any RAG retrieval triggered by this turn to the real caller.
+    set_retrieval_actor(SESSION_ACTOR.get())
+    pipeline_start_t = time.perf_counter()
+    log_stage_event(
+        stage="PIPELINE_ENTRY",
+        status="STARTED",
+        request_id=req_id,
+        input_summary=f"msg_len={len(user_msg)}, requested_mode={requested_mode}, attachments={len(attachments) if attachments else 0}",
+        metadata={"chat_id": chat_id, "agent_id": agent_id or "default"}
+    )
+
     last_route = SESSION_LAST_ROUTE.get(chat_id)
+    router_start_t = time.perf_counter()
     route, trigger_keyword = await route_message_async(
         user_msg,
         requested_mode,
@@ -182,7 +354,28 @@ async def generate_chat_events(
         last_route=last_route,
         allow_multi=False
     )
+    router_elapsed_ms = (time.perf_counter() - router_start_t) * 1000.0
     SESSION_LAST_ROUTE[chat_id] = route
+
+    # Config-driven model selection from registry (no hardcoded model branches)
+    from backend.router import get_model_for_route
+    effective_model, effective_ctx, effective_temp = get_model_for_route(route)
+    log_model_selection(
+        selected_model=effective_model,
+        routing_decision=f"route={route}",
+        reason=f"trigger={trigger_keyword}, mode_requested={requested_mode}, attachments_count={len(attachments) if attachments else 0}",
+        request_id=req_id,
+        confidence=None
+    )
+    log_stage_event(
+        stage="ROUTER",
+        status="SUCCESS",
+        request_id=req_id,
+        input_summary=f"requested_mode={requested_mode}",
+        output_summary=f"route={route}, model={effective_model}, trigger={trigger_keyword}",
+        elapsed_ms=router_elapsed_ms,
+        metadata={"trigger": trigger_keyword, "model": effective_model, "context_window": effective_ctx, "temperature": effective_temp}
+    )
 
     # --- DEPARTMENT DETECTION ---
     department, dept_trigger = detect_department(user_msg)
@@ -227,27 +420,34 @@ async def generate_chat_events(
                         f"cached_query={cached['query']!r} chunks={len(rag_chunks)}"
                     )
                 else:
-                    rag_chunks = search_sops(user_msg, min_score=MIN_RAG_SCORE, top_k=4)
+                    rag_chunks = search_sops(user_msg, min_score=MIN_RAG_SCORE, top_k=MAX_RAG_CHUNKS)
                     if rag_chunks:
                         rag_status = "hit"
                         rag_cache.store(chat_id, user_msg, rag_chunks)
                     else:
-                        rag_status = "miss"
+                        rag_status = "no_relevant_context"
             else:
-                rag_chunks = search_sops(user_msg, min_score=MIN_RAG_SCORE, top_k=4)
+                rag_chunks = search_sops(user_msg, min_score=MIN_RAG_SCORE, top_k=MAX_RAG_CHUNKS)
                 if rag_chunks:
                     rag_status = "hit"
                     rag_cache.store(chat_id, user_msg, rag_chunks)
                 else:
-                    rag_status = "miss"
+                    rag_status = "no_relevant_context"
 
             if rag_chunks:
-                chunk_info = [(c["doc_id"], c["similarity_score"]) for c in rag_chunks]
+                chunk_info = [
+                    (
+                        c["doc_id"],
+                        f"cosine={c['similarity_score']}" if c.get("similarity_score") is not None
+                        else f"bm25={c.get('bm25_score', 0.0)}",
+                    )
+                    for c in rag_chunks
+                ]
                 logger.info(f"[RAG] chat_id={chat_id} INJECTED chunks={chunk_info}")
             else:
                 logger.info(
-                    f"[RAG] chat_id={chat_id} MISS no_chunks_above_threshold "
-                    f"min_score={MIN_RAG_SCORE} -> deterministic fallback applies"
+                    f"[RAG] chat_id={chat_id} NO_RELEVANT_CONTEXT_FOUND "
+                    f"min_score={MIN_RAG_SCORE} -> explicit no-context directive injected"
                 )
         else:
             logger.info(f"[RAG] chat_id={chat_id} SKIPPED reason={rag_trigger}")
@@ -259,9 +459,12 @@ async def generate_chat_events(
     yield {
         "event": "routing",
         "domain": route,
-        "model_id": MODEL_NAME,
+        "model_id": effective_model,
         "routed_by": routed_by_label,
-        "confidence": 98,
+        # The router does not compute a calibrated confidence. Reporting 98
+        # would be a fabricated number, so it is null with an explicit method.
+        "confidence": None,
+        "confidence_method": "not_computed",
         "reason": trigger_keyword,
     }
 
@@ -272,7 +475,7 @@ async def generate_chat_events(
         "template": template_key,
         "thinking": think_decision,
         "rag": rag_status,
-        "model": MODEL_NAME,
+        "model": effective_model,
         "event": "meta",
         "trigger": trigger_keyword,
         "dept_trigger": dept_trigger,
@@ -284,7 +487,10 @@ async def generate_chat_events(
     sandbox_job_id = None
     sandbox_exit_code = None
     try:
-        if route == "code":
+        if requested_mode in ("agent", "agentic", "multistep"):
+            from backend.agent_loop import run_multistep_agent_loop
+            handler = run_multistep_agent_loop(chat_id, user_msg)
+        elif route == "code":
             handler = handle_code_mode(chat_id, user_msg, think=think_decision)
         elif route == "docs":
             handler = handle_document_mode("docs", chat_id, user_msg)
@@ -330,7 +536,13 @@ async def generate_chat_events(
                 # Use the handler's filtered content (thinking already stripped)
                 handler_content = event.get("content", "")
                 accumulated_text = handler_content if handler_content else filter_thinking("".join(full_tokens))
-                effective_model = OCR_MODEL_NAME if route == "ocr" else (VISION_MODEL_NAME if route == "vision" else MODEL_NAME)
+                # Prefer the model the handler actually reported (ground truth).
+                # Otherwise keep the registry-resolved model from
+                # get_model_for_route() -- this line used to overwrite it with
+                # the hardcoded MODEL_NAME/VISION_MODEL_NAME constants, so the
+                # UI routing badge and the audit log named a model that did not
+                # produce the answer.
+                final_model = event.get("model_id") or effective_model
                 yield {
                     "done": True,
                     "generated_file": gen_file,
@@ -339,13 +551,16 @@ async def generate_chat_events(
                     "event": "final_answer",
                     "content": accumulated_text,
                     "deliverable_ids": [gen_file] if gen_file else [],
-                    "model_id": effective_model,
+                    "model_id": final_model,
                     "routed_by": route,
                     "thinking": think_decision,
                     "rag": rag_status,
                     "department": department,
                     "template": template_key,
-                    "confidence": 100,
+                    # The pipeline does not compute a calibrated confidence, so we
+                    # report null rather than an invented 100%.
+                    "confidence": None,
+                    "confidence_method": "not_computed",
                 }
             else:
                 yield event
@@ -360,9 +575,42 @@ async def generate_chat_events(
             f"template={template_key or 'none'} think={think_decision} "
             f"reason={think_reason} rag={rag_detail} tokens={len(full_tokens)}"
         )
+        # STRUCTURED LOGGING: Pipeline completion event
+        try:
+            total_elapsed_ms = (time.perf_counter() - pipeline_start_t) * 1000.0
+            log_stage_event(
+                stage="PIPELINE_COMPLETE",
+                status="SUCCESS",
+                request_id=req_id,
+                input_summary=f"route={route}, user_prompt_len={len(user_msg)}",
+                output_summary=f"tokens_generated={len(full_tokens)}, rag={rag_detail}",
+                elapsed_ms=total_elapsed_ms,
+                metadata={
+                    "route": route,
+                    "model": effective_model,
+                    "tokens_count": len(full_tokens),
+                    "department": department,
+                }
+            )
+        except Exception:
+            pass
 
     except Exception as e:
         logger.error(f"[CHAT ERROR] chat_id={chat_id} route={route} error={e}", exc_info=True)
+        # STRUCTURED LOGGING: Pipeline failure event
+        try:
+            total_elapsed_ms = (time.perf_counter() - pipeline_start_t) * 1000.0
+            log_stage_event(
+                stage="PIPELINE_COMPLETE",
+                status="FAILED",
+                request_id=req_id,
+                input_summary=f"route={route}",
+                elapsed_ms=total_elapsed_ms,
+                error=e,
+                metadata={"route": route}
+            )
+        except Exception:
+            pass
         err_msg = f"\n\n[Error processing request: {str(e)}]"
         yield {"token": err_msg, "event": "step", "step_type": "error", "content": err_msg}
         yield {
@@ -377,7 +625,7 @@ async def generate_chat_events(
 
 
 @app.post("/api/chat")
-async def chat_endpoint(request_body: ChatRequest):
+async def chat_endpoint(request_body: ChatRequest, request: Request):
     """
     POST /api/chat -> {message, mode, chat_id} -> SSE stream:
        - event 1: {"route": "...", "thinking": true/false, "rag": "hit"|"miss"|"skipped", "model": "..."}
@@ -386,7 +634,9 @@ async def chat_endpoint(request_body: ChatRequest):
        - final:   {"done": true, "generated_file": "<url or null>", "run_output": "<string or null>"}
     """
     attachments = request_body.attachments
-    user_msg = (request_body.message or request_body.prompt or "").strip()
+    # ChatRequest has no `prompt` field; reading it raised AttributeError for any
+    # client that sent an empty `message`. Only `message` is a real field.
+    user_msg = (request_body.message or "").strip()
     if not user_msg and attachments:
         user_msg = "Analyze the attached image and describe what you see."
     elif not user_msg:
@@ -396,11 +646,16 @@ async def chat_endpoint(request_body: ChatRequest):
     requested_mode = request_body.mode or "auto"
     agent_id = request_body.agent_id
 
-    # Log user query to activity & monitoring audit ledger
+    # Log user query to activity & monitoring audit ledger.
+    # The identity comes from the verified bearer token, not a hardcoded
+    # "operator", so the Security Monitor can attribute a query to a real user.
     try:
         from backend.db import log_user_activity
+        audit_username, audit_role = _request_identity(request)
+        SESSION_ACTOR.set(audit_username)
         log_user_activity(
-            username="operator",
+            username=audit_username,
+            role=audit_role,
             activity_type="CHAT_QUERY",
             query_text=user_msg,
             channel_or_chat_id=chat_id,
@@ -425,14 +680,39 @@ async def chat_endpoint(request_body: ChatRequest):
     )
 
 
+async def _authorize_websocket(websocket: WebSocket) -> Optional[Dict[str, Any]]:
+    """
+    Authenticates a WebSocket connection via the `token` query parameter.
+
+    Must be called BEFORE `websocket.accept()`. Closing an unaccepted socket
+    makes the server reject the HTTP upgrade with 403, so an unauthenticated
+    client never gets a successful handshake in the first place (rather than
+    being accepted and immediately dropped with close code 4401).
+    """
+    token = (websocket.query_params.get("token") or "").strip()
+    payload = _decode_token(token) if token else None
+    if not payload:
+        await websocket.close(code=1008, reason="Authentication required")
+        return None
+    return payload
+
+
 @app.websocket("/api/chat/stream")
 async def websocket_chat_stream(websocket: WebSocket):
     """
     WebSocket endpoint for real-time token and reasoning stream.
     Payload: {"message": str, "mode": Optional[str], "chat_id": Optional[str], "attachments": Optional[List[str]], "agent_id": Optional[str]}
+    Connect with ?token=<session token> (authentication is enforced).
     """
+    # Authenticate before accepting: an invalid token fails the HTTP upgrade.
+    caller = await _authorize_websocket(websocket)
+    if not caller:
+        logger.warning("[WS] Rejected unauthenticated /api/chat/stream connection")
+        return
     await websocket.accept()
-    logger.info("[WS] Client connected to /api/chat/stream")
+    logger.info(f"[WS] Client connected to /api/chat/stream as {caller.get('sub')}")
+    # Attribute any RAG retrieval on this connection to the verified caller.
+    SESSION_ACTOR.set(str(caller.get("sub") or "operator"))
 
     try:
         while True:
@@ -470,9 +750,14 @@ async def websocket_audit_stream(websocket: WebSocket):
     """
     WebSocket continuous 1000ms air-gap network & VRAM telemetry heartbeat stream.
     Gathers genuine psutil active network sockets and VRAM/RAM statistics.
+    Connect with ?token=<session token> (authentication is enforced).
     """
+    caller = await _authorize_websocket(websocket)
+    if not caller:
+        logger.warning("[WS] Rejected unauthenticated /api/audit-stream connection")
+        return
     await websocket.accept()
-    logger.info("[WS] Client connected to /api/audit-stream")
+    logger.info(f"[WS] Client connected to /api/audit-stream as {caller.get('sub')}")
     try:
         while True:
             ram = psutil.virtual_memory()
@@ -493,13 +778,21 @@ async def websocket_audit_stream(websocket: WebSocket):
 
             payload = {
                 "sovereignty": {
-                    "external_packets": 0,
-                    "localhost_packets": max(128, len(live_sockets) * 8),
-                    "lan_hotspot_packets": lan_cnt * 4,
+                    # Socket counts are measured; packet counters are not
+                    # available on this deployment and are never invented.
+                    "external_packets": None,
+                    "localhost_packets": None,
+                    "lan_hotspot_packets": None,
+                    "packet_counting_available": False,
                     "localhost_connections": localhost_cnt,
                     "lan_hotspot_connections": lan_cnt,
                     "external_internet_connections": blocked_cnt,
-                    "verdict": "100% AIR-GAPPED & SOVEREIGN" if blocked_cnt == 0 else "SECURITY ALERT: OUTBOUND BREACH FORCIBLY TERMINATED",
+                    "verdict": (
+                        f"ALERT: {blocked_cnt} external socket(s) observed by the egress guard"
+                        if blocked_cnt > 0
+                        else "No external sockets observed at sample time (point-in-time psutil inspection)"
+                    ),
+                    "sampled_at": datetime.now().isoformat(timespec="seconds"),
                     "daemon_heartbeat_hz": 1.0,
                     "sockets": live_sockets[:30]
                 },
@@ -627,11 +920,13 @@ async def get_vram_metrics():
 @app.get("/api/v1/models/status")
 async def get_models_status():
     from backend.domains import get_active_domain, get_active_domain_info
+    models_list = await get_models()
     return {
         "status": "ready",
         "active_model": MODEL_NAME,
         "active_domain": get_active_domain(),
         "domain_info": get_active_domain_info(),
+        "models": models_list,
     }
 
 
@@ -687,68 +982,239 @@ import base64
 import hashlib
 import hmac
 
+# --- Password hashing -------------------------------------------------
+# NOTE: the repo-root `.env` is loaded by `backend.config` at import time, which
+# happens before this module is read. A second loader used to live here, far
+# below the config import, so it ran too late to affect any setting.
+
+# Passwords are stored as PBKDF2-HMAC-SHA256 with a per-user random salt.
+# Legacy unsalted SHA-256 hashes are still *verified* (so existing accounts keep
+# working) but are transparently upgraded to PBKDF2 on the next successful login.
+PBKDF2_ITERATIONS = 260_000
+PASSWORD_ALGO = "pbkdf2_sha256"
+
+
+def _hash_password(password: str, salt_hex: Optional[str] = None) -> Dict[str, str]:
+    salt = bytes.fromhex(salt_hex) if salt_hex else secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS)
+    return {
+        "password_hash": digest.hex(),
+        "password_salt": salt.hex(),
+        "password_algo": PASSWORD_ALGO,
+    }
+
+
+def _verify_password(password: str, user: Dict[str, Any]) -> bool:
+    stored = user.get("password_hash", "")
+    algo = user.get("password_algo", "sha256_legacy")
+    if algo == PASSWORD_ALGO:
+        expected = _hash_password(password, user.get("password_salt"))["password_hash"]
+        return hmac.compare_digest(expected, stored)
+    # Legacy format: unsalted SHA-256.
+    return hmac.compare_digest(hashlib.sha256(password.encode()).hexdigest(), stored)
+
+
 AUTH_USERS = {
     "admin": {
-        "password_hash": hashlib.sha256("RefineryAdmin2026!".encode()).hexdigest(),
+        # Development seed accounts only. Override the whole registry with
+        # AEGIS_USERS_JSON for any real deployment.
         "role": "SUPER_ADMIN",
         "full_name": "Refinery Compliance Chief",
         "department": "Executive HSE & CISO",
         "status": "ACTIVE",
         "can_verify": True,
         "created_at": "2026-01-10 09:00:00",
+        **_hash_password("RefineryAdmin2026!"),
     },
     "operator": {
-        "password_hash": hashlib.sha256("RefineryPass2026!".encode()).hexdigest(),
         "role": "FIELD_OPERATOR",
         "full_name": "Lead Process Operator",
         "department": "Refinery Operations",
         "status": "ACTIVE",
         "can_verify": False,
         "created_at": "2026-02-14 11:30:00",
+        **_hash_password("RefineryPass2026!"),
     },
     "engineer": {
-        "password_hash": hashlib.sha256("RefineryEng2026!".encode()).hexdigest(),
         "role": "MAINTENANCE_ENG",
         "full_name": "Senior Reliability Engineer",
         "department": "Mechanical Maintenance",
         "status": "ACTIVE",
         "can_verify": True,
         "created_at": "2026-03-01 14:15:00",
+        **_hash_password("RefineryEng2026!"),
     },
     "lead": {
-        "password_hash": hashlib.sha256("ProcessLead2026!".encode()).hexdigest(),
         "role": "PROCESS_LEAD",
         "full_name": "Chief Process Lead",
         "department": "Crude Distillation Unit (CDU)",
         "status": "ACTIVE",
         "can_verify": True,
         "created_at": "2026-03-15 08:45:00",
+        **_hash_password("ProcessLead2026!"),
     },
 }
 
-JWT_SECRET = "sovereign-default-secret-key-2026"
+# Real deployments supply their own accounts, e.g.
+#   AEGIS_USERS_JSON='{"alice":{"password":"...","role":"SUPER_ADMIN","department":"HSE"}}'
+_env_users = os.getenv("AEGIS_USERS_JSON", "").strip()
+if _env_users:
+    try:
+        _parsed_users = json.loads(_env_users)
+        if not isinstance(_parsed_users, dict):
+            raise ValueError("AEGIS_USERS_JSON must be a JSON object keyed by username")
+        for _uname, _spec in _parsed_users.items():
+            if not isinstance(_spec, dict):
+                continue
+            _entry: Dict[str, Any] = {
+                "role": _spec.get("role", "FIELD_OPERATOR"),
+                "full_name": _spec.get("full_name", _uname),
+                "department": _spec.get("department", "Unassigned"),
+                "status": _spec.get("status", "ACTIVE"),
+                "can_verify": _spec.get("can_verify", _spec.get("role") in ("SUPER_ADMIN", "PROCESS_LEAD", "MAINTENANCE_ENG")),
+                "created_at": _spec.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            }
+            if _spec.get("password"):
+                _entry.update(_hash_password(str(_spec["password"])))
+            elif _spec.get("password_hash"):
+                # Pre-hashed accounts are supported so plaintext never has to be
+                # present in the environment.
+                _entry["password_hash"] = _spec["password_hash"]
+                _entry["password_salt"] = _spec.get("password_salt", "")
+                _entry["password_algo"] = _spec.get("password_algo", PASSWORD_ALGO)
+            else:
+                continue
+            AUTH_USERS[_uname.lower()] = _entry
+    except Exception as _users_err:
+        logger.critical(f"[SECURITY] AEGIS_USERS_JSON could not be parsed: {_users_err}")
+
+# Token signing secret: supplied by the environment in any real deployment.
+# If it is missing we generate a strong random per-process secret (tokens then
+# stop validating after a restart, which is the safe failure mode) and warn.
+_ENV_JWT_SECRET = os.getenv("AEGIS_JWT_SECRET", "").strip()
+USING_EPHEMERAL_JWT_SECRET = not _ENV_JWT_SECRET
+JWT_SECRET = _ENV_JWT_SECRET or secrets.token_urlsafe(48)
+TOKEN_TTL_SECONDS = int(os.getenv("AEGIS_TOKEN_TTL_SECONDS", "28800"))
+
+
+def _token_signature(raw_payload_b64: str) -> str:
+    return hmac.new(
+        JWT_SECRET.encode(),
+        raw_payload_b64.encode(),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def _make_token(username: str, role: str) -> str:
-    """Simple base64 token for demo auth."""
-    payload = json.dumps({"sub": username, "role": role, "exp": int(time.time()) + 28800})
-    return base64.urlsafe_b64encode(payload.encode()).decode()
+    """Issues an HMAC-signed session token (payload.signature)."""
+    payload = json.dumps(
+        {"sub": username, "role": role, "exp": int(time.time()) + TOKEN_TTL_SECONDS}
+    )
+    payload_b64 = base64.urlsafe_b64encode(payload.encode()).decode()
+    return f"{payload_b64}.{_token_signature(payload_b64)}"
 
 
 def _decode_token(token: str) -> Optional[Dict[str, Any]]:
-    """Decode simple base64 token."""
+    """
+    Verifies and decodes a session token.
+
+    Returns None for anything that is not an intact, correctly signed,
+    unexpired token — an unsigned/edited token can never be trusted.
+    """
+    if not token or "." not in (token or ""):
+        return None
+    payload_b64, _, signature = token.partition(".")
+    if not payload_b64 or not signature:
+        return None
+    expected = _token_signature(payload_b64)
+    if not hmac.compare_digest(expected, signature):
+        logger.warning("[AUTH] Rejected a token with an invalid signature.")
+        return None
     try:
-        payload = json.loads(base64.urlsafe_b64decode(token.encode()))
-        if payload.get("exp", 0) < time.time():
-            return None
-        return payload
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode()))
     except Exception:
         return None
+    if payload.get("exp", 0) < time.time():
+        return None
+    return payload
+
+
+def _caller_from_request(request: Request) -> Optional[Dict[str, Any]]:
+    """
+    Resolves the caller identity from the Authorization header, or None.
+
+    The `Bearer` scheme is required: a bare token with no scheme (or a different
+    scheme) is not accepted, so the credential format is unambiguous.
+    """
+    if request is None:
+        return None
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header:
+        return None
+    scheme, _, token = auth_header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return _decode_token(token.strip())
+
+
+def _require_roles(
+    request: Request,
+    allowed_roles: tuple,
+    action: str,
+    claimed_role: Optional[str] = None,
+):
+    """
+    Enforces that the caller is authenticated AND holds an allowed role.
+
+    A missing or invalid token is 401 — an unverified request is never
+    treated as authorised just because no role could be determined.
+    """
+    caller = _caller_from_request(request)
+    if not caller:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Authentication required to {action}. Provide 'Authorization: Bearer <token>'.",
+        )
+    role = caller.get("role")
+    if role not in allowed_roles:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Access Denied: {action} requires one of "
+                f"{', '.join(allowed_roles)} (caller role: {role or 'unknown'})."
+            ),
+        )
+    return caller
 
 
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+# Capability grants per role. Returned to the client so UI affordances can be
+# gated consistently, and sent on every login/whoami response.
+_ROLE_PERMISSIONS: Dict[str, List[str]] = {
+    "SUPER_ADMIN": [
+        "read", "write", "admin", "verify", "user:manage",
+        "rag:reindex_global", "domain:switch", "sovereignty:export",
+    ],
+    "ADMIN": [
+        "read", "write", "admin", "verify", "user:manage",
+        "rag:reindex_global", "domain:switch", "sovereignty:export",
+    ],
+    "PROCESS_LEAD": ["read", "write", "verify", "rag:reindex_global"],
+    "MAINTENANCE_ENG": ["read", "write", "verify"],
+    "FIELD_OPERATOR": ["read", "write"],
+    "PLANT_SECURITY_OFFICER": [
+        "read", "write", "admin", "verify", "user:manage", "sovereignty:export",
+    ],
+}
+
+
+def _permissions_for_role(role: str) -> List[str]:
+    """Returns the capability list granted to a role (read-only by default)."""
+    return list(_ROLE_PERMISSIONS.get((role or "").upper(), ["read"]))
 
 
 @app.post("/api/v1/auth/login")
@@ -764,12 +1230,20 @@ async def login_endpoint(body: LoginRequest):
             content={"status": "ERROR", "detail": "Access Denied: Account is frozen/suspended by Administrator."}
         )
 
-    pw_hash = hashlib.sha256(body.password.encode()).hexdigest()
-    if not hmac.compare_digest(pw_hash, user["password_hash"]):
+    if not _verify_password(body.password, user):
         return JSONResponse(status_code=401, content={"status": "ERROR", "detail": "Invalid credentials"})
+
+    # Transparent upgrade: a legacy unsalted hash becomes PBKDF2 on first login.
+    if user.get("password_algo", "sha256_legacy") != PASSWORD_ALGO:
+        user.update(_hash_password(body.password))
+        logger.info(f"[AUTH] Upgraded the stored password hash for '{body.username}' to {PASSWORD_ALGO}.")
 
     token = _make_token(body.username, user["role"])
     logger.info(f"[AUTH] Login successful: user={body.username} role={user['role']}")
+    # Permissions are echoed inside `user` as well as at the top level: the
+    # client stores only `data.user`, so a top-level-only field left
+    # `user.permissions` undefined and role-gated UI checks could never pass.
+    granted_permissions = _permissions_for_role(user["role"])
     return {
         "status": "SUCCESS",
         "token": token,
@@ -781,22 +1255,21 @@ async def login_endpoint(body: LoginRequest):
             "full_name": user["full_name"],
             "department": user["department"],
             "can_verify": user.get("can_verify", user["role"] in ("SUPER_ADMIN", "PROCESS_LEAD", "MAINTENANCE_ENG")),
+            "permissions": granted_permissions,
         },
-        "permissions": ["read", "write", "admin"],
+        "permissions": granted_permissions,
     }
 
 
 @app.get("/api/v1/auth/me")
 async def get_auth_me(request: Request):
     """GET /api/v1/auth/me -> return current user from token."""
-    auth_header = request.headers.get("Authorization", "")
-    token = auth_header.replace("Bearer ", "").strip()
-    if not token:
-        return JSONResponse(status_code=401, content={"status": "ERROR", "detail": "No token provided"})
-
-    payload = _decode_token(token)
+    payload = _caller_from_request(request)
     if not payload:
-        return JSONResponse(status_code=401, content={"status": "ERROR", "detail": "Invalid or expired token"})
+        return JSONResponse(
+            status_code=401,
+            content={"status": "ERROR", "detail": "No valid bearer token provided"},
+        )
 
     username = payload.get("sub", "")
     user = AUTH_USERS.get(username)
@@ -810,6 +1283,7 @@ async def get_auth_me(request: Request):
         "full_name": user["full_name"],
         "department": user["department"],
         "can_verify": user.get("can_verify", user["role"] in ("SUPER_ADMIN", "PROCESS_LEAD", "MAINTENANCE_ENG")),
+        "permissions": _permissions_for_role(user["role"]),
         "authenticated": True,
     }
 
@@ -830,12 +1304,31 @@ async def get_history(chat_id: str):
 @app.get("/api/files/list")
 async def list_files(chat_id: Optional[str] = None):
     """Lists generated deliverable files with full 2-step verification metadata."""
-    from backend.db import get_all_deliverable_files
+    from backend.db import backfill_file_metadata, get_all_deliverable_files
     rows = get_all_deliverable_files(chat_id)
     
     items = []
+    backfilled = 0
     for r in rows:
         v_status = r.get("verification_status") or "PENDING_STAGE_1"
+        size_bytes = r.get("size_bytes")
+        sha256_hash = r.get("sha256_hash")
+
+        # Self-heal legacy rows: compute the real size/hash once, then persist it
+        # so the Canvas/verification UIs report genuine integrity metadata.
+        if (size_bytes is None or not sha256_hash) and backfilled < 25:
+            try:
+                candidate = Path(r.get("file_path") or "")
+                if candidate.exists() and candidate.is_file() and candidate.stat().st_size <= 20 * 1024 * 1024:
+                    computed_hash, computed_size = file_integrity(candidate)
+                    if computed_hash:
+                        backfill_file_metadata(r["file_id"], computed_hash, computed_size)
+                        sha256_hash = sha256_hash or computed_hash
+                        size_bytes = size_bytes if size_bytes is not None else computed_size
+                        backfilled += 1
+            except Exception as e:
+                logger.debug(f"[FILES LIST] Integrity backfill skipped for {r.get('file_id')}: {e}")
+
         items.append({
             "file_id": r["file_id"],
             "chat_id": r["chat_id"],
@@ -851,7 +1344,10 @@ async def list_files(chat_id: Optional[str] = None):
             "rejected_by": r.get("rejected_by"),
             "rejected_at": str(r["rejected_at"]) if r.get("rejected_at") else None,
             "reject_reason": r.get("reject_reason"),
+            "size_bytes": size_bytes,
+            "sha256_hash": sha256_hash,
             "created_at": str(r["created_at"]),
+            "updated_at": str(r["updated_at"]) if r.get("updated_at") else None,
             "download_url": f"/api/files/{r['file_id']}"
         })
     return {"files": items}
@@ -899,19 +1395,21 @@ class EditAndApproveRequest(BaseModel):
 @app.get("/api/v1/verification/pending")
 async def get_pending_verification_items(role: Optional[str] = None, request: Request = None):
     """
-    Returns deliverables awaiting verification filtered by user role:
-    - PROCESS_LEAD / MAINTENANCE_ENG -> Stage 1 items
-    - SUPER_ADMIN / FIELD_OPERATOR -> Stage 2 items (and Stage 1)
+    Returns deliverables awaiting verification filtered by the caller's
+    authenticated role (the `role` query parameter is ignored for authorization):
+    - PROCESS_LEAD / MAINTENANCE_ENG / FIELD_OPERATOR -> Stage 1 items only
+    - SUPER_ADMIN / ADMIN -> Stage 1 and Stage 2 items
     """
     from backend.db import get_pending_verifications
-    effective_role = role
-    if not effective_role and request:
-        auth_header = request.headers.get("Authorization", "")
-        token = auth_header.replace("Bearer ", "").strip()
-        payload = _decode_token(token) if token else None
-        if payload:
-            effective_role = payload.get("role")
-            
+    # The role is taken from the signed token only. A client-supplied `role`
+    # query parameter is never trusted for authorization.
+    caller = _require_roles(
+        request,
+        ("PROCESS_LEAD", "MAINTENANCE_ENG", "SUPER_ADMIN", "ADMIN", "FIELD_OPERATOR"),
+        "view the verification queue",
+    )
+    effective_role = caller.get("role")
+
     items = get_pending_verifications(effective_role)
     stage1_count = len([i for i in items if i.get("verification_status") == "PENDING_STAGE_1"])
     stage2_count = len([i for i in items if i.get("verification_status") == "PENDING_STAGE_2"])
@@ -953,6 +1451,11 @@ async def approve_stage_1(file_id: str, body: VerifyActionRequest, request: Requ
     Advances deliverable from PENDING_STAGE_1 -> PENDING_STAGE_2.
     """
     from backend.db import get_file_record, verify_file_stage_1
+    _require_roles(
+        request,
+        ("PROCESS_LEAD", "MAINTENANCE_ENG", "SUPER_ADMIN", "ADMIN"),
+        "approve Step 1 verification",
+    )
     record = get_file_record(file_id)
     if not record:
         raise HTTPException(status_code=404, detail="Deliverable file not found")
@@ -988,6 +1491,13 @@ async def approve_stage_2(file_id: str, body: VerifyActionRequest, request: Requ
     Transitions deliverable from PENDING_STAGE_2 -> VERIFIED.
     """
     from backend.db import get_file_record, verify_file_stage_2
+    # Authorization runs before any lookup so an unauthenticated caller cannot
+    # probe which file ids exist (404 vs 401 would leak that).
+    _require_roles(
+        request,
+        ("SUPER_ADMIN", "ADMIN"),
+        "complete Step 2 final sign-off",
+    )
     record = get_file_record(file_id)
     if not record:
         raise HTTPException(status_code=404, detail="Deliverable file not found")
@@ -1004,20 +1514,8 @@ async def approve_stage_2(file_id: str, body: VerifyActionRequest, request: Requ
             detail=f"Document is not awaiting Step 2 Sign-off (Current status: {current_status})."
         )
 
-    # Check caller role if provided
-    caller_role = body.role
-    if not caller_role and request:
-        auth_header = request.headers.get("Authorization", "")
-        token = auth_header.replace("Bearer ", "").strip()
-        payload = _decode_token(token) if token else None
-        if payload:
-            caller_role = payload.get("role")
-
-    if caller_role and caller_role not in ("SUPER_ADMIN", "ADMIN"):
-        raise HTTPException(
-            status_code=403,
-            detail="Higher Post Authority Required: Step 2 Final Sign-Off can only be approved by SUPER_ADMIN."
-        )
+    # Authorization: the caller must be authenticated and hold the required role.
+    # (Previously an unresolvable role skipped the check entirely.)
 
     verifier = body.verifier or "Refinery Compliance Chief"
     notes = body.notes or "Step 2: Executive compliance & regulatory sign-off certified"
@@ -1042,6 +1540,11 @@ async def reject_verification(file_id: str, body: RejectActionRequest, request: 
     Marks deliverable as REJECTED with mandatory reason note.
     """
     from backend.db import get_file_record, reject_file
+    caller = _require_roles(
+        request,
+        ("PROCESS_LEAD", "MAINTENANCE_ENG", "SUPER_ADMIN", "ADMIN"),
+        "reject a deliverable",
+    )
     record = get_file_record(file_id)
     if not record:
         raise HTTPException(status_code=404, detail="Deliverable file not found")
@@ -1049,7 +1552,7 @@ async def reject_verification(file_id: str, body: RejectActionRequest, request: 
     if not body.reason.strip():
         raise HTTPException(status_code=400, detail="Rejection reason is required")
         
-    rejected_by = body.rejected_by or "Reviewer"
+    rejected_by = body.rejected_by or caller.get("sub") or "Reviewer"
     reject_file(file_id, rejected_by=rejected_by, reason=body.reason.strip())
     logger.info(f"[VERIFY REJECT] File {file_id} rejected by {rejected_by}. Reason: {body.reason}")
     
@@ -1065,12 +1568,18 @@ async def reject_verification(file_id: str, body: RejectActionRequest, request: 
 
 @app.post("/api/verification/{file_id}/edit-and-approve")
 @app.post("/api/v1/verification/{file_id}/edit-and-approve")
-async def edit_and_approve(file_id: str, body: EditAndApproveRequest):
+async def edit_and_approve(file_id: str, body: EditAndApproveRequest, request: Request):
     """
     Make Edits & Proceed:
     Updates document metadata/filename, records verification notes, and promotes to next stage.
     """
     from backend.db import get_file_record, verify_file_stage_1, verify_file_stage_2, rename_file_record
+    _require_roles(
+        request,
+        ("PROCESS_LEAD", "MAINTENANCE_ENG", "SUPER_ADMIN", "ADMIN") if body.stage == 1
+        else ("SUPER_ADMIN", "ADMIN"),
+        f"edit-and-approve at stage {body.stage}",
+    )
     record = get_file_record(file_id)
     if not record:
         raise HTTPException(status_code=404, detail="Deliverable file not found")
@@ -1284,6 +1793,149 @@ async def get_file_content(file_id: str):
     return {"file_id": file_id, "filename": filename, "file_type": file_type, "content": "Raw Binary"}
 
 
+class SaveFileContentRequest(BaseModel):
+    """Canvas save payload emitted by the chat frontend editors."""
+    content: Dict[str, Any] = Field(default_factory=dict)
+    editor: Optional[str] = None
+
+
+def _request_identity(request: Optional[Request]) -> tuple:
+    """Resolves (username, role) from the verified bearer token.
+
+    The global gate already rejects unauthenticated /api calls, so a request
+    that reaches here carries a valid token; the fallback is defensive only.
+    """
+    if request is None:
+        return "operator", "FIELD_OPERATOR"
+    payload = _caller_from_request(request)
+    if not payload:
+        return "operator", "FIELD_OPERATOR"
+    return (
+        payload.get("sub") or payload.get("username") or "operator",
+        payload.get("role") or "FIELD_OPERATOR",
+    )
+
+
+@app.post("/api/files/{file_id}/content")
+@app.post("/api/v1/files/{file_id}/content")
+async def save_file_content(file_id: str, body: SaveFileContentRequest, request: Request):
+    """
+    Persists Canvas edits back onto the real deliverable on disk.
+
+    The pre-edit revision is snapshotted to `<name>.bak` for auditability, the
+    new revision is serialized to a temp file that keeps the original extension
+    and then atomically swapped in, so a serialization failure can never
+    destroy the original deliverable. Editing a document that already reached
+    a later verification stage re-opens the 2-step human verification gate,
+    because the approved bytes no longer match what is on disk.
+    """
+    record = get_file_record(file_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    file_path = Path(record["file_path"])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk.")
+
+    content = body.content or {}
+    if not isinstance(content, dict) or not content:
+        raise HTTPException(status_code=400, detail="Canvas payload is empty.")
+
+    username, role = _request_identity(request)
+
+    # 1. Preserve the pre-edit revision for audit
+    backup_path = file_path.with_name(f"{file_path.name}.bak")
+    try:
+        shutil.copy2(str(file_path), str(backup_path))
+    except Exception as e:
+        logger.warning(f"[CANVAS SAVE] Could not snapshot revision of {file_id}: {e}")
+        backup_path = None
+
+    # 2. Serialize to a temp file that preserves the original extension
+    temp_path = file_path.with_name(f"{file_path.stem}.canvas-tmp{file_path.suffix}")
+
+    from backend.canvas_serialization import CanvasSerializationError, apply_editor_content_to_file
+
+    try:
+        apply_editor_content_to_file(temp_path, record.get("file_type", ""), content)
+        os.replace(str(temp_path), str(file_path))
+    except CanvasSerializationError as e:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
+        logger.error(f"[CANVAS SAVE] Serialization failed for {file_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Canvas save failed; the original deliverable was preserved. {e}",
+        )
+
+    # 3. Refresh integrity metadata and verification state
+    sha256_hash, size_bytes = file_integrity(file_path)
+
+    from backend.db import mark_file_edited
+
+    edit_info = mark_file_edited(file_id, sha256_hash=sha256_hash, size_bytes=size_bytes) or {}
+    previous_status = edit_info.get("previous_status")
+    new_status = edit_info.get("verification_status")
+    reverification_required = bool(edit_info.get("reverification_required"))
+
+    # 4. Record the edit in the security audit ledger
+    try:
+        from backend.db import log_user_activity
+
+        log_user_activity(
+            username=username,
+            role=role,
+            activity_type="FILE_EDIT",
+            channel_or_chat_id=record.get("chat_id"),
+            query_text=f"Canvas save: {record.get('filename')}",
+            details=(
+                f"file_id={file_id} type={record.get('file_type')} "
+                f"status {previous_status} -> {new_status}"
+            ),
+            file_meta={
+                "file_id": file_id,
+                "filename": record.get("filename"),
+                "sha256_hash": sha256_hash,
+                "size_bytes": size_bytes,
+            },
+        )
+    except Exception as e:
+        logger.debug(f"[CANVAS SAVE] Audit logging skipped: {e}")
+
+    logger.info(
+        f"[CANVAS SAVE] file_id={file_id} saved by {username} ({role}): "
+        f"verification {previous_status} -> {new_status}"
+    )
+
+    return {
+        "status": "SUCCESS",
+        "file_id": file_id,
+        "filename": record.get("filename"),
+        "file_type": record.get("file_type"),
+        "sha256_hash": sha256_hash,
+        "size_bytes": size_bytes,
+        "previous_verification_status": previous_status,
+        "verification_status": new_status,
+        "reverification_required": reverification_required,
+        "backup_created": backup_path.name if backup_path else None,
+        "message": (
+            "Deliverable saved. Re-verification required because the content changed after approval."
+            if reverification_required
+            else "Deliverable saved to air-gapped storage."
+        ),
+    }
+
+
 @app.get("/api/files/{file_id}")
 @app.get("/api/files/download/{file_id}")
 async def download_file(file_id: str):
@@ -1320,197 +1972,63 @@ async def download_file(file_id: str):
     )
 
 
-@app.get("/api/files/{file_id}/content")
-async def get_file_content(file_id: str):
-    """
-    Parses and returns structured content of generated deliverables (.xlsx, .docx, .pptx)
-    so Canvas Editors display the EXACT live generated data instead of fallback templates.
-    """
-    record = get_file_record(file_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="File not found.")
-        
-    file_path = Path(record["file_path"])
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found on disk.")
-        
-    filename = record["filename"]
-    file_type = record["file_type"].lower()
-
-    # 1. Parse Excel Workbook (.xlsx)
-    if file_type == "xlsx":
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(str(file_path), data_only=True)
-            sheets_out = []
-            for s_idx, ws in enumerate(wb.worksheets):
-                rows_data = []
-                for r_idx, row in enumerate(ws.iter_rows(values_only=True)):
-                    row_cells = []
-                    for c_idx, val in enumerate(row):
-                        is_hdr = (r_idx == 0 or (r_idx == 2 and ws.cell(row=1, column=1).value))
-                        val_str = "" if val is None else str(val)
-                        align = "right" if isinstance(val, (int, float)) else "left"
-                        bg = "#f1f5f9" if is_hdr else "#ffffff"
-                        row_cells.append({
-                            "value": val_str,
-                            "isHeader": is_hdr,
-                            "style": {
-                                "bold": is_hdr,
-                                "align": align,
-                                "bgColor": bg,
-                                "color": "#0f172a" if is_hdr else "#1e293b"
-                            }
-                        })
-                    if any(c["value"] for c in row_cells):
-                        rows_data.append(row_cells)
-                        
-                sheets_out.append({
-                    "id": f"sheet-{s_idx + 1}",
-                    "name": ws.title,
-                    "rows": rows_data if rows_data else [
-                        [{"value": "No Data", "isHeader": False, "style": {"align": "left"}}]
-                    ]
-                })
-            return {"file_id": file_id, "filename": filename, "file_type": "xlsx", "sheets": sheets_out}
-        except Exception as e:
-            logger.error(f"Error parsing xlsx deliverable {file_id}: {e}")
-            return {"file_id": file_id, "filename": filename, "file_type": "xlsx", "error": str(e)}
-
-    # 2. Parse Word Document (.docx)
-    elif file_type == "docx":
-        try:
-            import docx
-            doc = docx.Document(str(file_path))
-            html_parts = []
-            
-            for p in doc.paragraphs:
-                text = p.text.strip()
-                if not text:
-                    continue
-                if p.style.name.startswith("Heading 1"):
-                    html_parts.append(f'<h1 style="color: #1e40af; border-bottom: 2px solid #cbd5e1; padding-bottom: 6px; font-size: 20px; font-weight: 800; margin-top: 18px;">{text}</h1>')
-                elif p.style.name.startswith("Heading 2"):
-                    html_parts.append(f'<h2 style="color: #0369a1; font-size: 16px; font-weight: 700; margin-top: 16px;">{text}</h2>')
-                elif p.style.name.startswith("Heading 3"):
-                    html_parts.append(f'<h3 style="color: #0f172a; font-size: 14px; font-weight: 700; margin-top: 12px;">{text}</h3>')
-                elif p.style.name.startswith("List Bullet") or text.startswith("• ") or text.startswith("- "):
-                    clean_bullet = text.lstrip("•-* ")
-                    html_parts.append(f'<li style="color: #1e293b; line-height: 1.7; font-size: 14px; margin-left: 18px;">{clean_bullet}</li>')
-                else:
-                    html_parts.append(f'<p style="color: #1e293b; line-height: 1.7; font-size: 14px; margin-top: 8px;">{text}</p>')
-
-            for tbl in doc.tables:
-                table_html = ['<table style="width: 100%; border-collapse: collapse; margin-top: 14px; margin-bottom: 18px; border: 1px solid #cbd5e1; font-size: 13px;">']
-                for r_idx, row in enumerate(tbl.rows):
-                    table_html.append("<tr>")
-                    for cell in row.cells:
-                        c_text = cell.text.strip()
-                        if r_idx == 0:
-                            table_html.append(f'<th style="padding: 9px 12px; background-color: #f1f5f9; border: 1px solid #cbd5e1; font-weight: 700; text-align: left; color: #0f172a;">{c_text}</th>')
-                        else:
-                            table_html.append(f'<td style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #334155;">{c_text}</td>')
-                    table_html.append("</tr>")
-                table_html.append("</table>")
-                html_parts.append("".join(table_html))
-
-            final_html = "".join(html_parts)
-            return {"file_id": file_id, "filename": filename, "file_type": "docx", "html": final_html}
-        except Exception as e:
-            logger.error(f"Error parsing docx deliverable {file_id}: {e}")
-            return {"file_id": file_id, "filename": filename, "file_type": "docx", "error": str(e)}
-
-    # 3. Parse PowerPoint Slides (.pptx)
-    elif file_type == "pptx":
-        try:
-            from pptx import Presentation
-            prs = Presentation(str(file_path))
-            slides_out = []
-            
-            for s_idx, slide in enumerate(prs.slides):
-                title = ""
-                subtitle = ""
-                bullets = []
-                notes = ""
-                
-                if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
-                    notes = slide.notes_slide.notes_text_frame.text.strip()
-                    
-                for shape in slide.shapes:
-                    if shape.has_text_frame:
-                        for p_idx, p in enumerate(shape.text_frame.paragraphs):
-                            t = p.text.strip()
-                            if not t:
-                                continue
-                            if not title:
-                                title = t
-                            elif not subtitle and s_idx == 0:
-                                subtitle = t
-                            else:
-                                bullets.append(t.lstrip("•-*✓ "))
-                                
-                slides_out.append({
-                    "id": s_idx + 1,
-                    "layout": "title" if s_idx == 0 else "content",
-                    "title": title or f"Slide {s_idx + 1}",
-                    "subtitle": subtitle,
-                    "bullets": bullets if bullets else ["Key Takeaways & Findings"],
-                    "kpis": [],
-                    "timeline": [],
-                    "notes": notes,
-                })
-                
-            return {"file_id": file_id, "filename": filename, "file_type": "pptx", "slides": slides_out}
-        except Exception as e:
-            logger.error(f"Error parsing pptx deliverable {file_id}: {e}")
-            return {"file_id": file_id, "filename": filename, "file_type": "pptx", "error": str(e)}
-
-    return {"file_id": file_id, "filename": filename, "file_type": file_type, "content": "Raw Binary"}
-    
+@app.get("/api/models")
 @app.get("/api/models")
 @app.get("/api/v1/models")
 async def get_models():
-    """Returns the active sovereign models (text + vision) plus any models discovered across connected nodes."""
+    """Returns the active sovereign models dynamically discovered from Ollama plus any connected nodes."""
     from backend.nodes import get_all_nodes, _model_node_bindings
+    import httpx
     
-    # Base local models
-    base_models = [
-        {
-            "id": MODEL_NAME,
-            "name": MODEL_NAME,
-            "display_name": "Sovereign Deep Reasoning (Gemma-4 / DeepSeek)",
-            "quantization": "Q4_K_S",
-            "vram_mb": 3400,
+    # Auto-discover local Ollama models dynamically
+    discovered_tags = []
+    try:
+        resp = httpx.get(f"{OLLAMA_HOST}/api/tags", timeout=3.0)
+        if resp.status_code == 200:
+            for item in resp.json().get("models", []):
+                t_name = item.get("name")
+                if t_name and t_name not in discovered_tags:
+                    discovered_tags.append(t_name)
+    except Exception as e:
+        logger.debug(f"[MODELS] Ollama tag discovery fallback: {e}")
+
+    model_configs = {
+        "deepseek-v4-pro:4b": ("Sovereign Deep Reasoning (Gemma-4 / DeepSeek)", "text_reasoning", "General text, safety SOP verification, coding, and document generation engine.", 3400),
+        "gemma4-e4b:latest": ("Gemma 4 Industrial Process Specialist", "engineering_process", "Refinery process thermodynamics, yield formulas, and furnace safety.", 3200),
+        "qwen2.5vl:3b": ("Sovereign Industrial Multimodal (OCR & P&ID)", "vision_multimodal", "Multimodal visual inspection, CAD/P&ID diagrams, and tabular OCR extraction.", 2200),
+        "unlimited-ocr:latest": ("Air-Gapped High-Speed OCR Engine", "ocr_extraction", "Document scanner, handwritten notes, and tag plate transcription.", 2000),
+    }
+
+    base_models = []
+    # Ensure current primary model is first
+    tags_to_process = list(discovered_tags) if discovered_tags else [MODEL_NAME, VISION_MODEL_NAME]
+    if MODEL_NAME in tags_to_process:
+        tags_to_process.remove(MODEL_NAME)
+        tags_to_process.insert(0, MODEL_NAME)
+
+    for tag in tags_to_process:
+        cfg = model_configs.get(tag, (tag, "general", "Discovered sovereign open-weight model.", 2500))
+        is_prim = (tag == MODEL_NAME)
+        base_models.append({
+            "id": tag,
+            "name": tag,
+            "display_name": cfg[0],
+            "quantization": "Q4_K_M",
+            "vram_mb": cfg[3],
             "context_length": NUM_CTX,
-            "domain": "text_reasoning",
-            "is_primary": True,
+            "domain": cfg[1],
+            "is_primary": is_prim,
             "keep_alive": "300s",
-            "status": "active",
+            "status": "active" if is_prim else "standby",
             "node_ip": "127.0.0.1",
-            "description": "General text, safety SOP verification, coding, and document generation engine.",
-        },
-        {
-            "id": VISION_MODEL_NAME,
-            "name": VISION_MODEL_NAME,
-            "display_name": "Sovereign Industrial Multimodal (OCR & P&ID)",
-            "quantization": "IQ4_XS",
-            "vram_mb": 2200,
-            "context_length": NUM_CTX,
-            "domain": "vision_multimodal",
-            "is_primary": False,
-            "keep_alive": "300s",
-            "status": "standby",
-            "node_ip": "127.0.0.1",
-            "description": "Multimodal visual inspection, CAD/P&ID diagrams, and tabular OCR extraction.",
-        }
-    ]
+            "description": cfg[2],
+        })
     
     # Inject discovered models from remote nodes if any
     all_nodes = get_all_nodes()
     for node in all_nodes:
         if not node.is_local and node.status == "online":
             for m_tag in node.discovered_models:
-                # Check if not already in list
                 if not any(m["id"] == m_tag for m in base_models):
                     base_models.append({
                         "id": m_tag,
@@ -1615,12 +2133,94 @@ async def bind_model(body: BindModelRequest):
     return {"status": "success", "message": f"Model {body.model_id} bound to node {body.node_id}."}
 
 
+class ModelEndpointRequest(BaseModel):
+    endpoint_url: str
+
+
+@app.post("/api/v1/models/{model_id}/endpoint")
+async def set_model_endpoint(model_id: str, body: ModelEndpointRequest):
+    """
+    Points a model at a specific Ollama endpoint.
+
+    This route was missing, so the Admin UI's per-model endpoint editor always
+    404'd. The endpoint is parsed into host/port, validated as RFC 1918 private
+    or loopback (air-gap policy), registered as a compute node, and the model is
+    bound to it — reusing the existing node registry rather than inventing a
+    second binding mechanism.
+    """
+    from urllib.parse import urlparse
+    from backend.nodes import (
+        add_or_update_node, bind_model_to_node,
+        is_private_or_loopback_ip, test_node_connection,
+    )
+
+    raw = (body.endpoint_url or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="endpoint_url is required.")
+
+    candidate = raw if "://" in raw else f"http://{raw}"
+    parsed = urlparse(candidate)
+    host_ip = (parsed.hostname or "").strip()
+    if not host_ip:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not parse a host from endpoint_url '{raw}'.",
+        )
+    try:
+        port = int(parsed.port or 11434)
+    except ValueError:
+        port = 11434
+
+    if not is_private_or_loopback_ip(host_ip):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Air-Gap Security Violation: Only private RFC-1918 LAN IPs "
+                "(192.168.x.x, 10.x.x.x, 172.16-31.x.x, localhost) are permitted."
+            ),
+        )
+
+    probe = await test_node_connection(host_ip, port)
+    node = add_or_update_node(
+        name=f"endpoint:{host_ip}:{port}",
+        host_ip=host_ip,
+        port=port,
+        device_type="LAN Worker",
+        models=probe.get("models", []),
+    )
+    if not probe.get("online"):
+        node.status = "offline"
+    bind_model_to_node(model_id, node.id)
+
+    logger.info(f"[MODELS] Bound '{model_id}' to endpoint {host_ip}:{port} (node {node.id})")
+    return {
+        "status": "SUCCESS",
+        "model_id": model_id,
+        "node_id": node.id,
+        "host_ip": host_ip,
+        "port": port,
+        "reachable": bool(probe.get("online")),
+        "message": (
+            f"Model '{model_id}' bound to {host_ip}:{port}."
+            + ("" if probe.get("online") else " Endpoint is not currently reachable.")
+        ),
+    }
+
+
 
 class ModelSwapRequest(BaseModel):
     model_id: str
     chat_id: Optional[str] = None
     context_data: Optional[Any] = None
 
+
+_swap_history_records = []
+
+@app.get("/api/v1/models/swaps")
+@app.get("/api/models/swaps")
+async def get_model_swaps():
+    """Returns recent hot-swap history for model telemetry observatory."""
+    return _swap_history_records[-50:]
 
 @app.post("/api/models/swap")
 @app.post("/api/v1/models/swap")
@@ -1643,7 +2243,7 @@ async def manual_model_swap(body: ModelSwapRequest):
         context_to_transfer=body.context_data
     )
 
-    return {
+    record = {
         "id": f"swap-{int(time.time()*1000)}",
         "timestamp": datetime.now().strftime("%H:%M:%S"),
         "from_model": unload_target,
@@ -1654,6 +2254,8 @@ async def manual_model_swap(body: ModelSwapRequest):
         "target_met": success,
         "context_preserved": body.context_data is not None or (body.chat_id is not None)
     }
+    _swap_history_records.append(record)
+    return record
 
 
 class SandboxRunRequest(BaseModel):
@@ -1671,6 +2273,40 @@ async def run_sandbox_code(body: SandboxRunRequest):
     """
     from backend.sandbox import execute_python_sandbox
     result = execute_python_sandbox(body.code, job_id=body.job_id, stdin_input=body.stdin_input)
+    return result
+
+
+class CodeRunRequest(BaseModel):
+    language: str
+    code: str
+    stdin_input: Optional[str] = None
+    filename: Optional[str] = None
+
+
+@app.post("/api/sandbox/run-code")
+@app.post("/api/v1/sandbox/run-code")
+async def run_code_endpoint(body: CodeRunRequest):
+    """
+    Executes code for the Canvas code / SQL / shell editors and returns genuine
+    stdout, stderr, exit code and timing (plus real result rows for SQL).
+
+    When no engine can honestly execute the language — e.g. shell without a
+    Docker daemon, or C++ without a compiler — the response is
+    `status: UNSUPPORTED` with the reason. The UI surfaces that instead of
+    inventing output.
+    """
+    from backend.code_runner import run_code
+
+    result = run_code(
+        body.language,
+        body.code,
+        stdin_input=body.stdin_input,
+        filename=body.filename,
+    )
+    logger.info(
+        f"[CODE RUNNER] language={body.language} status={result['status']} "
+        f"exit={result['exit_code']} duration_ms={result.get('duration_ms')}"
+    )
     return result
 
 
@@ -1721,10 +2357,10 @@ async def create_auth_user(body: CreateUserRequest):
     if uname in AUTH_USERS:
         raise HTTPException(status_code=400, detail=f"User '{uname}' already exists")
     
-    pw_hash = hashlib.sha256(body.password.encode()).hexdigest()
+    pw_fields = _hash_password(body.password)
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     AUTH_USERS[uname] = {
-        "password_hash": pw_hash,
+        **pw_fields,
         "role": body.role,
         "full_name": body.full_name,
         "department": body.department,
@@ -1762,7 +2398,7 @@ async def update_auth_user(username: str, body: UpdateUserRequest):
     if body.status:
         user["status"] = body.status
     if body.password:
-        user["password_hash"] = hashlib.sha256(body.password.encode()).hexdigest()
+        user.update(_hash_password(body.password))
         
     logger.info(f"[USER_MGMT] Updated user: {uname} (role={user['role']}, status={user['status']})")
     return {
@@ -1842,11 +2478,25 @@ async def evaluate_router_query(body: RouterEvalRequest):
         "status": "SUCCESS",
         "domain": route.upper(),
         "targetModel": target_model,
-        "stage1Match": True,
-        "routedBy": f"stage1_{trigger}",
-        "totalLatencyMs": max(0.5, latency_ms),
-        "confidence": 0.98,
-        "isInScope": True,
+        # Derived from the router's own match signal, not a constant.
+        "stage1Match": bool(trigger),
+        "routedBy": f"stage1_{trigger}" if trigger else "unmatched_default",
+        # Measured end-to-end router time; no artificial floor.
+        "totalLatencyMs": latency_ms,
+        # This deployment's router is deterministic stage-1 rule/tag matching.
+        # There is no dense-centroid stage, so its latency is not reported.
+        "stage2Executed": False,
+        "stage2LatencyMs": None,
+        "stage2Note": (
+            "No dense/semantic stage is configured in this deployment; the "
+            "router resolves on stage-1 rules and equipment tags only."
+        ),
+        # The router is a deterministic stage-1 matcher: it does not produce a
+        # calibrated confidence, so we report null rather than inventing a number.
+        "confidence": None,
+        "confidence_method": "not_computed",
+        "isInScope": None,
+        "isInScopeNote": "Scope classification is not computed by this router.",
         "department": department,
         "thinking": think_decision,
         "thinkingReason": think_reason,
@@ -1857,32 +2507,187 @@ async def evaluate_router_query(body: RouterEvalRequest):
 @app.get("/api/rag-admin/stats")
 @app.get("/api/v1/rag-admin/stats")
 async def get_rag_admin_stats():
-    """Returns vector database status, chunk counts, and collection statistics."""
-    from backend.knowledge_base import MASTER_SOPS
+    """
+    Reports what the retrieval layer actually is.
+
+    Previously this endpoint returned a hard-coded document count, a 1024
+    "dimension" vector store and a "BAAI/bge-m3-gguf" embedding model that the
+    system never used. Every field below is measured from the live corpus.
+    """
+    from backend.knowledge_base import corpus_stats, retrieval_status, distinct_document_count, last_ingest_at
     from backend.graph_rag import graphrag_engine
-    
-    total_chunks = len(MASTER_SOPS)
-    total_entities = len(graphrag_engine.entities)
-    total_relations = len(graphrag_engine.relations)
+
+    stats = corpus_stats()
+    retrieval = retrieval_status()
+    emb = retrieval["dense"]
+    document_count = distinct_document_count()
 
     return {
         "success": True,
-        "documents": 18,
-        "chunks": total_chunks,
-        "total_chunks": total_chunks,
-        "document_count": 18,
-        "entities_count": total_entities,
-        "relations_count": total_relations,
+        # Real counts derived from the loaded corpus.
+        "documents": document_count,
+        "document_count": document_count,
+        "chunks": stats["total_chunks"],
+        "total_chunks": stats["total_chunks"],
+        "chunks_by_provenance": stats["chunks_by_provenance"],
+        "authoritative_chunks": stats["authoritative_chunks"],
+        "entities_count": len(graphrag_engine.entities),
+        "relations_count": len(graphrag_engine.relations),
         "collections": 1,
-        "collection_name": "sovereign_master_knowledge_graph",
-        "dimensions": 1024,
-        "embedding_model": "BAAI/bge-m3-gguf + GraphRAG",
+        "collection_name": "in_process_knowledge_corpus",
+        # Dimensions exist only when real embeddings are actually in use.
+        "dimensions": None,
+        "embedding_model": emb.get("model"),
+        "dense_embeddings_enabled": bool(emb.get("available")),
+        "embedding_status": emb.get("reason"),
+        "lexical_index": stats["lexical_index"],
         "bm25_enabled": True,
-        "last_indexed": "Live On-Premise (Multi-Domain Active)"
+        "retrieval_method": retrieval["method"],
+        "last_indexed": last_ingest_at(),
+        "persistence": "in_memory",
+        "persistence_note": (
+            "Ingested chunks live in the backend process and are lost on restart. "
+            "Re-upload the source documents after a restart."
+        ),
+        "notice": stats["notice"],
+    }
+
+
+@app.get("/api/rag-admin/documents")
+@app.get("/api/v1/rag-admin/documents")
+async def get_rag_admin_documents():
+    """Lists the documents actually present in the live corpus, with the real
+    provenance of each one."""
+    from backend.knowledge_base import MASTER_SOPS, last_ingest_at
+    from backend.graph_rag import graphrag_engine
+
+    docs_map: Dict[str, Dict[str, Any]] = {}
+    for sop in MASTER_SOPS:
+        # Group per-section chunk ids (<DOC>-01, <DOC>-02, ...) under one document.
+        doc_key = sop.doc_id
+        tail = sop.doc_id[-3:]
+        if tail[0] == "-" and tail[1:].isdigit():
+            doc_key = sop.doc_id.rsplit("-", 1)[0]
+        if doc_key not in docs_map:
+            docs_map[doc_key] = {
+                "id": doc_key,
+                "name": sop.title,
+                "category": (sop.domain or "refinery").capitalize(),
+                "chunks": 0,
+                "sizeKb": 0,
+                "provenance": sop.provenance,
+                "authoritative": sop.authoritative,
+                "source": sop.source,
+                "timestamp": None,
+            }
+        docs_map[doc_key]["chunks"] += 1
+        docs_map[doc_key]["sizeKb"] += max(1, len(sop.content) // 1024)
+
+    # Uploaded documents that were registered as graph entities.
+    for ent_id, ent in graphrag_engine.entities.items():
+        if ent.category == "Uploaded Document" and ent_id not in docs_map:
+            docs_map[ent_id] = {
+                "id": ent_id,
+                "name": ent.name,
+                "category": (ent.domain or "refinery").capitalize(),
+                "chunks": ent.properties.get("chunks", 1),
+                "sizeKb": max(1, ent.properties.get("uploaded_size", 1024) // 1024),
+                "provenance": "user_uploaded",
+                "authoritative": False,
+                "source": ent.name,
+                "timestamp": last_ingest_at(),
+            }
+
+    docs_list = list(docs_map.values())
+    return {
+        "success": True,
+        "count": len(docs_list),
+        "documents": docs_list,
     }
 
 
 from fastapi import UploadFile, File as FastAPIFile, Form
+
+def _extract_upload_text(filename: str, contents: bytes) -> Tuple[str, Optional[str]]:
+    """
+    Extracts text from an uploaded document.
+
+    Returns (text, error). When no text can be extracted the error explains why
+    instead of substituting placeholder content: a fabricated chunk would be
+    indexed and later cited as if it were real document content.
+    """
+    lower = (filename or "").lower()
+    if lower.endswith(".pdf"):
+        try:
+            import pypdf
+        except ImportError:
+            return "", (
+                "PDF text extraction requires the 'pypdf' package, which is not "
+                "installed on this host. Install pypdf or upload a text-based file."
+            )
+        try:
+            import io
+            reader = pypdf.PdfReader(io.BytesIO(contents))
+            parts = [(page.extract_text() or "") for page in reader.pages[:200]]
+            text = "\n\n".join(p for p in parts if p.strip())
+            if not text.strip():
+                return "", (
+                    "No extractable text layer in this PDF (it is most likely a "
+                    "scanned image). OCR the document first, then re-upload."
+                )
+            return text, None
+        except Exception as exc:
+            return "", f"PDF parsing failed: {type(exc).__name__}: {exc}"
+    try:
+        return contents.decode("utf-8", errors="ignore"), None
+    except Exception as exc:
+        return "", f"Text decoding failed: {type(exc).__name__}: {exc}"
+
+
+def _chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
+    """
+    Splits text into overlapping windows on paragraph/sentence boundaries,
+    honouring the requested chunk size and overlap.
+    """
+    chunk_size = max(200, int(chunk_size or 512))
+    overlap = max(0, min(int(overlap or 0), chunk_size // 2))
+
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if not paragraphs:
+        paragraphs = [text.strip()]
+
+    chunks: List[str] = []
+    current = ""
+    for para in paragraphs:
+        # A single oversized paragraph is hard-split on sentence boundaries.
+        if len(para) > chunk_size:
+            if current:
+                chunks.append(current.strip())
+                current = ""
+            sentences = re.split(r"(?<=[.!?])\s+", para)
+            buf = ""
+            for sent in sentences:
+                if len(buf) + len(sent) + 1 > chunk_size and buf:
+                    chunks.append(buf.strip())
+                    buf = (buf[-overlap:] if overlap else "") + " " + sent
+                else:
+                    buf = f"{buf} {sent}".strip()
+            if buf.strip():
+                chunks.append(buf.strip())
+            continue
+
+        if len(current) + len(para) + 2 > chunk_size and current:
+            chunks.append(current.strip())
+            # Carry the tail forward so context is not lost between chunks.
+            current = (current[-overlap:] if overlap else "") + "\n\n" + para
+        else:
+            current = f"{current}\n\n{para}".strip() if current else para
+
+    if current.strip():
+        chunks.append(current.strip())
+
+    return [c for c in chunks if len(c) >= 40]
+
 
 @app.post("/api/rag-admin/ingest-file")
 @app.post("/api/v1/rag-admin/ingest-file")
@@ -1890,76 +2695,328 @@ async def ingest_rag_files(
     files: List[UploadFile] = FastAPIFile(...),
     chunk_size: Optional[int] = Form(512),
     overlap: Optional[int] = Form(100),
-    enable_bm25: Optional[bool] = Form(True)
 ):
-    """Parses, extracts GraphRAG entities, and ingests uploaded document files into master knowledge base."""
-    import pypdf
-    import io
-    from backend.knowledge_base import MASTER_SOPS, SOPChunk, _generate_dense_vector
-    from backend.graph_rag import graphrag_engine, KnowledgeEntity, KnowledgeRelation
+    """
+    Parses, chunks and indexes uploaded documents into the live corpus.
 
-    ingested_summary = []
+    Files whose text cannot be extracted are reported as FAILED with the real
+    reason; no placeholder content is indexed in their place.
+    """
+    from backend.knowledge_base import (
+        MASTER_SOPS, SOPChunk, add_chunk, corpus_stats, retrieval_status,
+        PROVENANCE_UPLOADED, mark_ingested, last_ingest_at,
+    )
+    from backend.graph_rag import graphrag_engine, KnowledgeEntity
+    from backend.domains import get_active_domain
+
+    try:
+        active_domain = get_active_domain()
+    except Exception:
+        active_domain = "refinery"
+
+    ingested_summary: List[Dict[str, Any]] = []
+    total_chunks_created = 0
 
     for upload in files:
         contents = await upload.read()
-        filename = upload.filename or "uploaded_sop.txt"
-        text = ""
+        filename = upload.filename or "uploaded_document.txt"
+        text, error = _extract_upload_text(filename, contents)
 
-        if filename.lower().endswith(".pdf"):
-            try:
-                reader = pypdf.PdfReader(io.BytesIO(contents))
-                for page in reader.pages[:20]:
-                    text += (page.extract_text() or "") + "\n"
-            except Exception as e:
-                logger.warning(f"[INGEST] PDF extraction error for {filename}: {e}")
-                text = contents.decode("utf-8", errors="ignore")
-        else:
-            text = contents.decode("utf-8", errors="ignore")
+        if error or not text.strip():
+            reason = error or "The uploaded file contained no text."
+            logger.warning(f"[INGEST] Rejected {filename}: {reason}")
+            ingested_summary.append({
+                "filename": filename,
+                "status": "FAILED",
+                "chunks_created": 0,
+                "bytes": len(contents),
+                "error": reason,
+            })
+            continue
 
-        # Create chunks
-        paras = [p.strip() for p in text.split("\n\n") if len(p.strip()) > 80]
-        if not paras:
-            paras = [text[:600]] if text else ["General Technical Standard Information."]
+        chunks = _chunk_text(text, chunk_size or 512, overlap or 0)
+        if not chunks:
+            reason = "Text was extracted but produced no usable chunk (content too short)."
+            logger.warning(f"[INGEST] Rejected {filename}: {reason}")
+            ingested_summary.append({
+                "filename": filename,
+                "status": "FAILED",
+                "chunks_created": 0,
+                "bytes": len(contents),
+                "error": reason,
+            })
+            continue
 
-        doc_base_id = filename.rsplit(".", 1)[0].replace(" ", "-").upper()
-        
-        # Discover entities
+        doc_base_id = filename.rsplit(".", 1)[0].replace(" ", "-").upper()[:48]
         ent_id = f"DOC-{doc_base_id[:12]}"
         graphrag_engine.entities[ent_id] = KnowledgeEntity(
             id=ent_id,
             name=filename,
-            category="Master SOP Document",
-            domain="refinery",
-            properties={"uploaded_size": len(contents), "chunks": len(paras)}
+            category="Uploaded Document",
+            domain=active_domain,
+            properties={"uploaded_size": len(contents), "chunks": len(chunks)}
         )
 
-        for i, para in enumerate(paras[:10], 1):
-            chunk_obj = SOPChunk(
+        created = 0
+        for i, chunk_text in enumerate(chunks, 1):
+            add_chunk(SOPChunk(
                 doc_id=f"{doc_base_id}-{i:02d}",
-                title=f"{filename} (Section {i})",
-                clause=f"Clause {i}",
-                page=f"Page {i}",
-                content=para[:800],
-                keywords=["uploaded", "standard", "manual", "sop"],
+                title=f"{filename} (part {i})",
+                clause=f"Part {i}",
+                page=f"Part {i}",
+                content=chunk_text[:2000],
+                keywords=[],
                 equipment_tags=[],
-                domain="refinery",
-                dense_embedding=_generate_dense_vector(para[:800])
-            )
-            MASTER_SOPS.append(chunk_obj)
+                domain=active_domain,
+                provenance=PROVENANCE_UPLOADED,
+                authoritative=False,
+                source=filename,
+            ))
+            created += 1
 
+        total_chunks_created += created
         ingested_summary.append({
             "filename": filename,
-            "chunks_created": len(paras[:10]),
-            "bytes": len(contents)
+            "status": "INGESTED",
+            "chunks_created": created,
+            "bytes": len(contents),
+            "provenance": PROVENANCE_UPLOADED,
+            "authoritative": False,
         })
 
-    logger.info(f"[RAG_ADMIN] Successfully ingested {len(files)} files into Knowledge Base.")
+    if total_chunks_created:
+        mark_ingested()
+
+    succeeded = [f for f in ingested_summary if f["status"] == "INGESTED"]
+    failed = [f for f in ingested_summary if f["status"] == "FAILED"]
+
+    if not succeeded and failed:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "No file could be ingested.",
+                "failures": [{"filename": f["filename"], "error": f["error"]} for f in failed],
+            },
+        )
+
+    status = "PARTIAL" if failed else "SUCCESS"
+    message = f"Ingested {len(succeeded)} of {len(files)} file(s); {total_chunks_created} chunk(s) indexed."
+    if failed:
+        message += f" {len(failed)} file(s) failed - see per-file errors."
+
+    logger.info(f"[RAG_ADMIN] {status}: {len(succeeded)}/{len(files)} files, {total_chunks_created} chunks indexed.")
     return {
-        "status": "SUCCESS",
-        "message": f"Successfully ingested {len(files)} document(s)",
+        "status": status,
+        "message": message,
         "files": ingested_summary,
-        "total_master_sops": len(MASTER_SOPS)
+        "failures": [{"filename": f["filename"], "error": f["error"]} for f in failed],
+        "chunks_created": total_chunks_created,
+        "total_master_sops": len(MASTER_SOPS),
+        "corpus": corpus_stats(),
+        "retrieval": retrieval_status(),
+        "last_indexed": last_ingest_at(),
+        "persistence": "in_memory",
+        "persistence_note": (
+            "Uploaded chunks are held in backend memory and are lost on restart. "
+            "Re-upload the documents after a backend restart."
+        ),
     }
+
+
+# ── Parameter / tag extraction patterns used by the document upload pipeline ──
+# These are genuine pattern matches against the extracted text. Nothing here
+# invents a reading: a value only appears if the literal text contained it.
+_UPLOAD_FINDING_PATTERNS = [
+    # (category, compiled regex, value group, unit group or None)
+    ("temperature", re.compile(r"(-?\d+(?:\.\d+)?)\s*°?\s*(C|celsius|deg\s*c)\b", re.IGNORECASE), 1, 2),
+    ("specification", re.compile(r"(-?\d+(?:\.\d+)?)\s*(kPa|MPa|bar|psi|psig|N/m2)\b", re.IGNORECASE), 1, 2),
+    ("specification", re.compile(r"(-?\d+(?:\.\d+)?)\s*(mm/s|rpm|Hz|kHz|ppm|ppmv|%)\b", re.IGNORECASE), 1, 2),
+    ("corrosion", re.compile(r"(\d+(?:\.\d+)?)\s*(mm/y|mm/yr|mpy|mils?/yr)\b", re.IGNORECASE), 1, 2),
+    ("tag", re.compile(r"\b([A-Z]{2,6}-\d{2,4}[A-Z]?(?:\s?-\s?[A-Z0-9]{1,4})?)\b"), 1, None),
+    ("tag", re.compile(r"\b(P&ID\s?[-#]?\s?\d{2,5})\b", re.IGNORECASE), 1, None),
+]
+
+
+@app.post("/api/upload")
+@app.post("/api/v1/upload")
+async def upload_document(
+    request: Request,
+    file: UploadFile = FastAPIFile(...),
+    chunk_size: Optional[int] = Form(512),
+    overlap: Optional[int] = Form(100),
+    index_into_corpus: bool = Form(True),
+):
+    """
+    Ingests an operator-supplied document, indexes it into the live corpus and
+    reports what was genuinely extracted from it.
+
+    Everything in the response is measured:
+      * `raw_ocr_text`   - only when a text layer actually parsed; empty for a
+                           scanned image, and `ocr_engine` says so explicitly.
+      * `findings`       - literal pattern matches (tags, readings with units).
+      * `sop_violations` - corpus chunks that actually retrieved for this text,
+                           reported as `doc_id | clause` so they can be checked.
+      * `confidence`     - pattern-match certainty, NOT a measurement of the
+                           reading's correctness. No value is ever invented.
+
+    A document with no extractable text is reported as FAILED with the reason,
+    and nothing is indexed in its place.
+    """
+    from backend.knowledge_base import (
+        SOPChunk, add_chunk, mark_ingested, PROVENANCE_UPLOADED,
+    )
+    from backend.graph_rag import graphrag_engine, KnowledgeEntity
+    from backend.chemical_kb import detect_chemicals
+    from backend.domains import get_active_domain
+
+    try:
+        active_domain = get_active_domain()
+    except Exception:
+        active_domain = "refinery"
+
+    filename = file.filename or "uploaded_document.txt"
+    contents = await file.read()
+
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    text, extract_error = _extract_upload_text(filename, contents)
+    if extract_error or not text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail=extract_error or "No text could be extracted from this file.",
+        )
+
+    # ── Integrity ──────────────────────────────────────────────────────────
+    sha256_hash, size_bytes = _hash_upload_bytes(contents)
+
+    # ── Index into the live corpus ────────────────────────────────────────
+    chunks = _chunk_text(text, chunk_size or 512, overlap or 0)
+    doc_base_id = filename.rsplit(".", 1)[0].replace(" ", "-").upper()[:48]
+    ent_id = f"DOC-{doc_base_id[:12]}"
+    chunks_indexed = 0
+    if index_into_corpus:
+        graphrag_engine.entities[ent_id] = KnowledgeEntity(
+            id=ent_id,
+            name=filename,
+            category="Uploaded Document",
+            domain=active_domain,
+            properties={"uploaded_size": len(contents), "chunks": len(chunks)},
+        )
+        for i, chunk_text in enumerate(chunks, 1):
+            add_chunk(SOPChunk(
+                doc_id=f"{doc_base_id}-{i:02d}",
+                title=f"{filename} (part {i})",
+                clause=f"Part {i}",
+                page=f"Part {i}",
+                content=chunk_text[:2000],
+                keywords=[],
+                equipment_tags=[],
+                domain=active_domain,
+                provenance=PROVENANCE_UPLOADED,
+                authoritative=False,
+                source=filename,
+            ))
+            chunks_indexed += 1
+        if chunks_indexed:
+            mark_ingested()
+
+    # ── Findings: literal pattern matches only ────────────────────────────
+    findings: List[Dict[str, Any]] = []
+    seen_findings = set()
+    for category, pattern, val_group, unit_group in _UPLOAD_FINDING_PATTERNS:
+        for m in pattern.finditer(text):
+            value = m.group(val_group)
+            unit = ""
+            if unit_group is not None:
+                try:
+                    unit = (m.group(unit_group) or "").strip()
+                except (IndexError, re.error):
+                    unit = ""
+            dedupe_key = (category, (value or "").lower(), unit.lower())
+            if dedupe_key in seen_findings:
+                continue
+            seen_findings.add(dedupe_key)
+            findings.append({
+                "key": f"{category}_{len(findings)}",
+                "value": f"{value} {unit}".strip(),
+                "category": category,
+                # Pattern-match certainty only. This says the literal text was
+                # recognised, not that the reading is safe or in-spec.
+                "confidence": 1.0,
+                "confidence_basis": "exact_pattern_match_in_extracted_text",
+                "source_page": None,
+            })
+    findings = findings[:200]
+
+    # ── Equipment / standard entities present in the text ─────────────────
+    entities = graphrag_engine.extract_entities_from_query(text)
+
+    # ── Chemicals present in the text ─────────────────────────────────────
+    chemicals = detect_chemicals(text)
+
+    # ── SOP clauses that actually retrieved for this document ─────────────
+    # The document's own freshly-indexed chunks are excluded: a file matching
+    # itself is not an SOP reference.
+    sop_violations: List[str] = []
+    retrieved = search_sops(text[:4000], min_score=0.0, top_k=8)
+    for c in retrieved:
+        chunk_doc = str(c.get("doc_id", ""))
+        if chunk_doc.startswith(doc_base_id):
+            continue
+        sop_violations.append(
+            f"{chunk_doc or '?'} | Clause: {c.get('clause', '?')} | Page: {c.get('page', '?')}"
+        )
+
+    lower = filename.lower()
+    doc_type = (
+        "pid_drawing" if ("pid" in lower or "p&id" in lower)
+        else "inspection_pdf" if lower.endswith(".pdf")
+        else "general"
+    )
+
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    result = {
+        "id": f"upload_{hashlib.sha256((filename + now_iso).encode()).hexdigest()[:16]}",
+        "name": filename,
+        "size_bytes": size_bytes,
+        "size_formatted": f"{(size_bytes or 0) / 1024:.1f} KB",
+        "mime_type": file.content_type or "application/octet-stream",
+        "type": doc_type,
+        "upload_timestamp": now_iso,
+        "sha256_hash": sha256_hash,
+        # Reports the engine that actually ran. A text-layer PDF is parsed by
+        # pypdf; an image has no OCR pass in this endpoint.
+        "ocr_engine": "pypdf_text_layer" if lower.endswith(".pdf") else "plain_text_decode",
+        "raw_ocr_text": text,
+        "findings": findings,
+        "sop_violations": sop_violations,
+        "status": "ready",
+        "indexed_chunks": chunks_indexed,
+        "entities_detected": [
+            {"id": e.id, "name": e.name, "category": e.category, "domain": e.domain}
+            for e in entities[:50]
+        ],
+        "chemicals_detected": [
+            {"name": c.get("name"), "cas": c.get("cas")} for c in chemicals
+        ],
+        "extraction_note": (
+            "findings are literal pattern matches in the extracted text; "
+            "confidence reports match certainty, not engineering validity. "
+            "sop_violations lists clauses that retrieved for this document, "
+            "not confirmed violations."
+        ),
+    }
+    logger.info(
+        f"[UPLOAD] {filename}: {size_bytes} bytes, {chunks_indexed} chunks indexed, "
+        f"{len(findings)} findings, {len(entities)} entities, {len(sop_violations)} SOP clauses"
+    )
+    return result
+
+
+def _hash_upload_bytes(contents: bytes) -> tuple:
+    """Returns (sha256_hex, size_bytes) for an in-memory upload payload."""
+    return hashlib.sha256(contents).hexdigest(), len(contents)
 
 
 class SearchRAGRequest(BaseModel):
@@ -1970,18 +3027,30 @@ class SearchRAGRequest(BaseModel):
 @app.post("/api/rag-admin/search")
 @app.post("/api/v1/rag-admin/search")
 async def search_rag_admin(req: SearchRAGRequest):
-    """Executes live hybrid vector + GraphRAG search for admin inspection."""
-    from backend.knowledge_base import search_sops
+    """Executes a live corpus search for admin inspection and reports the
+    scoring method that produced the results."""
+    from backend.knowledge_base import search_sops, retrieval_status
     from backend.graph_rag import graphrag_engine
-    
-    results = search_sops(req.query, min_score=0.1, top_k=req.top_k or 5)
+
+    results = search_sops(req.query, min_score=0.0, top_k=req.top_k or 5)
     matched_entities = graphrag_engine.extract_entities_from_query(req.query)
 
     return {
         "status": "SUCCESS",
         "query": req.query,
         "results": results,
-        "matched_entities": [e.dict() for e in matched_entities]
+        "result_count": len(results),
+        "retrieval": retrieval_status(),
+        "matched_entities": [
+            {
+                "id": e.id,
+                "name": e.name,
+                "category": e.category,
+                "domain": e.domain,
+                "provenance": "bundled_reference_graph",
+            }
+            for e in matched_entities
+        ],
     }
 
 
@@ -2057,6 +3126,10 @@ async def convert_document_endpoint(
         "status": "SUCCESS",
         "message": f"Successfully converted to {target_ext.upper()}",
         "filename": result["filename"],
+        # file_id is returned explicitly so the client can fetch the bytes with
+        # an Authorization header instead of following a bare <a href>, which
+        # the API auth gate rejects.
+        "file_id": result.get("file_id"),
         "download_url": result["download_url"],
         "size_bytes": result.get("size_bytes", len(contents))
     }
@@ -2066,21 +3139,51 @@ async def convert_document_endpoint(
 @app.get("/api/sandbox/status")
 @app.get("/api/v1/sandbox/status")
 async def get_sandbox_status():
-    """Returns Docker/subprocess sandbox runtime status and security policies."""
-    from backend.sandbox import is_docker_available
-    docker_on = is_docker_available()
+    """
+    Reports the sandbox runtime and exactly which isolation controls are active.
+
+    Every field is measured at request time. The previous version returned
+    `network_isolation: "STRICT_NONE"`, `image_present: True` and
+    `ast_screener_rules: 24` unconditionally - claiming container-grade
+    isolation and a static screener even when Docker was absent and no screener
+    existed.
+    """
+    from backend.sandbox import sandbox_capabilities
+    from backend.code_runner import runner_availability
+    from backend.db_dialect import describe as describe_db
+
+    caps = sandbox_capabilities()
+    runners = caps.pop("isolation_levels", {})
+
     return {
         "status": "ONLINE",
-        "active_backend": "docker_container" if docker_on else "hardened_isolated_subprocess",
-        "image_name": "python:3.11",
-        "image_present": True,
-        "docker_available": docker_on,
-        "network_isolation": "STRICT_NONE",
-        "network_mode": "none",
-        "memory_limit": "512m",
-        "cpu_quota": 2.0,
-        "timeout_seconds": 15.0,
-        "ast_screener_rules": 24
+        "active_backend": caps["active_backend"],
+        "docker_available": caps["docker_available"],
+        "job_object_available": caps["job_object_available"],
+        "job_object_error": caps["job_object_error"],
+        "static_screen": caps["static_screen"],
+        "isolation_level": caps["active_backend"],
+        "isolation_levels": runners,
+        # Only a container gives true network isolation. Say so plainly instead
+        # of claiming "none" when the mechanism is not present.
+        "network_isolation": (
+            "container_network_none" if caps["docker_available"]
+            else "in_process_guard_loopback_and_rfc1918_only"
+        ),
+        "filesystem_jailed": bool(caps["docker_available"]),
+        "not_enforced_without_docker": caps["not_enforced_without_docker"],
+        "memory_limit": caps["memory_limit"],
+        "timeout_seconds": caps["timeout_seconds"],
+        "image": caps["image"],
+        "language_runners": runner_availability(),
+        # Reported so the UI can label the SQL editor with the engine that is
+        # actually configured, instead of a hard-coded "XAMPP MySQL".
+        "database": {
+            "driver": DB_DRIVER,
+            "engine": "PostgreSQL" if IS_POSTGRES else "MySQL/MariaDB",
+            "label": "PostgreSQL" if IS_POSTGRES else "XAMPP MySQL",
+            "target": describe_db(),
+        },
     }
 
 
@@ -2099,29 +3202,177 @@ async def execute_sandbox_endpoint(body: SandboxExecuteRequest):
     return result
 
 
+NETWORK_DEPLOYMENT_MODES = ("STANDALONE_LOCAL", "LAN_OPTION_A", "HOTSPOT_OPTION_B")
+_configured_deployment_mode = "STANDALONE_LOCAL"
+DEFAULT_BACKEND_PORT = 8000
+
+
+def _detect_ipv4_interfaces() -> list:
+    """Returns the host's REAL IPv4 interfaces (no hard-coded addresses)."""
+    interfaces = []
+    try:
+        for name, addresses in psutil.net_if_addrs().items():
+            for addr in addresses:
+                # AF_INET == 2 on every platform
+                if getattr(addr, "family", None) == socket.AF_INET and addr.address:
+                    interfaces.append({
+                        "interface": name,
+                        "ip": addr.address,
+                        "loopback": addr.address.startswith("127."),
+                    })
+    except Exception as e:
+        logger.debug(f"[NETWORK] psutil interface enumeration failed: {e}")
+
+    if not any(not i["loopback"] for i in interfaces):
+        # Fallback: ask the OS which local address the default route would use.
+        # A UDP "connect" sends no packets.
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                probe.settimeout(0.25)
+                probe.connect(("192.0.2.1", 9))  # TEST-NET-1 (RFC 5737)
+                interfaces.append({
+                    "interface": "default-route",
+                    "ip": probe.getsockname()[0],
+                    "loopback": False,
+                })
+        except Exception as e:
+            logger.debug(f"[NETWORK] default-route probe failed: {e}")
+
+    return interfaces
+
+
+def _primary_lan_ip(interfaces: list) -> Optional[str]:
+    """Picks the most plausible private LAN address, or None if loopback-only."""
+    candidates = [
+        i for i in interfaces
+        if not i["loopback"] and not i["ip"].startswith("169.254.")
+    ]
+    if not candidates:
+        return None
+
+    def rank(item: dict) -> int:
+        ip = item["ip"]
+        if ip.startswith("192.168."):
+            return 0
+        if ip.startswith("10."):
+            return 1
+        if re.match(r"172\.(1[6-9]|2\d|3[01])\.", ip):
+            return 2
+        return 3
+
+    return sorted(candidates, key=rank)[0]["ip"]
+
+
+def _connected_clients(listen_port: int) -> list:
+    """Lists real established client connections to the backend port."""
+    clients = []
+    try:
+        established = getattr(psutil, "CONN_ESTABLISHED", "ESTABLISHED")
+        for conn in psutil.net_connections(kind="inet"):
+            if not conn.laddr or not conn.raddr or conn.status != established:
+                continue
+            if listen_port and conn.laddr.port != listen_port:
+                continue
+            if conn.raddr.ip.startswith("127."):
+                continue
+            clients.append({
+                "ip": conn.raddr.ip,
+                "port": conn.raddr.port,
+                # The OS exposes no connect timestamp; last_seen is the observation time.
+                "connected_at": None,
+                "last_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+    except Exception as e:
+        logger.debug(f"[NETWORK] client enumeration unavailable: {e}")
+    return clients
+
+
+def _build_network_status(observed_port: Optional[int]) -> dict:
+    """Assembles the live network picture from real host state."""
+    from backend.airgap_guard import inspect_and_guard_project_sockets
+
+    interfaces = _detect_ipv4_interfaces()
+    lan_ip = _primary_lan_ip(interfaces)
+    # Some transports (ASGI test client, reverse proxies) report no explicit
+    # port; fall back to the configured backend port in that case.
+    effective_port = observed_port or DEFAULT_BACKEND_PORT
+
+    try:
+        live_sockets = inspect_and_guard_project_sockets(os.getpid())
+    except Exception as e:
+        logger.debug(f"[NETWORK] socket guard unavailable: {e}")
+        live_sockets = []
+
+    blocked_external = len([s for s in live_sockets if s.get("tier") == "EXTERNAL_WAN"])
+    clients = _connected_clients(effective_port)
+
+    if lan_ip:
+        detected_mode = "HOTSPOT_OPTION_B" if any(
+            i["interface"] and re.search(r"wi-?fi|wlan|hotspot|ap$", i["interface"], re.IGNORECASE)
+            for i in interfaces if i["ip"] == lan_ip
+        ) else "LAN_OPTION_A"
+    else:
+        detected_mode = "STANDALONE_LOCAL"
+
+    return {
+        "status": "ONLINE",
+        "configured_mode": _configured_deployment_mode,
+        # Legacy alias kept for existing clients (sovereignty store).
+        "deployment_mode": _configured_deployment_mode,
+        "detected_mode": detected_mode,
+        "mode_satisfied": _configured_deployment_mode == detected_mode,
+        "host_ip": lan_ip or "127.0.0.1",
+        "loopback_only": lan_ip is None,
+        "port": effective_port,
+        "interfaces": interfaces,
+        "connected_clients": clients,
+        "external_egress_sockets": blocked_external,
+        "localhost_sockets": len([s for s in live_sockets if s.get("tier") == "LOCALHOST"]),
+        "lan_sockets": len([s for s in live_sockets if s.get("tier") == "LAN_HOTSPOT"]),
+        # We report evidence, we do not assert a guarantee:
+        "air_gapped": None,
+        "air_gap_evidence": (
+            f"{blocked_external} external socket(s) observed by the air-gap guard"
+        ),
+        "packet_counters": None,
+        "packet_counters_note": "Packet counters require a host-level capture and are not reported by this endpoint.",
+        "observed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 @app.get("/api/network-status")
 @app.get("/api/v1/network-status")
-async def get_network_status():
-    """Returns sovereignty network status and air-gap verification."""
-    return {
-        "status": "SECURE",
-        "deployment_mode": "STANDALONE_LOCAL",
-        "host_ip": "127.0.0.1",
-        "port": 8000,
-        "air_gapped": True,
-        "external_egress": 0
-    }
+async def get_network_status(request: Request):
+    """Returns LIVE network status: real host interfaces, mode and client sessions."""
+    return _build_network_status(request.url.port)
 
 
 @app.post("/api/network-status/mode")
 @app.post("/api/v1/network-status/mode")
-async def set_network_mode(mode: str = "STANDALONE_LOCAL"):
-    """Switches deployment topology (STANDALONE_LOCAL, AIR_GAPPED_LAN, FIELD_HOTSPOT)."""
-    return {
-        "status": "UPDATED",
-        "deployment_mode": mode,
-        "host_ip": "127.0.0.1" if mode == "STANDALONE_LOCAL" else "192.168.1.100"
-    }
+async def set_network_mode(request: Request, mode: str = "STANDALONE_LOCAL"):
+    """
+    Records the requested deployment topology and returns the re-detected status.
+
+    Only the three supported modes are accepted; the response always contains the
+    backend's independently detected mode so a mismatch stays visible.
+    """
+    global _configured_deployment_mode
+
+    requested = (mode or "").strip().upper()
+    if requested not in NETWORK_DEPLOYMENT_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported deployment mode '{mode}'. Allowed: {', '.join(NETWORK_DEPLOYMENT_MODES)}.",
+        )
+
+    _configured_deployment_mode = requested
+    status = _build_network_status(request.url.port)
+    status["message"] = (
+        f"Configured mode set to {requested}; detected mode is {status['detected_mode']}."
+        if status["mode_satisfied"]
+        else f"Configured mode {requested} does not match the detected topology ({status['detected_mode']})."
+    )
+    return status
 
 
 # --- PKI Certificate Revocation List (CRL) In-Memory Registry ---
@@ -2186,111 +3437,215 @@ async def revoke_cert_endpoint(body: RevokeCertRequest):
     }
 
 
+AUDIT_CHAIN_LIMIT = 50
+
+
+def _build_audit_chain(limit: int = AUDIT_CHAIN_LIMIT) -> Dict[str, Any]:
+    """
+    Builds a genuine SHA-256 hash chain over real `user_activity_logs` rows.
+
+    Each block hashes the previous block's hash together with the row's own
+    fields, so any edit to a stored row changes its hash and every hash after
+    it. The chain is recomputed here and re-verified link by link, so
+    `verified` reflects an actual check rather than a hard-coded True.
+    """
+    from backend.db import get_all_user_activity_logs
+
+    try:
+        rows = get_all_user_activity_logs(limit=limit)
+    except Exception as exc:
+        return {
+            "available": False,
+            "error": f"Audit ledger unavailable: {type(exc).__name__}: {exc}",
+            "logs": [],
+        }
+
+    # Newest first in the query; the chain is built oldest -> newest.
+    ordered = list(reversed(rows))
+    prev_hash = "0" * 64
+    blocks: List[Dict[str, Any]] = []
+
+    for row in ordered:
+        payload = "|".join(str(x) for x in [
+            prev_hash,
+            row.get("id"),
+            row.get("created_at"),
+            row.get("activity_type"),
+            row.get("username"),
+            row.get("role"),
+            (row.get("details") or "")[:200],
+        ])
+        block_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        blocks.append({
+            "sequence": len(blocks) + 1,
+            "row_id": row.get("id"),
+            "timestamp": row.get("created_at"),
+            "event": row.get("activity_type"),
+            "username": row.get("username"),
+            "role": row.get("role"),
+            "details": row.get("details"),
+            "risk_level": row.get("risk_level"),
+            "block_hash": block_hash,
+            "prev_hash": prev_hash,
+        })
+        prev_hash = block_hash
+
+    # Re-verify every link independently of the build loop.
+    chain_valid = True
+    running = "0" * 64
+    for block in blocks:
+        recomputed = hashlib.sha256("|".join(str(x) for x in [
+            running,
+            block["row_id"],
+            block["timestamp"],
+            block["event"],
+            block["username"],
+            block["role"],
+            (block["details"] or "")[:200],
+        ]).encode("utf-8")).hexdigest()
+        if recomputed != block["block_hash"] or block["prev_hash"] != running:
+            chain_valid = False
+            break
+        running = block["block_hash"]
+
+    return {
+        "available": True,
+        "logs": [{**b, "verified": chain_valid} for b in blocks],
+        "chain_valid": chain_valid,
+        "chain_length": len(blocks),
+        "root_hash": blocks[0]["block_hash"] if blocks else None,
+        "head_hash": blocks[-1]["block_hash"] if blocks else None,
+    }
+
+
+@app.get("/api/sovereignty/metrics")
+@app.get("/api/v1/sovereignty/metrics")
+async def get_sovereignty_metrics():
+    """
+    Returns live air-gap socket telemetry.
+
+    Socket counts are measured with psutil. Packet counters are NOT reported:
+    this host has no packet-capture counter for the project processes, so those
+    fields are null with an explicit note rather than a fabricated zero.
+    """
+    from backend.airgap_guard import inspect_and_guard_project_sockets
+    current_pid = os.getpid()
+    try:
+        live_sockets = inspect_and_guard_project_sockets(current_pid)
+    except Exception:
+        live_sockets = []
+    localhost_cnt = len([s for s in live_sockets if s["tier"] == "LOCALHOST"])
+    lan_cnt = len([s for s in live_sockets if s["tier"] == "LAN_HOTSPOT"])
+    blocked_cnt = len([s for s in live_sockets if s["tier"] == "EXTERNAL_WAN"])
+
+    if blocked_cnt > 0:
+        verdict = f"ALERT: {blocked_cnt} external socket(s) observed by the egress guard"
+    else:
+        verdict = "No external sockets observed at sample time (point-in-time psutil inspection)"
+
+    return {
+        # Packet counters are not measurable here - never invent a number.
+        "external_packets": None,
+        "localhost_packets": None,
+        "lan_hotspot_packets": None,
+        "packet_counting_available": False,
+        "packet_counting_note": (
+            "This deployment counts live sockets, not packets. Install a packet "
+            "counter (e.g. psutil counters or a capture agent) before reporting "
+            "packet totals."
+        ),
+        "external_sockets": blocked_cnt,
+        "localhost_connections": localhost_cnt,
+        "lan_hotspot_connections": lan_cnt,
+        "external_internet_connections": blocked_cnt,
+        "verdict": verdict,
+        "sampled_at": datetime.now().isoformat(timespec="seconds"),
+        "daemon_heartbeat_hz": 1.0,
+        "sockets": live_sockets[:30],
+    }
+
 @app.get("/api/sovereignty/logs")
 @app.get("/api/v1/sovereignty/logs")
 async def get_sovereignty_logs():
-    """Returns tamper-evident SHA-256 blockchain audit logs."""
-    timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """
+    Returns the tamper-evident audit ledger.
+
+    The chain is built from real `user_activity_logs` rows and re-verified link
+    by link on every request. The previous implementation returned a fixed list
+    of hand-written entries with hard-coded hashes and `verified: true`; those
+    were not derived from any recorded event.
+    """
+    # Same window as the audit certificate, so both report an identical chain.
+    chain = _build_audit_chain(limit=AUDIT_CHAIN_LIMIT)
+
+    if not chain.get("available"):
+        return {
+            "success": False,
+            "error": chain.get("error"),
+            "logs": [],
+            "provenance": "live_user_activity_logs",
+            "chain_valid": False,
+            "note": "The audit ledger could not be read; no entries are shown.",
+        }
+
     return {
         "success": True,
-        "logs": [
-            {
-                "sequence": 6,
-                "timestamp": timestamp_str,
-                "event": "AUTH_OPERATOR_LOGIN_SUCCESS",
-                "deployment_mode": "STANDALONE_LOCAL",
-                "localhost_sockets": 6,
-                "lan_hotspot_sockets": 0,
-                "external_sockets": 0,
-                "external_packets": 0,
-                "block_hash": "f4e198b671a9e88b2cd7201c1822830f3a478b01c34a2e5d876bc299042b36a1",
-                "prev_hash": "c8f2a64016b801a61c379768652d87e0251141df90fe954a7f0e6ce7ecf97e33",
-                "verified": True
-            },
-            {
-                "sequence": 5,
-                "timestamp": timestamp_str,
-                "event": "AIR_GAP_SOCKET_GUARD_PASS",
-                "deployment_mode": "STANDALONE_LOCAL",
-                "localhost_sockets": 6,
-                "lan_hotspot_sockets": 0,
-                "external_sockets": 0,
-                "external_packets": 0,
-                "block_hash": "c8f2a64016b801a61c379768652d87e0251141df90fe954a7f0e6ce7ecf97e33",
-                "prev_hash": "a4b2c890123efd67890123456789abcdef0123456789abcdef0123456789abcd",
-                "verified": True
-            },
-            {
-                "sequence": 4,
-                "timestamp": timestamp_str,
-                "event": "OLLAMA_MODEL_HOTSWAP_DISPATCH",
-                "deployment_mode": "STANDALONE_LOCAL",
-                "localhost_sockets": 5,
-                "lan_hotspot_sockets": 0,
-                "external_sockets": 0,
-                "external_packets": 0,
-                "block_hash": "a4b2c890123efd67890123456789abcdef0123456789abcdef0123456789abcd",
-                "prev_hash": "88d3f1a293c0498bfa76129845cdfa890123456789abcdef0123456789abcdef",
-                "verified": True
-            },
-            {
-                "sequence": 3,
-                "timestamp": timestamp_str,
-                "event": "SANDBOX_DOCKER_ISOLATION_SEALED",
-                "deployment_mode": "STANDALONE_LOCAL",
-                "localhost_sockets": 4,
-                "lan_hotspot_sockets": 0,
-                "external_sockets": 0,
-                "external_packets": 0,
-                "block_hash": "88d3f1a293c0498bfa76129845cdfa890123456789abcdef0123456789abcdef",
-                "prev_hash": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
-                "verified": True
-            },
-            {
-                "sequence": 2,
-                "timestamp": timestamp_str,
-                "event": "AUTH_RBAC_POLICY_COMPILED",
-                "deployment_mode": "STANDALONE_LOCAL",
-                "localhost_sockets": 3,
-                "lan_hotspot_sockets": 0,
-                "external_sockets": 0,
-                "external_packets": 0,
-                "block_hash": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
-                "prev_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                "verified": True
-            },
-            {
-                "sequence": 1,
-                "timestamp": timestamp_str,
-                "event": "BOOT_GENESIS_AIR_GAP_SEAL",
-                "deployment_mode": "STANDALONE_LOCAL",
-                "localhost_sockets": 3,
-                "lan_hotspot_sockets": 0,
-                "external_sockets": 0,
-                "external_packets": 0,
-                "block_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
-                "verified": True
-            }
-        ]
+        "logs": chain["logs"],
+        "provenance": "live_user_activity_logs",
+        "verification_method": "sha256_chain_recomputed_per_request",
+        "chain_valid": chain["chain_valid"],
+        "chain_length": chain["chain_length"],
+        "root_hash": chain["root_hash"],
+        "head_hash": chain["head_hash"],
+        "independently_verified": False,
+        "note": (
+            "Hashes are recomputed and checked against this chain on each request. "
+            "They are not anchored to an external witness, so this is internal "
+            "consistency verification rather than independent proof."
+        ),
     }
 
 
 @app.get("/api/sovereignty-audit/export")
 @app.get("/api/v1/sovereignty-audit/export")
 async def export_sovereignty_audit():
-    """Exports complete air-gap audit cryptographic certificate."""
+    """Exports the air-gap audit certificate.
+
+    `provenance` is explicit: this deployment serves a static bootstrap
+    The integrity block is computed from the live audit ledger at request time.
+    The chain is internally re-verified on every call, but it is not anchored
+    to an external witness, so `independently_verified` stays false and clients
+    must present it that way.
+    """
+    chain = _build_audit_chain(limit=AUDIT_CHAIN_LIMIT)
+    chain_ok = bool(chain.get("available")) and bool(chain.get("chain_valid"))
+
     return {
         "certificate_title": "AEGIS AI Sovereign AI Workbench - Air-Gap Cryptographic Audit Certificate",
         "institution": "Mangalore Refinery and Petrochemicals Limited (MRPL)",
-        "timestamp_generated_utc": datetime.utcnow().isoformat() + "Z",
-        "air_gap_verdict": "100% AIR-GAPPED & SOVEREIGN",
-        "external_packets_transmitted": 0,
+        # timezone.utc, not the deprecated naive datetime.utcnow(), so the
+        # certificate carries an unambiguous UTC instant.
+        "timestamp_generated_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "air_gap_verdict": "LIVE_CHAIN_RECOMPUTED" if chain_ok else "CHAIN_UNAVAILABLE_OR_INVALID",
+        "external_packets_transmitted": None,
+        "external_packets_note": (
+            "Packet counting is not implemented on this deployment; no packet "
+            "total is claimed."
+        ),
+        "provenance": "live_user_activity_logs",
+        "independently_verified": False,
         "integrity_verification": {
-            "valid": True,
-            "chain_length": 4,
-            "root_hash": "c8f2a64016b801a61c379768652d87e0251141df90fe954a7f0e6ce7ecf97e33"
-        }
+            "valid": chain_ok,
+            "method": "sha256_chain_recomputed_per_request",
+            "note": (
+                "Each block hash is recomputed from the stored audit row and the "
+                "previous hash, then re-checked link by link. There is no external "
+                "anchor, so this proves internal consistency only."
+            ),
+            "chain_length": chain.get("chain_length", 0),
+            "root_hash": chain.get("root_hash"),
+            "head_hash": chain.get("head_hash"),
+        },
     }
 
 
@@ -2328,6 +3683,22 @@ async def save_custom_agent(body: CustomAgent):
     saved = create_or_update_agent(body)
     return {"status": "SUCCESS", "agent": saved.dict()}
 
+
+@app.delete("/api/v1/agents/{agent_id}")
+@app.delete("/api/agents/{agent_id}")
+async def remove_custom_agent(agent_id: str):
+    """
+    Deletes a custom agent definition.
+
+    This route was missing: `delete_agent` was imported at module scope but
+    never registered, so the UI's delete call 404'd while the agent was removed
+    from local state only and reappeared on the next fetch.
+    """
+    if not delete_agent(agent_id):
+        raise HTTPException(status_code=404, detail="Agent not found")
+    logger.info(f"[AGENTS] Deleted custom agent '{agent_id}'")
+    return {"status": "SUCCESS", "deleted": agent_id}
+
 # ─── Feedback & Error Reporting Endpoints ────────────────────────────────────
 
 class FeedbackSubmitRequest(BaseModel):
@@ -2359,12 +3730,10 @@ async def submit_feedback_report(body: FeedbackSubmitRequest, request: Request):
     """
     from backend.db import create_feedback_report
     
-    # Extract user identity if token present
-    auth_header = request.headers.get("Authorization", "")
-    token = auth_header.replace("Bearer ", "").strip()
-    payload = _decode_token(token) if token else None
-    
-    username = body.username or "operator"
+    # Identity always comes from the verified token, never from client fields.
+    payload = _caller_from_request(request)
+
+    username = (payload or {}).get("sub") or body.username or "operator"
     user_id = body.user_id
     if payload:
         username = payload.get("sub") or username
@@ -2483,10 +3852,9 @@ async def update_feedback_status(report_id: int, body: FeedbackUpdateRequest, re
     if not report:
         raise HTTPException(status_code=404, detail="Feedback report not found")
 
-    auth_header = request.headers.get("Authorization", "")
-    token = auth_header.replace("Bearer ", "").strip()
-    payload = _decode_token(token) if token else None
-    resolver = payload.get("sub") if payload else (body.resolved_by or "Admin")
+    # The resolver is the authenticated user; the client cannot name someone else.
+    payload = _caller_from_request(request)
+    resolver = (payload or {}).get("sub") or body.resolved_by or "Admin"
 
     update_feedback_report(
         report_id=report_id,
@@ -2713,7 +4081,23 @@ async def websocket_collaboration(
     - Shared file notifications
     - Typing indicators
     - Real-time in-channel collaborative @aegis / @ai invocations
+
+    Connect with ?token=<session token> (authentication is enforced). The
+    username/role query parameters are only cosmetic labels: the identity that
+    is recorded is always the one carried by the signed token.
     """
+    # Authenticate before accepting: an invalid token fails the HTTP upgrade.
+    # The handshake itself is completed by collab_manager.connect() below.
+    caller = await _authorize_websocket(websocket)
+    if not caller:
+        logger.warning("[WS] Rejected unauthenticated /api/collaboration/ws connection")
+        return
+
+    # The signed token is authoritative; ignore any client-asserted identity.
+    channel_id = (websocket.query_params.get("channel_id") or "chan_refinery_ops")[:120]
+    username = str(caller.get("sub") or "unknown")
+    role = str(caller.get("role") or "FIELD_OPERATOR")
+
     await collab_manager.connect(websocket, channel_id, username, role)
     from backend.db import save_channel_message
 

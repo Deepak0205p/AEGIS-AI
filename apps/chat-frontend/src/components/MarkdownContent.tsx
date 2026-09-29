@@ -19,13 +19,9 @@ import {
   Edit3
 } from 'lucide-react';
 import { useCanvasStore } from '@/store/useCanvasStore';
-
-function getApiBase(): string {
-  if (typeof window !== 'undefined') {
-    return `http://${window.location.hostname}:8000`;
-  }
-  return 'http://localhost:8000';
-}
+import { getApiBase } from '@/lib/apiBase';
+import { runCode, formatRunReport, CodeRunResult } from '@/lib/codeRunner';
+import rehypeSupSub from '@/lib/rehypeSupSub';
 
 /**
  * Pre-processes markdown content to clean up escaped characters,
@@ -78,13 +74,8 @@ const PythonCodeBlock = ({ code, language = 'python' }: PythonBlockProps) => {
   const [copied, setCopied] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const [outputResult, setOutputResult] = useState<{
-    stdout?: string;
-    stderr?: string;
-    exitCode?: number;
-    success?: boolean;
-    timeMs?: number;
-  } | null>(null);
+  const [result, setResult] = useState<CodeRunResult | null>(null);
+  const [transportError, setTransportError] = useState<string | null>(null);
 
   const cleanCode = code.replace(/\n$/, '');
 
@@ -108,58 +99,36 @@ const PythonCodeBlock = ({ code, language = 'python' }: PythonBlockProps) => {
       size_formatted: `${(cleanCode.length / 1024).toFixed(1)} KB`,
       source_scenario: 'Interactive Code Studio',
       source_requirement: 'Python Sandbox Execution',
-      generating_model: 'Sovereign Engine',
+      generating_model: 'Local interpreter',
       generated_timestamp: new Date().toLocaleTimeString(),
-      sha256_hash: 'py_sandbox_hash',
-      summary: 'Interactive Python Air-Gapped Sandbox Editor & Runner',
+      // Not computed: a placeholder string here would look like a real digest.
+      sha256_hash: 'unavailable',
+      summary: 'Interactive Python editor and runner (local subprocess; no container isolation).',
       key_metrics: [
-        { label: 'Language', value: 'Python 3.11' },
-        { label: 'Sandbox Mode', value: 'Air-Gapped / Isolated' },
+        { label: 'Language', value: 'Python (local interpreter)' },
+        { label: 'Isolation', value: 'None - local subprocess' },
         { label: 'Status', value: 'Ready to Run' }
       ],
-      sop_citations: ['OISD-STD-105', 'Python 3.11 Execution Standard']
+      // No invented standards references.
+      sop_citations: []
     } as any);
   };
 
   const handleRunSandbox = async () => {
     setIsRunning(true);
     setTerminalOpen(true);
-    setOutputResult(null);
+    setResult(null);
+    setTransportError(null);
 
-    const startTime = performance.now();
-    try {
-      const res = await fetch(`${getApiBase()}/api/sandbox/run`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: cleanCode }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status} ${res.statusText}`);
-      }
-
-      const data = await res.json();
-      const elapsed = Math.round(performance.now() - startTime);
-      const isSuccess = data.success ?? (data.exit_code === 0);
-
-      setOutputResult({
-        stdout: data.stdout || '',
-        stderr: data.stderr || '',
-        exitCode: data.exit_code ?? (isSuccess ? 0 : 1),
-        success: isSuccess,
-        timeMs: data.execution_time_sec ? Math.round(data.execution_time_sec * 1000) : elapsed,
-      });
-    } catch (err: any) {
-      setOutputResult({
-        stderr: err.message || 'Failed to connect to Python Sandbox backend.',
-        exitCode: 1,
-        success: false,
-        timeMs: Math.round(performance.now() - startTime),
-      });
-    } finally {
-      setIsRunning(false);
-    }
+    // Uses the shared runner so the reported engine, isolation and exit code
+    // come straight from the backend - no invented "sandbox" framing.
+    const runResult = await runCode('python', cleanCode);
+    setResult(runResult);
+    setIsRunning(false);
   };
+
+  const report = result ? formatRunReport(result) : '';
+  const success = result?.status === 'SUCCESS' && result.exit_code === 0;
 
   return (
     <div className="my-4 rounded-xl border border-slate-700/80 bg-[#080d1a] shadow-xl overflow-hidden text-left">
@@ -169,10 +138,14 @@ const PythonCodeBlock = ({ code, language = 'python' }: PythonBlockProps) => {
         <div className="flex items-center space-x-2">
           <div className="flex items-center space-x-1.5 px-2.5 py-0.5 rounded-lg bg-blue-950/70 border border-blue-800/60 text-blue-400 font-mono text-[11px] font-semibold">
             <Code2 className="h-3.5 w-3.5 text-blue-400" />
-            <span>Python 3.11</span>
+            <span>Python</span>
           </div>
           <span className="hidden sm:inline-block text-[11px] text-slate-400 font-medium">
-            Air-Gapped Sandbox
+            {result
+              ? result.isolated
+                ? 'container-isolated runner'
+                : 'local runner — not container-isolated'
+              : 'local runner — not container-isolated'}
           </span>
         </div>
 
@@ -232,22 +205,22 @@ const PythonCodeBlock = ({ code, language = 'python' }: PythonBlockProps) => {
                   Executing...
                 </span>
               )}
-              {outputResult && (
+              {result && (
                 <>
-                  {outputResult.success ? (
+                  {success ? (
                     <span className="flex items-center gap-1 px-1.5 py-0.2 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-400 font-medium text-[10px]">
                       <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400" />
-                      Success (0)
+                      Exit 0
                     </span>
                   ) : (
                     <span className="flex items-center gap-1 px-1.5 py-0.2 rounded bg-rose-950/80 border border-rose-700/60 text-rose-400 font-medium text-[10px]">
                       <XCircle className="h-2.5 w-2.5 text-rose-400" />
-                      Exit Code {outputResult.exitCode}
+                      {result.status === 'UNSUPPORTED' ? 'Not run' : `Exit ${result.exit_code}`}
                     </span>
                   )}
-                  {outputResult.timeMs !== undefined && (
-                    <span className="text-slate-500 font-mono text-[10px]">{outputResult.timeMs}ms</span>
-                  )}
+                  <span className="text-slate-500 font-mono text-[10px]">
+                    {Math.round(Number(result.duration_ms || 0))}ms
+                  </span>
                 </>
               )}
             </div>
@@ -263,26 +236,61 @@ const PythonCodeBlock = ({ code, language = 'python' }: PythonBlockProps) => {
           </div>
 
           {/* Console Content */}
-          <div className="p-3 text-xs font-mono max-h-48 overflow-y-auto whitespace-pre-wrap">
+          <div className="p-3 text-xs font-mono max-h-56 overflow-y-auto whitespace-pre-wrap">
             {isRunning && (
-              <span className="text-slate-400 italic">Initializing Python sandbox environment & running code...</span>
+              <span className="text-slate-400 italic">Running on the backend...</span>
             )}
-            {!isRunning && outputResult && (
+            {!isRunning && result && (
               <div>
-                {outputResult.stdout && (
-                  <div className="text-emerald-400 leading-relaxed">{outputResult.stdout}</div>
-                )}
-                {outputResult.stderr && (
-                  <div className="text-rose-400 mt-2 leading-relaxed">{outputResult.stderr}</div>
-                )}
-                {!outputResult.stdout && !outputResult.stderr && (
-                  <span className="text-slate-500 italic">Code executed without any output.</span>
+                <div className="text-slate-300">{report}</div>
+                {result.stdout && (
+                  <div className="text-emerald-400 leading-relaxed mt-2 whitespace-pre-wrap">{result.stdout}</div>
                 )}
               </div>
+            )}
+            {!isRunning && transportError && (
+              <div className="text-rose-400">{transportError}</div>
             )}
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+/**
+ * Read-only fenced code block for languages the chat cannot execute.
+ * It offers Copy only - never a Run button that would fail or, worse,
+ * execute the wrong language.
+ */
+const StaticCodeBlock = ({ code, language }: { code: string; language: string }) => {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <div className="my-4 rounded-xl border border-slate-700/80 bg-[#080d1a] shadow-xl overflow-hidden text-left">
+      <div className="flex items-center justify-between px-3 sm:px-4 py-2 bg-[#0d1527] border-b border-slate-800 text-xs">
+        <div className="flex items-center gap-2">
+          <Code2 className="h-3.5 w-3.5 text-slate-400" />
+          <span className="text-slate-300 font-mono text-[11px] font-semibold uppercase">{language}</span>
+        </div>
+        <button
+          onClick={() => {
+            navigator.clipboard.writeText(code);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          }}
+          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 text-[11px] font-medium transition-colors"
+          title={`Copy ${language} code`}
+        >
+          {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-slate-400" />}
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <div className="p-3 sm:p-4 overflow-x-auto text-[13px] font-mono leading-relaxed bg-[#060a14] text-slate-100">
+        <pre className="m-0 p-0">
+          <code>{code}</code>
+        </pre>
+      </div>
     </div>
   );
 };
@@ -295,6 +303,7 @@ export const MarkdownContent = ({ content }: { content: string }) => {
     <div className="prose prose-sm dark:prose-invert max-w-none break-words text-slate-800 dark:text-[#e3e3e3] leading-relaxed text-[14.5px] sm:text-[15px]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeSupSub]}
         components={{
           // Styled Tables
           table: ({ node, ...props }) => (
@@ -342,28 +351,41 @@ export const MarkdownContent = ({ content }: { content: string }) => {
             <blockquote className="my-3.5 pl-4 py-1.5 border-l-3 border-blue-500 bg-blue-50/50 dark:bg-blue-500/[0.08] dark:border-blue-400 rounded-r-xl italic text-slate-700 dark:text-slate-300 text-[14px]" {...props} />
           ),
 
-          // Code blocks & Inline code
-          code: ({ node, inline, className, children, ...props }: any) => {
-            const match = /language-(\w+)/.exec(className || '');
-            const lang = match ? match[1] : '';
-            const codeString = String(children);
+          // Fenced code blocks.
+          //
+          // react-markdown v9 removed the `inline` prop, so branching on it
+          // renders *every* code span - including inline words like `volume` -
+          // as a full runnable block. A fenced block is always wrapped in <pre>,
+          // so the block is detected here and the `code` handler below is left
+          // to style inline spans only.
+          pre: ({ node, children, ...props }: any) => {
+            const child = React.Children.count(children) === 1
+              ? (React.Children.toArray(children)[0] as React.ReactElement<any>)
+              : null;
+            const className = child?.props?.className || '';
+            const match = /language-([\w+#-]+)/.exec(className);
+            const language = (match?.[1] || 'python').toLowerCase();
+            const codeText = String(child?.props?.children ?? '').replace(/\n$/, '');
 
-            if (inline) {
-              return (
-                <code className="px-1.5 py-0.5 mx-0.5 rounded-md bg-slate-100 dark:bg-white/[0.08] text-blue-700 dark:text-blue-300 font-mono text-[13px] border border-slate-200/60 dark:border-white/10" {...props}>
-                  {children}
-                </code>
-              );
+            if (!codeText) return <pre {...props}>{children}</pre>;
+
+            if (language === 'python' || language === 'py') {
+              return <PythonCodeBlock code={codeText} language="python" />;
             }
-
-            // Always render multi-line code blocks using our dedicated PythonCodeBlock
-            return (
-              <PythonCodeBlock
-                code={codeString}
-                language={lang || 'python'}
-              />
-            );
+            // Other languages are shown verbatim; the chat only runs Python, so
+            // no misleading "Run" button is offered for them.
+            return <StaticCodeBlock code={codeText} language={language} />;
           },
+
+          // Inline code spans only (block code is handled by `pre` above).
+          code: ({ node, className, children, ...props }: any) => (
+            <code
+              className="px-1.5 py-0.5 mx-0.5 rounded-md bg-slate-100 dark:bg-white/[0.08] text-blue-700 dark:text-blue-300 font-mono text-[13px] border border-slate-200/60 dark:border-white/10"
+              {...props}
+            >
+              {children}
+            </code>
+          ),
 
           // Standard Markdown Links
           a: ({ node, href, children, ...props }: any) => {

@@ -1,0 +1,202 @@
+// AEGIS AI — Sovereign AI Workbench
+// Prisma schema for the PostgreSQL database.
+//
+// IMPORTANT — what this is and is not
+// ------------------------------------
+// The FastAPI backend is the only component on the request hot path, and it
+// talks to PostgreSQL through `backend/db.py` (psycopg 3) and
+// `backend/db_dialect.py`. Prisma is a Node/TypeScript ORM and cannot be used
+// from Python, so it does NOT replace psycopg here.
+//
+// What Prisma IS used for in this repository:
+//   1. A declarative, reviewable definition of the database contract that must
+//      agree with the Python schema in `backend/db.py::_init_schema`.
+//   2. Verification. `npm run prisma:verify` introspects the live database with
+//      `prisma db pull` and diffs it against this file, so drift between the
+//      two is detected instead of assumed away.
+//   3. `prisma studio` for a browsable GUI during demos.
+//   4. Node-side tooling that needs typed database access.
+//
+// The `db push` script is intentionally NOT part of normal workflow: the
+// authoritative schema is the Python one, and pushing from here could silently
+// diverge from it. Use `prisma:verify` instead.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Conversation history ───────────────────────────────────────────────────
+
+model Message {
+  id        Int      @id @default(autoincrement())
+  chatId    String   @map("chat_id") @db.VarChar(128)
+  role      String   @db.VarChar(32)
+  content   String   @db.Text
+  mode      String   @db.VarChar(32)
+  timestamp DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([chatId], map: "idx_chat_id")
+  @@map("messages")
+}
+
+/// Rolling summary of turns that have fallen out of the live context window.
+model ChatSummary {
+  chatId     String   @id @map("chat_id") @db.VarChar(128)
+  summary    String   @db.Text
+  lastMsgId  Int      @map("last_msg_id")
+  updatedAt  DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
+
+  @@map("chat_summaries")
+}
+
+// ─── Generated deliverables + 2-step human verification ──────────────────────
+
+/// A generated .docx / .xlsx / .pptx and its verification audit trail.
+///
+/// `isImportant` gates the file into the human verification queue. The
+/// verification_status transitions are enforced in `backend/db.py` with a
+/// status guard in the WHERE clause, so a Stage 2 sign-off cannot be applied
+/// before Stage 1.
+model File {
+  fileId            String    @id @map("file_id") @db.VarChar(64)
+  chatId            String    @map("chat_id") @db.VarChar(128)
+  filename          String    @db.VarChar(255)
+  fileType          String    @map("file_type") @db.VarChar(32)
+  filePath          String    @map("file_path") @db.Text
+  verificationStatus String?  @default("PENDING_STAGE_1") @map("verification_status") @db.VarChar(32)
+  stage1Verifier    String?   @map("stage_1_verifier") @db.VarChar(64)
+  stage1At          DateTime? @map("stage_1_at") @db.Timestamp(6)
+  stage1Notes       String?   @map("stage_1_notes") @db.Text
+  stage2Verifier    String?   @map("stage_2_verifier") @db.VarChar(64)
+  stage2At          DateTime? @map("stage_2_at") @db.Timestamp(6)
+  stage2Notes       String?   @map("stage_2_notes") @db.Text
+  rejectedBy        String?   @map("rejected_by") @db.VarChar(64)
+  rejectedAt        DateTime? @map("rejected_at") @db.Timestamp(6)
+  rejectReason      String?   @map("reject_reason") @db.Text
+  createdAt         DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  isImportant       Boolean?  @default(false) @map("is_important")
+  sha256Hash        String?   @map("sha256_hash") @db.VarChar(64)
+  sizeBytes         BigInt?   @map("size_bytes")
+  updatedAt         DateTime? @map("updated_at") @db.Timestamp(6)
+
+  @@index([chatId], map: "idx_files_chat_id")
+  @@index([verificationStatus], map: "idx_files_status")
+  @@map("files")
+}
+
+// ─── Operator feedback / error triage ───────────────────────────────────────
+
+model FeedbackReport {
+  id             Int       @id @default(autoincrement())
+  reportType     String    @map("report_type") @db.VarChar(32)
+  userId         String?   @map("user_id") @db.VarChar(64)
+  username       String?   @default("operator") @db.VarChar(64)
+  chatId         String?   @map("chat_id") @db.VarChar(128)
+  messageId      String?   @map("message_id") @db.VarChar(64)
+  messageContent String?   @map("message_content") @db.Text
+  category       String?   @default("GENERAL") @db.VarChar(64)
+  title          String    @db.VarChar(255)
+  description    String    @db.Text
+  suggestedFix   String?   @map("suggested_fix") @db.Text
+  status         String?   @default("OPEN") @db.VarChar(32)
+  adminNotes     String?   @map("admin_notes") @db.Text
+  adminResponse  String?   @map("admin_response") @db.Text
+  resolvedBy     String?   @map("resolved_by") @db.VarChar(64)
+  resolvedAt     DateTime? @map("resolved_at") @db.Timestamp(6)
+  createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt      DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
+
+  @@index([reportType], map: "idx_fb_type")
+  @@index([status], map: "idx_fb_status")
+  @@index([createdAt], map: "idx_fb_created")
+  @@map("feedback_reports")
+}
+
+// ─── Plant team collaboration ───────────────────────────────────────────────
+
+model ChatChannel {
+  id          String    @id @map("id") @db.VarChar(64)
+  name        String    @db.VarChar(128)
+  /// 'CHANNEL' or 'DM'
+  channelType String?   @default("CHANNEL") @map("channel_type") @db.VarChar(32)
+  description String?   @db.Text
+  /// 'ALL' marks a channel visible to every authenticated user.
+  department  String?   @default("ALL") @db.VarChar(64)
+  createdBy   String?   @default("system") @map("created_by") @db.VarChar(64)
+  createdAt   DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  members  ChannelMember[]
+  messages ChannelMessage[]
+
+  @@map("chat_channels")
+}
+
+model ChannelMember {
+  id        Int      @id @default(autoincrement())
+  channelId String   @map("channel_id") @db.VarChar(64)
+  username  String   @db.VarChar(64)
+  role      String?  @default("OPERATOR") @db.VarChar(64)
+  joinedAt  DateTime? @default(now()) @map("joined_at") @db.Timestamp(6)
+
+  channel ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, username], map: "channel_members_channel_id_username_key")
+  @@index([channelId], map: "idx_mem_chan")
+  @@index([username], map: "idx_mem_user")
+  @@map("channel_members")
+}
+
+model ChannelMessage {
+  id             Int      @id @default(autoincrement())
+  channelId      String   @map("channel_id") @db.VarChar(64)
+  senderUsername String   @map("sender_username") @db.VarChar(64)
+  senderRole     String?  @default("OPERATOR") @map("sender_role") @db.VarChar(64)
+  content        String   @db.Text
+  /// 'TEXT' | 'FILE' | 'AI_RESPONSE' | 'SYSTEM'
+  messageType    String?  @default("TEXT") @map("message_type") @db.VarChar(32)
+  fileId         String?  @map("file_id") @db.VarChar(64)
+  fileName       String?  @map("file_name") @db.VarChar(255)
+  fileType       String?  @map("file_type") @db.VarChar(64)
+  fileSize       Int?     @map("file_size")
+  fileUrl        String?  @map("file_url") @db.Text
+  createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  channel ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([channelId], map: "idx_cmsg_chan")
+  @@index([createdAt], map: "idx_cmsg_created")
+  @@map("channel_messages")
+}
+
+// ─── Security audit ledger ──────────────────────────────────────────────────
+
+/// Append-only ledger of operator activity. The tamper-evident chain in
+/// `backend/main.py::_build_audit_chain` is recomputed from these rows on every
+/// request, so a deleted or edited row invalidates the chain.
+model UserActivityLog {
+  id             Int      @id @default(autoincrement())
+  username       String   @db.VarChar(64)
+  role           String?  @default("OPERATOR") @db.VarChar(64)
+  /// 'CHAT_QUERY' | 'SEARCH_RAG' | 'FILE_UPLOAD' | 'FILE_DOWNLOAD' |
+  /// 'CHANNEL_MSG' | 'LOGIN' | 'SECURITY_TRIGGER'
+  activityType   String   @map("activity_type") @db.VarChar(64)
+  channelOrChatId String? @map("channel_or_chat_id") @db.VarChar(128)
+  queryText      String?  @map("query_text") @db.Text
+  details        String?  @db.Text
+  fileMeta       String?  @map("file_meta") @db.Text
+  ipAddress      String?  @default("127.0.0.1") @map("ip_address") @db.VarChar(64)
+  /// 'NORMAL' | 'SUSPICIOUS' | 'CRITICAL'
+  riskLevel      String?  @default("NORMAL") @map("risk_level") @db.VarChar(32)
+  createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  @@index([username], map: "idx_act_user")
+  @@index([activityType], map: "idx_act_type")
+  @@index([riskLevel], map: "idx_act_risk")
+  @@index([createdAt], map: "idx_act_created")
+  @@map("user_activity_logs")
+}

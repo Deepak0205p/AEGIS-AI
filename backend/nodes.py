@@ -12,6 +12,7 @@ Features:
 
 import httpx
 import ipaddress
+import threading
 import time
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
@@ -57,16 +58,31 @@ _nodes_db: Dict[str, ComputeNode] = {
 _model_node_bindings: Dict[str, str] = {}
 
 def is_private_or_loopback_ip(ip_str: str) -> bool:
-    """Verifies that IP belongs strictly to private subnets (RFC 1918) or localhost."""
+    """
+    Verifies that the target is loopback or an RFC 1918 private LAN address.
+
+    The previous version fell through to a six-suffix blacklist for anything
+    that was not a literal IP, so `internal.cdn` or `attacker.corp` returned
+    True and could be registered as a "sovereign" worker. A name that is not a
+    literal private address is now rejected outright: callers supply an IP, and
+    `backend.airgap_guard.is_ip_allowed` already treats the same input as
+    disallowed.
+    """
     clean_ip = ip_str.replace("http://", "").replace("https://", "").split(":")[0].strip()
     if clean_ip.lower() in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
         return True
     try:
         ip_obj = ipaddress.ip_address(clean_ip)
-        return ip_obj.is_private or ip_obj.is_loopback
     except ValueError:
-        # If hostname or LAN name, allow if not external domain
-        return not clean_ip.endswith((".com", ".io", ".org", ".net", ".ai", ".cloud"))
+        # Not a literal IP: cannot be verified as private, so refuse it.
+        return False
+    if ip_obj.is_loopback:
+        return True
+    # Explicit RFC 1918 only. `ip_obj.is_private` is also True for CGNAT
+    # 100.64/10 and the TEST-NET ranges, which are not plant LAN space.
+    return ip_obj in ipaddress.ip_network("10.0.0.0/8") \
+        or ip_obj in ipaddress.ip_network("172.16.0.0/12") \
+        or ip_obj in ipaddress.ip_network("192.168.0.0/16")
 
 async def test_node_connection(host_ip: str, port: int) -> Dict[str, Any]:
     """Pings remote device Ollama port and fetches available model tags."""
@@ -111,18 +127,31 @@ async def test_node_connection(host_ip: str, port: int) -> Dict[str, Any]:
         }
 
 def get_all_nodes() -> List[ComputeNode]:
-    # Update local node models dynamically
+    # Update local node models dynamically.
+    #
+    # `get_all_nodes` is called from async endpoints (e.g. GET /api/v1/nodes),
+    # so the probe is fired on a worker thread rather than blocking the event
+    # loop. On failure the previously discovered list is left untouched instead
+    # of being overwritten with two config constants, which the model listing
+    # then published as real discovery results.
     if "node-local" in _nodes_db:
         local_node = _nodes_db["node-local"]
+
+        def _probe() -> None:
+            try:
+                r = httpx.get(f"http://{local_node.host_ip}:{local_node.port}/api/tags", timeout=1.0)
+                if r.status_code == 200:
+                    tags = [m.get("name", "") for m in r.json().get("models", [])]
+                    if tags:
+                        local_node.discovered_models = tags
+                        local_node.status = "online"
+            except Exception as probe_err:
+                logger.debug(f"[NODES] Local model probe failed: {probe_err}")
+
         try:
-            import httpx
-            r = httpx.get(f"http://{local_node.host_ip}:{local_node.port}/api/tags", timeout=1.0)
-            if r.status_code == 200:
-                tags = [m.get("name", "") for m in r.json().get("models", [])]
-                if tags:
-                    local_node.discovered_models = tags
-        except Exception:
-            local_node.discovered_models = [MODEL_NAME, VISION_MODEL_NAME]
+            threading.Thread(target=_probe, daemon=True).start()
+        except Exception as thread_err:
+            logger.debug(f"[NODES] Could not start local probe thread: {thread_err}")
     return list(_nodes_db.values())
 
 def get_node(node_id: str) -> Optional[ComputeNode]:

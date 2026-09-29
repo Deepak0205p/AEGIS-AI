@@ -61,7 +61,8 @@ import {
   Edit2,
   Check as CheckIcon,
   X as CancelIcon,
-  ShieldCheck
+  ShieldCheck,
+  AlertTriangle
 } from 'lucide-react';
 import { useVerificationStore } from '@/store/useVerificationStore';
 
@@ -75,6 +76,7 @@ export function DocumentCanvasPanel() {
     saveChanges,
     hasUnsavedChanges,
     isSaving,
+    saveError,
     renameActiveDeliverable,
   } = useCanvasStore();
 
@@ -257,8 +259,16 @@ export function DocumentCanvasPanel() {
                   {ext.replace('.', '') || activeDeliverable.type}
                 </span>
 
-                {/* Live Auto-Save Indicator in Title Bar */}
-                {isSaving ? (
+                {/* Live Save Status Indicator in Title Bar */}
+                {saveError ? (
+                  <span
+                    className="hidden sm:flex items-center space-x-1 px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shrink-0 max-w-[160px]"
+                    title={saveError}
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full bg-rose-600 shrink-0" />
+                    <span className="truncate">Save failed</span>
+                  </span>
+                ) : isSaving ? (
                   <span className="hidden sm:flex items-center space-x-1 px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 shrink-0">
                     <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-pulse" />
                     <span>Saving...</span>
@@ -286,7 +296,10 @@ export function DocumentCanvasPanel() {
             {/* Quick Human Verification Advance Trigger */}
             <button
               onClick={async () => {
-                await saveChanges(activeDeliverable.id);
+                const saved = await saveChanges(activeDeliverable.id);
+                // Never advance on a failed save — the reviewer must inspect the
+                // bytes that are actually on disk, not unsaved editor state.
+                if (!saved) return;
                 useCanvasStore.getState().closeCanvas();
                 useVerificationStore.getState().openVerificationModal({
                   file_id: activeDeliverable.id,
@@ -308,7 +321,8 @@ export function DocumentCanvasPanel() {
             <button
               onClick={() => saveChanges(activeDeliverable.id)}
               disabled={isSaving}
-              className="flex items-center space-x-1 sm:space-x-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 transition-colors shadow-sm cursor-pointer"
+              title={saveError || 'Save this deliverable to air-gapped storage'}
+              className="flex items-center space-x-1 sm:space-x-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 transition-colors shadow-sm cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <Save className="h-3.5 w-3.5" />
               <span className="hidden xs:inline">{isSaving ? 'Saving...' : 'Save'}</span>
@@ -340,6 +354,23 @@ export function DocumentCanvasPanel() {
             </button>
           </div>
         </div>
+
+        {/* Save Failure Banner — surfaces the real backend rejection */}
+        {saveError && (
+          <div className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-rose-50 border-b border-rose-200 text-rose-800 text-[11px] shrink-0">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span className="flex-1 min-w-0 truncate" title={saveError}>
+              {saveError}
+            </span>
+            <button
+              onClick={() => saveChanges(activeDeliverable.id)}
+              disabled={isSaving}
+              className="px-2 py-0.5 rounded-md bg-white border border-rose-300 text-rose-700 font-bold hover:bg-rose-100 disabled:opacity-60 cursor-pointer disabled:cursor-not-allowed shrink-0"
+            >
+              {isSaving ? 'Retrying...' : 'Retry'}
+            </button>
+          </div>
+        )}
 
         {/* 2. Direct Dedicated Language Viewer Component */}
         <div className="flex-1 overflow-hidden relative bg-[#ffffff]">

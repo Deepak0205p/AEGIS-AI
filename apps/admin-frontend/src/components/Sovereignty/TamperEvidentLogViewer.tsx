@@ -20,6 +20,7 @@ import {
   ArrowRight,
   Copy,
   Check,
+  HelpCircle,
 } from 'lucide-react';
 
 type LogCategory = 'all' | 'security' | 'model' | 'system';
@@ -31,6 +32,9 @@ export function TamperEvidentLogViewer() {
     exportAuditCertificate,
     isVerifyingChain,
     chainVerificationStatus,
+    chainError,
+    chainProvenance,
+    certificateError,
   } = useSovereigntyStore();
 
   const [selectedCategory, setSelectedCategory] = useState<LogCategory>('all');
@@ -147,7 +151,7 @@ export function TamperEvidentLogViewer() {
               </span>
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5">
-              Cryptographically chained Merkle proof certifying 100% offline air-gapped events.
+              Hash-chained audit events as reported by the sovereignty audit service.
             </p>
           </div>
         </div>
@@ -182,18 +186,61 @@ export function TamperEvidentLogViewer() {
         </div>
       </div>
 
-      {/* Verification Status Banner */}
-      <div className="p-3 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 text-emerald-800 dark:text-emerald-300 text-xs font-mono flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-          <span>
-            <strong>CRYPTOGRAPHIC AUDIT VERIFIED:</strong> All {auditLogs.length} blocks mathematically linked via SHA-256 parent hash. Zero collision or tamper detected.
-          </span>
+      {/* Certificate export failure (no synthetic certificate is generated) */}
+      {certificateError && (
+        <div className="p-2.5 rounded-lg bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-800 dark:text-rose-300 text-[11px] font-mono">
+          Certificate export failed: {certificateError}
         </div>
-        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 uppercase font-semibold tracking-wider">
-          Air-Gapped Root Valid
-        </span>
-      </div>
+      )}
+
+      {/* Verification Status Banner — reflects the REAL verification outcome */}
+      {(() => {
+        const tampered = chainVerificationStatus === 'tampered';
+        // The backend recomputes this chain from real audit rows on each request.
+        // That is genuine internal-consistency verification, but it is still not
+        // anchored to an external witness, so it is never called "independent".
+        const liveChain = chainProvenance === 'live_user_activity_logs';
+        const verified = chainVerificationStatus === 'valid' && liveChain;
+        const tone = tampered
+          ? 'bg-rose-50/70 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/50 text-rose-800 dark:text-rose-300'
+          : verified
+            ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/50 text-emerald-800 dark:text-emerald-300'
+            : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/50 text-amber-800 dark:text-amber-300';
+        const StatusIcon = tampered ? ShieldAlert : verified ? ShieldCheck : HelpCircle;
+        const headline = tampered
+          ? 'CHAIN INTEGRITY FAILED:'
+          : verified
+            ? 'AUDIT CHAIN RE-VERIFIED:'
+            : chainProvenance
+              ? 'SERVER-REPORTED LEDGER (NOT INDEPENDENTLY VERIFIED):'
+              : 'CHAIN NOT YET VERIFIED:';
+        const detail = tampered
+          ? `The audit service reported a broken hash chain across ${auditLogs.length} block(s).`
+          : verified
+            ? `All ${auditLogs.length} block(s) were rebuilt from stored audit rows and re-linked via SHA-256. This proves internal consistency only - the chain has no external anchor.`
+            : chainProvenance
+              ? `The backend reported ${auditLogs.length} block(s) but the chain could not be re-verified here.`
+              : chainError || 'Run "Verify Hash Chain" to audit the ledger. Nothing has been verified yet.';
+        const rightLabel = tampered
+          ? 'TAMPER DETECTED'
+          : verified
+            ? 'Chain Re-verified'
+            : chainProvenance
+              ? 'SERVER-REPORTED'
+              : 'UNVERIFIED';
+
+        return (
+          <div className={`p-3 rounded-lg border text-xs font-mono flex items-center justify-between ${tone}`}>
+            <div className="flex items-center gap-2">
+              <StatusIcon className="w-4 h-4 shrink-0" />
+              <span>
+                <strong>{headline}</strong> {detail}
+              </span>
+            </div>
+            <span className="text-[10px] uppercase font-semibold tracking-wider">{rightLabel}</span>
+          </div>
+        );
+      })()}
 
       {/* Filter Tabs & Search Bar */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
@@ -313,9 +360,15 @@ export function TamperEvidentLogViewer() {
                         </span>
                       </td>
                       <td className="py-2.5 px-4 text-right">
-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                          <CheckCircle2 className="w-3 h-3" />
-                          <span>IMMUTABLE</span>
+                        <span
+                          className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                            log.verified
+                              ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800'
+                              : 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800'
+                          }`}
+                        >
+                          {log.verified ? <CheckCircle2 className="w-3 h-3" /> : <HelpCircle className="w-3 h-3" />}
+                          <span>{log.verified ? 'IMMUTABLE' : 'UNVERIFIED'}</span>
                         </span>
                       </td>
                     </tr>
@@ -386,7 +439,18 @@ export function TamperEvidentLogViewer() {
             <div className="flex flex-wrap items-center gap-4 text-[11px] text-gray-500 dark:text-gray-400 pt-1">
               <span>Event: <strong className="text-gray-900 dark:text-gray-200">{selectedBlock.event}</strong></span>
               <span>Timestamp: <strong className="text-gray-900 dark:text-gray-200">{selectedBlock.timestamp}</strong></span>
-              <span>Deployment Mode: <strong className="text-gray-900 dark:text-gray-200">{selectedBlock.deployment_mode}</strong></span>
+              {selectedBlock.username && (
+                <span>Actor: <strong className="text-gray-900 dark:text-gray-200">{selectedBlock.username}</strong></span>
+              )}
+              {selectedBlock.role && (
+                <span>Role: <strong className="text-gray-900 dark:text-gray-200">{selectedBlock.role}</strong></span>
+              )}
+              {selectedBlock.risk_level && (
+                <span>Risk: <strong className="text-gray-900 dark:text-gray-200">{selectedBlock.risk_level}</strong></span>
+              )}
+              {selectedBlock.details && (
+                <span className="w-full">Details: <strong className="text-gray-900 dark:text-gray-200 break-words">{selectedBlock.details}</strong></span>
+              )}
             </div>
           </motion.div>
         )}

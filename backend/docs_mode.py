@@ -197,12 +197,17 @@ async def handle_document_mode(
     
     yield {"token": f"Planning {mode.upper()} structure based on conversation data...\n"}
     
+    # Config-driven model resolution for document generation
+    from backend.models_registry import models_registry
+    doc_model_def = models_registry.get_best_model_for_capability("document_generation")
+    doc_model = doc_model_def.model_id if doc_model_def else None
+
     # Step 1: Call Ollama with 6144 max tokens so large essays complete with full conclusion
     try:
-        plan_raw = await call_ollama(messages, stream=False, temperature=0.3, max_tokens=6144, think=False, json_mode=True)
+        plan_raw = await call_ollama(messages, stream=False, temperature=0.3, max_tokens=6144, think=False, json_mode=True, model=doc_model)
     except Exception as e:
         logger.warning(f"[DOCS_MODE] First pass failed: {e}. Retrying without json_mode...")
-        plan_raw = await call_ollama(messages, stream=False, temperature=0.3, max_tokens=6144, think=False, json_mode=False)
+        plan_raw = await call_ollama(messages, stream=False, temperature=0.3, max_tokens=6144, think=False, json_mode=False, model=doc_model)
 
     plan_data = parse_plan_json(str(plan_raw))
     
@@ -269,7 +274,34 @@ async def handle_document_mode(
         }
         return
 
-    # Step 4: All data is present -> Build file in Python
+    # Step 4: All data is present -> Post-generation check on blocks before binary file creation
+    from backend.agent_loop import audit_and_clean_final_output
+    from backend.config import TASK_MAX_WORDS
+    
+    doc_task_type = "approval_note" if "approval" in user_message.lower() else "general_deliverable"
+    max_words = TASK_MAX_WORDS.get(doc_task_type, 450)
+    
+    # Audit paragraph blocks
+    cleaned_blocks = []
+    total_words = 0
+    stripped_any = False
+    
+    for b in blocks:
+        if isinstance(b, dict) and b.get("type") == "paragraph":
+            p_text = b.get("text", "")
+            cleaned_p, passed_p, _ = audit_and_clean_final_output(p_text, task_type=doc_task_type, max_words=max_words)
+            if not passed_p:
+                stripped_any = True
+            b["text"] = cleaned_p
+            cleaned_blocks.append(b)
+            total_words += len(cleaned_p.split())
+        else:
+            cleaned_blocks.append(b)
+            
+    plan_data["blocks"] = cleaned_blocks
+    if stripped_any:
+        logger.info(f"[DOCS_MODE] Post-gen audit cleaned generic filler phrases from document blocks")
+
     yield {"token": f"\n\nBuilding {mode.upper()} file in Python from verified plan...\n"}
     try:
         deliverable = create_deliverable_file(plan_data, mode=mode, chat_id=chat_id)
@@ -297,9 +329,26 @@ async def handle_document_mode(
         
     except Exception as e:
         logger.error(f"Error building deliverable: {e}", exc_info=True)
-        err_msg = f"Failed to generate {mode.upper()} document: {str(e)}"
+        # A raw Python exception string ("list index out of range") is not an
+        # explanation. Report what failed in plain language, log the traceback.
+        error_kind = type(e).__name__
+        user_hint = (
+            "The document structure produced by the model was not in the expected format, "
+            "so the file could not be built."
+            if error_kind in ("IndexError", "KeyError", "TypeError", "ValueError")
+            else "The document file could not be written."
+        )
+        err_msg = f"Failed to generate the {mode.upper()} document. {user_hint}"
+        logger.error(f"[{mode.upper()}_MODE] Delivery failure detail: {error_kind}: {e}")
         save_message(chat_id, "assistant", err_msg, mode=mode)
-        yield {"token": f"\n\n**Error:** {err_msg}"}
+        yield {
+            "token": (
+                f"\n\n**Error:** {err_msg}\n\n"
+                f"- Technical detail (logged): `{error_kind}: {e}`\n"
+                "- Try rephrasing the request, or switch the mode selector to **Chat** "
+                "to get the answer directly in the conversation."
+            )
+        }
         yield {
             "done": True,
             "generated_file": None,

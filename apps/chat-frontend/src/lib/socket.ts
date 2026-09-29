@@ -1,6 +1,8 @@
 import { useChatStore, TraceStep } from '@/store/useChatStore';
 import { useSovereigntyStore } from '@/store/useSovereigntyStore';
 import { useModelStore } from '@/store/useModelStore';
+import { useAuthStore } from '@/store/useAuthStore';
+import { getApiHost, getWsBase } from '@/lib/apiBase';
 
 /**
  * WebSocketClientManager handles real-time dual-channel streaming:
@@ -18,14 +20,7 @@ class WebSocketClientManager {
   private wsGeneration: number = 0;
 
   public getWsHost(): string {
-    if (typeof window !== 'undefined') {
-      const hostname = window.location.hostname;
-      // Sanitize hostname to prevent injection - only allow localhost, valid IPs, or local names
-      if (/^[a-zA-Z0-9.-]+$/.test(hostname)) {
-        return hostname;
-      }
-    }
-    return '127.0.0.1';
+    return getApiHost();
   }
 
   /**
@@ -34,8 +29,17 @@ class WebSocketClientManager {
    * regardless of whether the frontend is running on port 3000 (dev) or 8000 (prod).
    */
   public getWsBaseUrl(): string {
-    const host = this.getWsHost();
-    return `ws://${host}:8000`;
+    return getWsBase();
+  }
+
+  /**
+   * Builds the `?token=` query string the backend requires on every WebSocket.
+   * The backend closes unauthenticated sockets with 4401, so a missing token
+   * is an honest rejection rather than a silent anonymous stream.
+   */
+  private authQuery(): string {
+    const token = useAuthStore.getState().token;
+    return token ? `?token=${encodeURIComponent(token)}` : '?token=';
   }
 
   /**
@@ -44,7 +48,7 @@ class WebSocketClientManager {
   public connectAuditStream() {
     if (typeof window === 'undefined') return;
 
-    const wsUrl = `${this.getWsBaseUrl()}/api/audit-stream`;
+    const wsUrl = `${this.getWsBaseUrl()}/api/audit-stream${this.authQuery()}`;
 
     try {
       this.auditWs = new WebSocket(wsUrl);
@@ -58,9 +62,15 @@ class WebSocketClientManager {
           const payload = JSON.parse(event.data);
           if (payload.sovereignty) {
             useSovereigntyStore.getState().updateMetrics({
-              external_packets: payload.sovereignty.external_packets || 0,
-              localhost_packets: payload.sovereignty.localhost_packets || 0,
-              lan_hotspot_packets: payload.sovereignty.lan_hotspot_packets || 0,
+              // Null is preserved: it means packet counting is unavailable,
+              // not that zero packets were seen.
+              external_packets: payload.sovereignty.external_packets ?? null,
+              localhost_packets: payload.sovereignty.localhost_packets ?? null,
+              lan_hotspot_packets: payload.sovereignty.lan_hotspot_packets ?? null,
+              localhost_sockets: payload.sovereignty.localhost_connections || 0,
+              lan_hotspot_sockets: payload.sovereignty.lan_hotspot_connections || 0,
+              external_sockets: payload.sovereignty.external_internet_connections || 0,
+              verdict: payload.sovereignty.verdict || 'UNKNOWN - no verdict reported',
               daemon_heartbeat_hz: 1.0,
             });
             if (payload.sovereignty.sockets) {
@@ -92,8 +102,35 @@ class WebSocketClientManager {
 
   private activateAuditFallback() {
     this.isFallbackMode = true;
-    // Reset sovereignty metrics to zero when backend is unavailable
-    useSovereigntyStore.getState().updateMetrics({ external_packets: 0 });
+    // Telemetry is unavailable, so it is unknown - not zero.
+    useSovereigntyStore.getState().updateMetrics({
+      external_packets: null,
+      localhost_packets: null,
+      lan_hotspot_packets: null,
+      verdict: 'UNAVAILABLE - audit stream disconnected',
+    });
+  }
+
+  /**
+   * Aborts the in-flight generation for real.
+   *
+   * Bumping the generation invalidates every callback captured by the active
+   * socket, and closing the socket makes the backend's `send_json` raise, which
+   * unwinds the `async for` in the /api/chat/stream handler and stops the
+   * pipeline instead of leaving it running in the background.
+   */
+  public abortChatTask(): boolean {
+    const hadActiveTask = this.chatWs !== null && this.chatWs.readyState === WebSocket.OPEN;
+    this.wsGeneration += 1; // ignore any late frames from the old socket
+    if (this.chatWs) {
+      try {
+        this.chatWs.close();
+      } catch {
+        // already closing
+      }
+      this.chatWs = null;
+    }
+    return hadActiveTask;
   }
 
   /**
@@ -108,7 +145,7 @@ class WebSocketClientManager {
     history?: { role: string; content: string }[],
     agent_id?: string
   ) {
-    const wsUrl = `${this.getWsBaseUrl()}/api/chat/stream`;
+    const wsUrl = `${this.getWsBaseUrl()}/api/chat/stream${this.authQuery()}`;
 
     const chatStore = useChatStore.getState();
     chatStore.setStreaming(true);

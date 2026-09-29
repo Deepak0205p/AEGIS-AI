@@ -1,4 +1,6 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
+import { getApiHost } from '@/lib/apiBase';
+import { apiFetch } from '@/lib/apiFetch';
 
 export interface CustomAgent {
   id: string;
@@ -31,16 +33,6 @@ interface CustomAgentState {
   closeModal: () => void;
   saveAgent: (agent: Partial<CustomAgent>) => Promise<boolean>;
   deleteAgent: (agentId: string) => Promise<boolean>;
-}
-
-function getApiHost(): string {
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    if (/^[a-zA-Z0-9.-]+$/.test(hostname)) {
-      return hostname;
-    }
-  }
-  return '127.0.0.1';
 }
 
 const DEFAULT_LOCAL_TEMPLATES: CustomAgent[] = [
@@ -104,9 +96,8 @@ export const useCustomAgentStore = create<CustomAgentState>((set, get) => ({
 
   fetchAgents: async () => {
     set({ isLoading: true, error: null });
-    const host = getApiHost();
     try {
-      const res = await fetch(`http://${host}:8000/api/v1/agents`);
+      const res = await apiFetch(`/api/v1/agents`);
       if (res.ok) {
         const data = await res.json();
         if (data && Array.isArray(data.agents) && data.agents.length > 0) {
@@ -164,12 +155,21 @@ export const useCustomAgentStore = create<CustomAgentState>((set, get) => ({
         author: agentData.author || 'Operator',
       };
 
-      const host = getApiHost();
-      await fetch(`http://${host}:8000/api/v1/agents`, {
+      // Check res.ok: apiFetch resolves for 401/404/400, so a rejected save
+      // used to be swallowed here and the UI still reported success.
+      const res = await apiFetch(`/api/v1/agents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      }).catch(() => {});
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        console.warn(
+          `[useCustomAgentStore] save rejected (HTTP ${res.status}):`,
+          (detail as any)?.detail
+        );
+        return false;
+      }
 
       set((state) => ({
         agents: [payload, ...state.agents.filter((a) => a.id !== id)],
@@ -186,10 +186,15 @@ export const useCustomAgentStore = create<CustomAgentState>((set, get) => ({
 
   deleteAgent: async (agentId) => {
     try {
-      const host = getApiHost();
-      await fetch(`http://${host}:8000/api/v1/agents/${agentId}`, {
+      // The DELETE route now exists; still verify the response so a failure
+      // does not remove the agent from local state and resurrect it on reload.
+      const res = await apiFetch(`/api/v1/agents/${agentId}`, {
         method: 'DELETE'
-      }).catch(() => {});
+      });
+      if (!res.ok) {
+        console.warn(`[useCustomAgentStore] delete of ${agentId} failed (HTTP ${res.status}).`);
+        return false;
+      }
       set((state) => ({
         agents: state.agents.filter((a) => a.id !== agentId),
         activeAgentId: state.activeAgentId === agentId ? null : state.activeAgentId,

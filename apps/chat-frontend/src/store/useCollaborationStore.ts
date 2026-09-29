@@ -1,4 +1,7 @@
 import { create } from 'zustand';
+import { getApiBase, getWsBase } from '@/lib/apiBase';
+import { useAuthStore } from '@/store/useAuthStore';
+import { apiFetch } from '@/lib/apiFetch';
 
 export interface ChannelItem {
   id: string;
@@ -68,7 +71,11 @@ interface CollaborationState {
 
 export const useCollaborationStore = create<CollaborationState>((set, get) => ({
   channels: [],
-  activeChannelId: 'chan_refinery_ops',
+  // Empty by default: seeding this with a truthy id meant the page's
+  // `if (channels.length > 0 && !activeChannelId)` effect could never fire, so
+  // a fresh visit never called selectChannel() and the transcript stayed empty
+  // with "Connecting..." until the operator clicked a channel by hand.
+  activeChannelId: '',
   messages: [],
   users: [],
   isLoadingChannels: false,
@@ -83,7 +90,7 @@ export const useCollaborationStore = create<CollaborationState>((set, get) => ({
   fetchChannels: async (username = 'operator') => {
     set({ isLoadingChannels: true });
     try {
-      const res = await fetch(`/api/collaboration/channels?username=${encodeURIComponent(username)}`);
+      const res = await apiFetch(`${getApiBase()}/api/collaboration/channels?username=${encodeURIComponent(username)}`);
       if (res.ok) {
         const data = await res.json();
         set({ channels: data.channels || [] });
@@ -97,7 +104,7 @@ export const useCollaborationStore = create<CollaborationState>((set, get) => ({
 
   fetchUsers: async () => {
     try {
-      const res = await fetch('/api/collaboration/users');
+      const res = await apiFetch(`${getApiBase()}/api/collaboration/users`);
       if (res.ok) {
         const data = await res.json();
         set({ users: data.users || [] });
@@ -112,7 +119,7 @@ export const useCollaborationStore = create<CollaborationState>((set, get) => ({
     get().connectWebSocket(channelId, username, role);
 
     try {
-      const res = await fetch(`/api/collaboration/channels/${encodeURIComponent(channelId)}/messages`);
+      const res = await apiFetch(`${getApiBase()}/api/collaboration/channels/${encodeURIComponent(channelId)}/messages`);
       if (res.ok) {
         const data = await res.json();
         set({ messages: data.messages || [] });
@@ -126,7 +133,7 @@ export const useCollaborationStore = create<CollaborationState>((set, get) => ({
 
   createChannel: async (name: string, description: string, department: string, createdBy: string) => {
     try {
-      const res = await fetch('/api/collaboration/channels', {
+      const res = await apiFetch(`${getApiBase()}/api/collaboration/channels`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, description, department, created_by: createdBy }),
@@ -144,7 +151,7 @@ export const useCollaborationStore = create<CollaborationState>((set, get) => ({
 
   startDirectMessage: async (targetUsername: string, currentUsername: string) => {
     try {
-      const res = await fetch('/api/collaboration/dm', {
+      const res = await apiFetch(`${getApiBase()}/api/collaboration/dm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_username: targetUsername, current_username: currentUsername }),
@@ -170,9 +177,15 @@ export const useCollaborationStore = create<CollaborationState>((set, get) => ({
 
     if (typeof window === 'undefined') return;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/api/collaboration/ws?channel_id=${encodeURIComponent(channelId)}&username=${encodeURIComponent(username)}&role=${encodeURIComponent(role)}`;
+    // Always connect to the FastAPI backend (:8000) directly — the Next.js
+    // server does not proxy WebSocket upgrades, so relative/wss URLs fail.
+    // The backend authenticates the socket with the session token and takes the
+    // recorded identity from that token; username/role are labels only.
+    const authToken = useAuthStore.getState().token || '';
+    const wsUrl =
+      `${getWsBase()}/api/collaboration/ws?token=${encodeURIComponent(authToken)}` +
+      `&channel_id=${encodeURIComponent(channelId)}` +
+      `&username=${encodeURIComponent(username)}&role=${encodeURIComponent(role)}`;
 
     const ws = new WebSocket(wsUrl);
 
@@ -296,7 +309,7 @@ export const useCollaborationStore = create<CollaborationState>((set, get) => ({
     formData.append('channel_id', channelId);
     formData.append('username', username);
 
-    const res = await fetch('/api/collaboration/upload', {
+    const res = await apiFetch(`${getApiBase()}/api/collaboration/upload`, {
       method: 'POST',
       body: formData,
     });

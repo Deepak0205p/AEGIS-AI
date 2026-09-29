@@ -25,7 +25,7 @@ import {
 export function Header() {
   const pathname = usePathname();
   const { metrics } = useSovereigntyStore();
-  const { deploymentMode, hostIp, port } = useNetworkStore();
+  const { deploymentMode, detectedMode, modeSatisfied, hostIp, port, isLoading: isNetworkLoading, error: networkError, fetchNetworkStatus } = useNetworkStore();
   const { user, authMethod, logout, isAuthenticated } = useAuthStore();
   
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -33,6 +33,8 @@ export function Header() {
 
   useEffect(() => {
     socketManager.connectAuditStream();
+    // Read the real network topology from the backend (no hard-coded host).
+    fetchNetworkStatus();
 
     // Initialize theme from localStorage or document element
     const savedTheme = localStorage.getItem('reveal_theme') as 'light' | 'dark' | null;
@@ -47,6 +49,10 @@ export function Header() {
       const isDark = document.documentElement.classList.contains('dark');
       setTheme(isDark ? 'dark' : 'light');
     }
+
+    // Tear the socket down on unmount. Without this, navigating between admin
+    // pages left the previous audit WebSocket (and its reconnect timer) alive.
+    return () => socketManager.disconnectAuditStream();
   }, []);
 
   const toggleTheme = () => {
@@ -100,8 +106,29 @@ export function Header() {
             A E G I S &nbsp; A I &nbsp; Workbench
           </Link>
           <span className="text-gray-300 dark:text-[#333333]">/</span>
-          <span className="text-xs font-mono text-gray-500 dark:text-[#888888]">
-            {deploymentMode} ({hostIp}:{port})
+          <span
+            className={`text-xs font-mono px-1.5 py-0.5 rounded border ${
+              networkError
+                ? 'text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40'
+                : !modeSatisfied && detectedMode
+                  ? 'text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40'
+                  : 'text-gray-500 dark:text-[#888888] border-transparent'
+            }`}
+            title={
+              networkError
+                ? `Network status unavailable: ${networkError}`
+                : detectedMode
+                  ? `Configured: ${deploymentMode} • Detected: ${detectedMode}`
+                  : 'Network status not yet read from the backend'
+            }
+          >
+            {networkError
+              ? 'NETWORK STATUS UNAVAILABLE'
+              : isNetworkLoading
+                ? 'DETECTING NETWORK...'
+                : hostIp
+                  ? `${deploymentMode} (${hostIp}${port ? `:${port}` : ''})${modeSatisfied || !detectedMode ? '' : ' — MISMATCH'}`
+                  : `${deploymentMode} (host address pending)`}
           </span>
           <span className="text-gray-300 dark:text-[#333333]">/</span>
           <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800/60 flex items-center gap-1">

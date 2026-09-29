@@ -1,6 +1,5 @@
 import { useAuthStore } from '@/store/useAuthStore';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+import { getApiBase } from '@/lib/apiBase';
 
 export class ApiError extends Error {
   status: number;
@@ -18,7 +17,7 @@ async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = endpoint.startsWith('http') ? endpoint : `${API_BASE}${endpoint}`;
+  const url = endpoint.startsWith('http') ? endpoint : `${getApiBase()}${endpoint}`;
   
   // Extract token from localStorage or Zustand store
   let token: string | null = null;
@@ -74,10 +73,41 @@ async function request<T>(
   }
 }
 
+/**
+ * Raw authenticated fetch for call sites that need the `Response` object
+ * (downloads, blob handling, streaming). It carries the session token and
+ * applies the same 401 logout handling as the `api` helpers.
+ */
+export async function apiFetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
+  const url = endpoint.startsWith('http') ? endpoint : `${getApiBase()}${endpoint}`;
+
+  let token: string | null = null;
+  if (typeof window !== 'undefined') {
+    token = localStorage.getItem('reveal_auth_token') || useAuthStore.getState().token;
+  }
+
+  const headers = new Headers(options.headers || {});
+  if (!headers.has('Content-Type') && !(options.body instanceof FormData) && options.body) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const response = await fetch(url, { ...options, headers });
+
+  if (response.status === 401) {
+    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      useAuthStore.getState().logout();
+      window.location.href = '/login';
+    }
+  }
+  return response;
+}
+
 export const api = {
   get: <T>(endpoint: string, options?: RequestInit) =>
     request<T>(endpoint, { ...options, method: 'GET' }),
-
   post: <T>(endpoint: string, body?: any, options?: RequestInit) =>
     request<T>(endpoint, {
       ...options,
