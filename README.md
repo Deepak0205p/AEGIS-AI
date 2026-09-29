@@ -5,7 +5,32 @@
 [![Target Organization](https://img.shields.io/badge/Target%20PSU-MRPL%20%7C%20MoPNG-00529B.svg?style=for-the-badge&logo=building)](https://www.mrpl.co.in)
 [![Air-Gap Sovereignty](https://img.shields.io/badge/Air--Gap%20Sovereignty-100%25%20Offline%20%26%20Zero%20Egress-00C853.svg?style=for-the-badge&logo=shield)](https://github.com/Deepak0205p/AEGIS-AI)
 [![Hardware Budget](https://img.shields.io/badge/Target%20Hardware-Single%206GB%20GPU%20(RTX%203050%2F4060)-76B900.svg?style=for-the-badge&logo=nvidia)](https://nvidia.com)
-[![Tech Stack](https://img.shields.io/badge/Stack-FastAPI%20%7C%20Next.js%2014%20%7C%20Ollama%20%7C%20PostgreSQL%2FMySQL-1E88E5.svg?style=for-the-badge)](https://github.com/Deepak0205p/AEGIS-AI)
+[![Tech Stack](https://img.shields.io/badge/Stack-FastAPI%20%7C%20Next.js%2014%20%7C%20Ollama%20%7C%20MySQL%2FPostgreSQL-1E88E5.svg?style=for-the-badge)](https://github.com/Deepak0205p/AEGIS-AI)
+
+---
+
+## 📑 Table of Contents
+1. [Executive Summary (SIH PS 26117)](#-executive-summary-sih-problem-statement-sih26117)
+2. [The Industrial Problem](#-the-industrial-problem)
+3. [The Solution: AEGIS AI](#-the-solution-aegis-ai-reveal-20)
+4. [System Architecture](#️-system-architecture)
+5. [Complete Visual UI & Feature Walkthrough](#-complete-visual-ui--feature-walkthrough)
+   - [A. Authentication & Security Access](#a-authentication--security-access)
+   - [B. Operator Workspace & Adaptive Reasoning](#b-operator-workspace--adaptive-reasoning)
+   - [C. Chemical Safety & MSDS Protocol Engine](#c-chemical-safety--msds-protocol-engine)
+   - [D. Isolated Python Sandbox Execution](#d-isolated-python-sandbox-execution)
+   - [E. Air-Gapped Document Generation & Interactive Office Canvas](#e-air-gapped-document-generation--interactive-office-canvas)
+   - [F. 2-Step Verification & Deliverable Sign-Off](#f-2-step-verification--deliverable-sign-off)
+   - [G. Custom AI Agent Builder](#g-custom-ai-agent-builder)
+   - [H. Team Collaboration & Plant Radio Channels](#h-team-collaboration--plant-radio-channels)
+   - [I. Operator Feedback & Error Triage](#i-operator-feedback--error-triage)
+   - [J. Admin Observatory, Telemetry & Air-Gap Sentinel](#j-admin-observatory-telemetry--air-gap-sentinel)
+6. [Technical Stack](#️-technical-stack)
+7. [6 Specialized Execution Modes](#-6-specialized-execution-modes)
+8. [Quickstart & Setup Guide](#-quickstart--setup-guide)
+9. [System Port & Service Map](#-system-port--service-map)
+10. [Default Demo Accounts](#-default-demo-accounts)
+11. [Repository File Structure](#-repository-file-structure)
 
 ---
 
@@ -37,6 +62,10 @@ Commercial public cloud AI systems (OpenAI, Claude, Copilot) are **strictly forb
 ## 💡 The Solution: AEGIS AI (REVEAL 2.0)
 
 **AEGIS AI** is a **100% self-hosted, air-gapped sovereign AI workbench** engineered specifically for industrial field operations. It combines quantized open-weight foundation models, real-time chemical safety databases, GraphRAG equipment hierarchy retrieval, and an isolated execution sandbox.
+
+---
+
+## 🏗️ System Architecture
 
 ```
                               ┌───────────────────────────────────────────────┐
@@ -83,33 +112,155 @@ Commercial public cloud AI systems (OpenAI, Claude, Copilot) are **strictly forb
 
 ---
 
-## 🌟 Key Capabilities & Architectural Innovations
+## 📸 Complete Visual UI & Feature Walkthrough
 
-### 1. 🎯 Dynamic VRAM Swapping within 6GB Budget
-- Designed specifically for laptop GPUs (RTX 3050/4060 6GB).
-- Sub-second dynamic model swapping via Ollama keep-alive management.
-- Prevents Out-Of-Memory (OOM) crashes by unloading inactive vision models during text generation.
+The following screenshots illustrate the complete workflow, interfaces, and architecture of AEGIS AI running live:
 
-### 2. 🛡️ Deterministic Safety Guardrails & Zero-Hallucination Fallback
-- **Chemical Safety Database (`backend/data/chemical_db.json`)**: Pre-indexed ACGIH TLV-TWA limits, PPE requirements, and medical first-aid protocols for toxic compounds (H₂S, Benzene, HF, Chlorine).
-- **Exact SOP Citations**: Verbatim clause-level citations `[SOURCE: Doc_ID | Clause: X | Page: Y]`.
-- **Deterministic Guardrail Fallback**: If an internal operating parameter is unindexed, the system returns a certified deterministic fallback notice rather than hallucinating dangerous estimates.
+### A. Authentication & Security Access
 
-### 3. 🕸️ GraphRAG & Visual Equipment Hierarchy
-- Connects refinery assets (`CDU-100` -> `P-101A` -> `ISO-10816`), interlock trip limits, and cross-standard compliance rules.
-- Fully interactive visual graph canvas in the Admin Observatory.
-
-### 4. 🖨️ Native Industrial Deliverable Generator & Canvas
-- Generates verified Word (`.docx`), Excel spreadsheets (`.xlsx`), and presentation slides (`.pptx`).
-- Interactive web canvas powered by Univer for direct in-browser editing before export.
-
-### 5. 🔒 Tamper-Evident Security Ledger & 2-Step Human Verification
-- SHA-256 hash chains on every log entry for audit compliance.
-- 2-Step human verification workflow: High-impact actions require review and approval from qualified engineers (`PROCESS_LEAD` / `SUPER_ADMIN`).
+#### 1. Air-Gapped Operator Login
+Enterprise single sign-on with PBKDF2 hashed credentials, role-based session tokens (HMAC-SHA256), and zero external authentication calls.
+![Air-Gapped Operator Login](apps/chat-frontend/public/mockups/01_login_screen.jpg)
 
 ---
 
-## 🏗️ Technical Stack
+### B. Operator Workspace & Adaptive Reasoning
+
+#### 2. Clean Industrial Operator Workspace
+Clean, high-visibility user interface equipped with quick prompt shortcuts, SOP search dock, voice transcription input, and real-time network zero-egress status.
+![Operator Workspace](apps/chat-frontend/public/mockups/02_operator_workspace_welcome.jpg)
+
+#### 3. Real-Time Adaptive Thinking & Chain-of-Thought
+Transparent chain-of-thought telemetry showing model reasoning, context retrieval, parameter verification, and execution bounds before emitting final answers.
+![Adaptive Thinking](apps/chat-frontend/public/mockups/03_adaptive_thinking_reasoning.jpg)
+
+#### 4. Grounded Technical Dialogue
+Authoritative and concise operational assistance for refinery engineers, citing safety policies and operating limits.
+![Grounded Technical Response](apps/chat-frontend/public/mockups/04_conversational_response.jpg)
+
+---
+
+### C. Chemical Safety & MSDS Protocol Engine
+
+#### 5. Instant MSDS Chemical Card Lookup
+Real-time identification of hazardous compounds (e.g. Benzene $C_6H_6$, CAS 71-43-2) with verified physical properties and flammability parameters.
+![Chemical Safety MSDS Card](apps/chat-frontend/public/mockups/05_chemical_safety_msds_card.jpg)
+
+#### 6. Chemical Exposure Limits & Mandatory PPE (OISD-STD-105)
+Zero-hallucination injection of ACGIH TLV-TWA limits (0.5 ppm), STEL limits, acute exposure symptoms, emergency first-aid procedures, and mandatory plant PPE requirements.
+![Chemical Exposure & PPE Protocol](apps/chat-frontend/public/mockups/06_chemical_exposure_ppe_protocol.jpg)
+
+---
+
+### D. Isolated Python Sandbox Execution
+
+#### 7. Automated Calculation Formulation
+Autonomous translation of operator queries into mathematical Python scripts adhering to international engineering codes (API 610 / ISO 13709).
+![Code Sandbox Planning](apps/chat-frontend/public/mockups/07_code_sandbox_planning.jpg)
+
+#### 8. Python Code Generation in Air-Gapped Sandbox
+Self-contained code generation for pump efficiency, hydraulic power ($P_{hyd} = \frac{\rho \cdot g \cdot Q \cdot H}{1000}$), and head dynamic loss.
+![Python Code Sandbox](apps/chat-frontend/public/mockups/08_python_sandbox_code_generation.jpg)
+
+#### 9. Live Code Execution & Compliance Verification
+Interactive in-browser execution with one-click "Run Code", AST safety parsing, and automated check against Best Efficiency Point (BEP).
+![Execution Audit Report](apps/chat-frontend/public/mockups/09_python_sandbox_audit_report.jpg)
+
+#### 10. Direct Sandbox Terminal Output
+Verbatim standard output and execution metrics returned in under 100ms within an isolated sandbox environment.
+![Sandbox Output Terminal](apps/chat-frontend/public/mockups/10_sandbox_execution_output_terminal.jpg)
+
+---
+
+### E. Air-Gapped Document Generation & Interactive Office Canvas
+
+#### 11. Automated Word (`.docx`) Synthesis
+Automated document drafting for insurance requests, shift logs, and SOP updates with structured sections and download capabilities.
+![Document Preview](apps/chat-frontend/public/mockups/11_document_generation_preview.jpg)
+
+#### 12. Interactive In-Browser Document Editor (Univer Doc Studio)
+Rich WYSIWYG document editor allowing operators to review, edit, format, and sign off on reports directly in the browser before export.
+![Interactive Document Canvas](apps/chat-frontend/public/mockups/12_interactive_univer_doc_canvas.jpg)
+
+#### 13. Interactive In-Browser Spreadsheet Editor (Univer Sheet Studio)
+Fully functional spreadsheet canvas with multi-sheet support, cell formulas (`SUM`, `AVG`), styling, and native `.xlsx` download.
+![Interactive Spreadsheet Canvas](apps/chat-frontend/public/mockups/13_interactive_univer_sheet_canvas.jpg)
+
+---
+
+### F. 2-Step Verification & Deliverable Sign-Off
+
+#### 14. 2-Step Verification & Deliverable Grid
+Lifecycle tracker for generated files with verification status badges (`STEP 1: REVIEW`, `STEP 2: SIGN-OFF`, `VERIFIED`, `REJECTED`).
+![Deliverable Card Grid](apps/chat-frontend/public/mockups/14_deliverable_card_grid_2step_verification.jpg)
+
+---
+
+### G. Custom AI Agent Builder
+
+#### 15. Domain-Specific Persona Orchestrator
+Configure and deploy autonomous AI personas tailored for specific operational units:
+- **CDU Yield & Margin Auditor** (Process Optimization)
+- **HSE Shift & Incident Logger** (Safety & OISD Compliance)
+- **Equipment Reliability & Vibration Engineer** (Mechanical MTBF & ISO 10816)
+- **P&ID Instrument & ISA-5.1 Inspector** (Instrumentation & Interlocks)
+![Custom AI Agent Builder](apps/chat-frontend/public/mockups/15_custom_ai_agent_builder.jpg)
+
+---
+
+### H. Team Collaboration & Plant Radio Channels
+
+#### 16. Plant Multi-Channel Collaboration & Co-Op AI
+Dedicated real-time communication channels (`#refinery-operations`, `#hse-safety-permits`, `#upstream-drilling-ep`) with `@aegis` in-chat co-pilot integration.
+![Team Collaboration Channels](apps/chat-frontend/public/mockups/16_team_collaboration_plant_channels.jpg)
+
+---
+
+### I. Operator Feedback & Error Triage
+
+#### 17. Operator Error & Inaccuracy Report Modal
+Enables plant operators to report hallucination or procedural inaccuracies directly to engineering administrators.
+![Report Error Modal](apps/chat-frontend/public/mockups/17_operator_report_error_modal.jpg)
+
+#### 18. Feature & Content Suggestion Modal
+Empowers field operators to request additional SOP indexing, unit formulas, or interface enhancements.
+![Feature Suggestion Modal](apps/chat-frontend/public/mockups/18_operator_feature_suggestion_modal.jpg)
+
+---
+
+### J. Admin Observatory, Telemetry & Air-Gap Sentinel
+
+#### 19. Admin Command Center & Resource Telemetry
+Live telemetry monitoring GPU VRAM consumption (under 6GB ceiling), system memory, 0 external WAN packets, active GraphRAG entities, and sandbox health.
+![Admin Command Center](apps/chat-frontend/public/mockups/19_admin_command_center_telemetry.jpg)
+
+#### 20. Socket Sniffer & Air-Gap Network Sentinel (psutil)
+Continuous socket-level watchdog auditing every internal connection (`FastAPI :8000`, `Ollama :11434`, `Next.js :3001`), confirming **0 external WAN egress packets**.
+![Socket Sniffer & Air-Gap Guard](apps/chat-frontend/public/mockups/20_sovereignty_socket_sniffer_airgap_guard.jpg)
+
+#### 21. RAG Knowledge Base & ChromaDB Vector Inspector
+Interactive management of ingested SOP manuals, chunk counts, embedding dimensions, and live semantic search inspector.
+![RAG Vector Store Inspector](apps/chat-frontend/public/mockups/21_rag_knowledge_base_chromadb_inspector.jpg)
+
+#### 22. Enterprise Deliverable Registry & Cryptographic Hash Audit
+Centralized repository of generated documents with timestamp, session ID, author model tag, and SHA-256 verification hash.
+![Enterprise Deliverable Registry](apps/chat-frontend/public/mockups/22_enterprise_deliverable_registry.jpg)
+
+#### 23. User Monitoring Sentinel & Security Activity Ledger
+Real-time audit stream tracking all operator search queries, chat sessions, file access, and risk scores with one-click access suspension.
+![User Monitoring Sentinel](apps/chat-frontend/public/mockups/23_user_monitoring_sentinel_audit_ledger.jpg)
+
+#### 24. Role-Based Access Control (RBAC) Registry
+Granular role management across 4 tiers (`SUPER_ADMIN`, `PROCESS_LEAD`, `MAINTENANCE_ENG`, `FIELD_OPERATOR`) with account freeze/unfreeze controls.
+![RBAC Operator Registry](apps/chat-frontend/public/mockups/24_rbac_operator_registry.jpg)
+
+#### 25. Operator Feedback & Error Triage Hub
+Administrative resolution queue for reviewing reported inaccuracies and tuning prompt templates or SOP indexing.
+![Feedback Triage Hub](apps/chat-frontend/public/mockups/25_feedback_error_triage_hub.jpg)
+
+---
+
+## 🛠️ Technical Stack
 
 | Layer | Technologies Used | Purpose |
 | :--- | :--- | :--- |
@@ -231,30 +382,13 @@ You can start all services in separate terminals or use `start_services.bat`:
 
 ---
 
-## 🧪 Demonstration Scenarios for SIH Evaluation
-
-1. **Chemical Hazard Safety Query:**
-   - *Query:* `"What is the permissible exposure limit for Hydrogen Sulfide and what immediate action is needed?"`
-   - *Result:* Exact ACGIH TLV-TWA (1 ppm, 5 ppm STEL) injected from the verified chemical database with SCBA PPE requirements.
-2. **Air-Gapped Engineering Calculation:**
-   - *Query:* `"Calculate the hydrostatic pressure of 10.5 ppg drilling mud at 8500 ft TVD"`
-   - *Result:* Code mode automatically writes and executes Python in the isolated sandbox, returning the exact result (`4,641 psi`).
-3. **Autonomous Shift Handover Document:**
-   - *Query:* `"Generate a CDU shift handover report for Night Shift"`
-   - *Result:* Synthesizes a structured `.docx` document and loads it directly into the web canvas for operator sign-off.
-4. **Multimodal P&ID Analysis:**
-   - *Action:* Upload a piping diagram image and ask `"Identify the pressure relief valve tag and its setpoint"`.
-   - *Result:* Local vision model extracts equipment tag and valve details without internet access.
-
----
-
 ## 📂 Repository File Structure
 
 ```
 AEGIS-AI/
 ├── .env.example                     # Environment configuration template
 ├── .gitignore                       # Clean repository exclusions (zero junk)
-├── README.md                        # Master SIH documentation
+├── README.md                        # Master SIH documentation with UI visual tour
 ├── DOMAIN_COVERAGE.md               # 40+ Departmental test specifications
 ├── docker-compose.yml               # Container orchestration
 ├── package.json                     # Root scripts & workspaces
@@ -264,6 +398,7 @@ AEGIS-AI/
 │
 ├── apps/
 │   ├── chat-frontend/               # Operator Chat & Canvas (Next.js 14)
+│   │   └── public/mockups/          # Visual sequence walkthrough images
 │   └── admin-frontend/              # Admin Observatory & Telemetry (Next.js 14)
 │
 ├── backend/                         # FastAPI Air-Gapped Core
@@ -276,15 +411,18 @@ AEGIS-AI/
 │   ├── router.py                    # Multi-domain intent classifier
 │   ├── sandbox.py                   # Isolated code execution sandbox
 │   ├── data/
-│   │   └── chemical_db.json         # 16 Verified refinery chemical MSDS records
+│   │   ├── chemical_db.json         # 16 Verified refinery chemical MSDS records
+│   │   └── models_registry.json     # Multi-model config registry
 │   └── templates.py                 # Industrial OpenXML document templates
 │
 ├── models/
 │   ├── models.yaml                  # Model configuration & VRAM budget map
-│   └── gguf/                        # Modelfiles for offline Ollama builds
+│   └── gguf/                        # Modelfiles for offline Ollama builds (weights excluded)
 │
-├── sample_docs/                     # Domain SOPs (Refinery, Defence, PSU)
-└── scripts/                         # Verification, migration, and setup utilities
+└── scripts/                         # Core database & startup utilities
+    ├── init_db.py                   # Database schema bootstrap
+    ├── sql_bootstrap.sql            # Base SQL schema
+    └── build_sandbox_image.py       # Docker sandbox runtime builder
 ```
 
 ---

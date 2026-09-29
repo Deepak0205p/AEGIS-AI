@@ -1,6 +1,6 @@
 # ==============================================================================
 # REVEAL 2.0 / AEGIS-AI: Air-Gapped Sovereign AI Workbench
-# Smart India Hackathon (SIH PS 26117) - MRPL & ONGC Operational AI
+# Smart India Hackathon (SIH PS 26117) - Clean Production Codebase Only
 # ==============================================================================
 
 # Node dependencies & package manager caches
@@ -40,6 +40,7 @@ server.log
 # Local Database Runtimes, dumps & temporary storage
 .runtime/
 sandbox_jobs/
+sandbox/
 generated/
 data/chroma_db/
 apps/data/chroma_db/
@@ -67,10 +68,10 @@ desktop.ini
 *.swo
 
 # Large Model Weights (GGUF weights must be downloaded locally via Ollama / modelfiles)
-*.gguf
 models/gguf/*.gguf
-models/*.bin
-models/*.safetensors
+*.gguf
+*.bin
+*.safetensors
 
 # Local Scratch, Screen recordings & Test artifacts
 scratch/
@@ -89,3 +90,14 @@ ingest_downloaded_pdfs.py
 generate_datasets.py
 run.sh
 Agent.md
+
+# Non-code raw directories excluded from git (keep codebase clean)
+sample_docs/
+scripts/db_roundtrip_test.py
+scripts/docker_backend_test.py
+scripts/sandbox_isolation_test.py
+scripts/validate_sql.py
+scripts/prisma-check.mjs
+scripts/prisma-verify.mjs
+scripts/migrate_mysql_to_postgres.py
+tt/
