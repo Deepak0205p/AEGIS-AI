@@ -11,9 +11,9 @@
 
 ## 📑 Table of Contents
 1. [Executive Summary (SIH PS 26117)](#-executive-summary-sih-problem-statement-sih26117)
-2. [The Industrial Problem](#-the-industrial-problem)
-3. [The Solution: AEGIS AI](#-the-solution-aegis-ai-reveal-20)
-4. [System Architecture](#️-system-architecture)
+2. [The Industrial Challenge & Threat Model](#-the-industrial-challenge--threat-model)
+3. [The Solution: AEGIS AI (REVEAL 2.0)](#-the-solution-aegis-ai-reveal-20)
+4. [System Architecture & Dataflow](#️-system-architecture)
 5. [Complete Visual UI & Feature Walkthrough](#-complete-visual-ui--feature-walkthrough)
    - [A. Authentication & Security Access](#a-authentication--security-access)
    - [B. Operator Workspace & Adaptive Reasoning](#b-operator-workspace--adaptive-reasoning)
@@ -25,12 +25,22 @@
    - [H. Team Collaboration & Plant Radio Channels](#h-team-collaboration--plant-radio-channels)
    - [I. Operator Feedback & Error Triage](#i-operator-feedback--error-triage)
    - [J. Admin Observatory, Telemetry & Air-Gap Sentinel](#j-admin-observatory-telemetry--air-gap-sentinel)
-6. [Technical Stack](#️-technical-stack)
-7. [6 Specialized Execution Modes](#-6-specialized-execution-modes)
-8. [Quickstart & Setup Guide](#-quickstart--setup-guide)
-9. [System Port & Service Map](#-system-port--service-map)
-10. [Default Demo Accounts](#-default-demo-accounts)
-11. [Repository File Structure](#-repository-file-structure)
+6. [Core Architectural Innovations (Technical Deep Dive)](#-core-architectural-innovations-technical-deep-dive)
+   - [1. Dynamic VRAM Swapping (<6GB Budget)](#1-dynamic-vram-swapping-within-strict-6gb-budget)
+   - [2. Verified Chemical Safety Database (MSDS/ACGIH)](#2-verified-chemical-safety-database-msdsacgih)
+   - [3. Deterministic SOP RAG & Fallback Gate](#3-deterministic-sop-rag--zero-hallucination-fallback-gate)
+   - [4. GraphRAG & Visual P&ID Equipment Topology](#4-graphrag--visual-pid-equipment-topology)
+   - [5. Sandboxed Python Runtime (AST & Timeout Guard)](#5-sandboxed-python-runtime-ast--timeout-guard)
+7. [Enterprise Model Registry & Quantization Matrix](#-enterprise-model-registry--quantization-matrix)
+8. [6 Specialized Execution Modes](#-6-specialized-execution-modes)
+9. [Comprehensive Evaluation Scenarios for SIH Judges](#-comprehensive-evaluation-scenarios-for-sih-judges)
+10. [Technical Stack](#️-technical-stack)
+11. [Quickstart & Setup Guide (1-Click Launch)](#-quickstart--setup-guide)
+12. [System Port & Service Map](#-system-port--service-map)
+13. [Default Demo Accounts & RBAC](#-default-demo-accounts--rbac-matrix)
+14. [REST API & WebSocket Documentation](#-rest-api--websocket-documentation)
+15. [Repository File Structure](#-repository-file-structure)
+16. [Statutory Compliance & Sovereignty Statement](#-statutory-compliance--sovereignty-statement)
 
 ---
 
@@ -44,24 +54,31 @@
 | **Nodal Ministry** | **Ministry of Petroleum & Natural Gas (MoPNG)** |
 | **Category & Theme** | Smart Automation \| Software Edition |
 | **Hardware Deployment Baseline** | Standard Engineer Laptop / Workstation (Single 6GB–8GB VRAM GPU, e.g. RTX 3050 / RTX 4060) |
+| **Network Constraint** | **Zero External Internet Access (100% Air-Gapped / Egress-Blocked)** |
 
 ---
 
-## ⚠️ The Industrial Problem
+## ⚠️ The Industrial Challenge & Threat Model
 
-Critical national infrastructure assets such as refineries (**MRPL 15 MMTPA**) and offshore drilling facilities (**ONGC**) handle classified telemetry, Piping & Instrumentation Diagrams (P&IDs), shift logs, and safety-critical operations under **OISD / ISO 27001 / MoPNG** standards.
+Critical national infrastructure assets such as refineries (**MRPL 15 MMTPA complex**) and offshore oil/gas production rigs (**ONGC**) handle classified telemetry, Piping & Instrumentation Diagrams (P&IDs), shift logs, and safety-critical operations under **OISD / ISO 27001 / MoPNG** standards.
 
-Commercial public cloud AI systems (OpenAI, Claude, Copilot) are **strictly forbidden** in these zones due to:
-1. **Critical Cyber Egress Risk:** Process logs, P&IDs, and confidential bids cannot leave on-premise networks.
-2. **Strict Hardware Constraints:** Heavy 70B+ LLMs require multi-million dollar GPU clusters. Plant field engineers need reliable AI running on **standard 6GB VRAM laptops**.
-3. **Catastrophic Hallucinations:** An LLM fabricating a furnace skin temperature, relief valve setpoint, or toxic gas first-aid protocol can cause fatal industrial accidents.
-4. **Complex Multimodal Tasks:** Standard chatbots cannot parse complex engineering P&ID diagrams, calculate thermodynamics in isolated sandboxes, or export verifiable Word/Excel/PPT deliverables.
+Commercial public cloud AI systems (OpenAI ChatGPT, Anthropic Claude, Microsoft Copilot) are **strictly forbidden** in these zones due to four foundational challenges:
+
+1. **Critical Cyber Egress & Espionage Risks:** Process logs, real-time SCADA telemetry, and confidential procurement tenders cannot be transmitted outside plant firewalls.
+2. **Hardware & VRAM Cost Barriers:** Enterprise models (70B+) demand multi-GPU server clusters costing upwards of $50,000. Refineries require localized intelligence operating on **standard 6GB VRAM engineering laptops**.
+3. **Catastrophic Hallucinations:** An LLM fabricating a furnace skin temperature, pressure relief valve (PRV) setpoint, or toxic gas first-aid protocol can lead to fatal industrial explosions.
+4. **Complex Multimodal Operations:** Standard conversational bots cannot parse industrial P&ID schematics, calculate thermodynamic balances inside isolated sandboxes, or export verifiable Word, Excel, and PowerPoint deliverables.
 
 ---
 
 ## 💡 The Solution: AEGIS AI (REVEAL 2.0)
 
-**AEGIS AI** is a **100% self-hosted, air-gapped sovereign AI workbench** engineered specifically for industrial field operations. It combines quantized open-weight foundation models, real-time chemical safety databases, GraphRAG equipment hierarchy retrieval, and an isolated execution sandbox.
+**AEGIS AI** is a production-grade, 100% self-hosted, air-gapped sovereign AI workbench designed specifically for refinery and upstream plant operations. It integrates:
+- Specialized lightweight open-weight foundation models (2B to 4B parameters).
+- In-memory chemical safety database (MSDS / ACGIH).
+- GraphRAG topological equipment hierarchy retrieval.
+- Isolated Python sandbox with AST safety validation.
+- Interactive in-browser office document and spreadsheet editing canvas (Univer Core).
 
 ---
 
@@ -114,7 +131,7 @@ Commercial public cloud AI systems (OpenAI, Claude, Copilot) are **strictly forb
 
 ## 📸 Complete Visual UI & Feature Walkthrough
 
-The following screenshots illustrate the complete workflow, interfaces, and architecture of AEGIS AI running live:
+The screenshots below illustrate the complete workflow, interfaces, and architecture of AEGIS AI running live:
 
 ### A. Authentication & Security Access
 
@@ -260,17 +277,46 @@ Administrative resolution queue for reviewing reported inaccuracies and tuning p
 
 ---
 
-## 🛠️ Technical Stack
+## 🔬 Core Architectural Innovations (Technical Deep Dive)
 
-| Layer | Technologies Used | Purpose |
-| :--- | :--- | :--- |
-| **Backend Core** | Python 3.10–3.12, FastAPI, Uvicorn | High-performance asynchronous API gateway |
-| **LLM Inference** | Ollama, GGUF v3 Q4_K_M / Q3_K_L | 100% offline local model execution on GPU/CPU |
-| **Models** | DeepSeek V4 Pro (4B), Gemma 4 (E4B), Qwen2.5-VL (3B), Unlimited-OCR | Reasoning, code generation, multimodal vision, and OCR |
-| **Database** | MySQL / MariaDB (or PostgreSQL via Prisma) | Conversation history, user authentication, security audit logs |
-| **Frontend UI** | Next.js 14, React 18, Tailwind CSS, TypeScript, Zustand | Operator Chat UI & Admin Observatory dashboards |
-| **Document Engine** | Python-Docx, OpenPyXL, Python-PPTX, Univer Core | Air-gapped office document generation and spreadsheet canvas |
-| **Security & Auth** | PBKDF2 Password Hashing, HMAC-SHA256 JWT, Air-Gap Network Guard | Strict zero-egress enforcement and role-based access control |
+### 1. Dynamic VRAM Swapping within Strict 6GB Budget
+- **Budget Partitioning:**
+  $$\text{VRAM}_{\text{total}} = 6144\,\text{MB} \quad [\text{OS/Display}: 400\,\text{MB} \mid \text{Active Model}: 2480-4800\,\text{MB} \mid \text{KV Cache}: 600\,\text{MB}]$$
+- **Ollama Keep-Alive Orchestration:** Automatically sets `keep_alive: 5m` for primary models and unloads vision weights immediately after image processing, preventing Out-Of-Memory (OOM) crashes.
+
+### 2. Verified Chemical Safety Database (MSDS/ACGIH)
+Located in `backend/data/chemical_db.json`, it indexes verified industrial compounds:
+- **Hydrogen Sulfide ($H_2S$):** 1 ppm TLV-TWA, 5 ppm STEL, positive pressure SCBA protocol.
+- **Benzene ($C_6H_6$):** 0.5 ppm TLV-TWA, 2.5 ppm STEL, Viton gloves & vapor recovery controls.
+- **Hydrofluoric Acid (HF):** 0.5 ppm TLV-TWA, mandatory 2.5% Calcium Gluconate antidote protocol.
+- **Sodium Hydroxide (NaOH):** 2 mg/m³ ceiling limit, LPG Merox wash column protocols.
+- **Chlorine ($Cl_2$), Ammonia ($NH_3$), Sulfur Dioxide ($SO_2$), Toluene, Xylene, Methanol, MEG.**
+
+### 3. Deterministic SOP RAG & Zero-Hallucination Fallback Gate
+- **Two-Stage Routing:** Stage 1 regex classifier (<2ms) detects exact domain queries. Stage 2 semantic vector embedding (<25ms) classifies free-form operator prompts.
+- **Verbatim Citations:** Injects clause-level references `[SOURCE: Doc_ID | Clause: X | Page: Y]`.
+- **Deterministic Gate:** If a queried internal operating parameter is unindexed, the system returns an certified deterministic fallback notice:
+  > *"Parameter not verified in on-premise SOP repository. Refer to plant control room supervisor. Estimation prohibited under safety guidelines."*
+
+### 4. GraphRAG & Visual P&ID Equipment Topology
+- Connects refinery asset tags (`CDU-100` -> `P-101A` -> `ISO-10816`), interlock sequences, and cross-standard compliance rules.
+- Fully interactive visual graph canvas in the Admin Observatory.
+
+### 5. Sandboxed Python Runtime (AST & Timeout Guard)
+- Isolated Python subprocess with restricted system permissions.
+- Static AST inspection bans dangerous modules (`os`, `sys`, `subprocess`, `socket`, `shutil`).
+- Hard CPU wall-clock limit (10 seconds) with automated retry on syntax errors.
+
+---
+
+## 📦 Enterprise Model Registry & Quantization Matrix
+
+| Model Identifier | Display Name | Parameter Count | Quantization | Context Window | Primary Task Allocation |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `deepseek-v4-pro:4b` | DeepSeek V4 Pro | 3.8 Billion | GGUF Q3_K_L | 8,192 tokens | High-speed logic, Python sandbox coding, math balance |
+| `gemma4-e4b:latest` | Gemma 4 E4B | 4.1 Billion | GGUF Q4_K_S | 8,192 tokens | Document synthesis, shift handovers, regulatory summaries |
+| `qwen2.5vl:3b` | Qwen 2.5 VL | 3.2 Billion | GGUF Q4_K_M | 16,384 tokens | P&ID visual schematic question answering & gauge reading |
+| `unlimited-ocr:latest`| Unlimited OCR Engine| 3.2 Billion | GGUF Q4_K_M | 16,384 tokens | Dense technical datasheet & OCR symbol extraction |
 
 ---
 
@@ -284,6 +330,33 @@ Administrative resolution queue for reviewing reported inaccuracies and tuning p
 | **📊 Excel** | Inventory logs, production telemetry | Formatted `.xlsx` spreadsheet creation with formulas and styling |
 | **📽️ PPT** | Safety briefings, executive decks | Structured `.pptx` presentation deck synthesis |
 | **👁️ Vision** | P&ID diagrams, gauge images, equipment photos | Visual question answering and OCR symbol extraction |
+
+---
+
+## 🧪 Comprehensive Evaluation Scenarios for SIH Judges
+
+| # | Evaluation Scenario | Sample Query | System Pipeline Verified | Expected Output |
+| :--- | :--- | :--- | :--- | :--- |
+| **1** | **Toxic Chemical Safety Protocol** | *"Permissible exposure limit for H2S and immediate medical first aid?"* | `chemical_kb.py` -> In-memory MSDS lookup | 1 ppm TLV-TWA, 5 ppm STEL, SCBA PPE, 100% Oxygen CPR protocol |
+| **2** | **Engineering Calculation in Sandbox** | *"Calculate centrifugal pump efficiency according to API 610 with Q=250 m3/h, H=85m, rho=840 kg/m3, P_shaft=75kW"* | `code_mode.py` -> Isolated Python AST sandbox | Computes $P_{hyd}=48.64\text{ kW}$, $\eta=64.85\%$, verifies against BEP |
+| **3** | **Univer Document Studio Synthesis** | *"Generate a formal machinery insurance request letter for compressor K-101"* | `docs_mode.py` -> OpenXML builder -> Univer Canvas | Synthesizes `.docx` with 20 sections, opens in browser WYSIWYG editor |
+| **4** | **Univer Sheet Studio Spreadsheet** | *"Create daily production report for Crude Distillation Unit with sales & revenue"* | `templates.py` -> OpenPyXL -> Univer Sheet Canvas | Generates `.xlsx` workbook with multi-sheets and live `SUM`/`AVG` formulas |
+| **5** | **Air-Gap Zero-Egress Verification** | Inspect Admin Observatory socket sniffer during active prompt | `airgap_guard.py` -> psutil daemon | **0 WAN egress packets**, all sockets bound to `127.0.0.1` |
+| **6** | **2-Step Human Verification Sign-Off** | Operator generates turnaround handover report | `db.py` -> `deliverables.py` workflow | Marked `PENDING_REVIEW`; requires `PROCESS_LEAD` approval before release |
+
+---
+
+## 🛠️ Technical Stack
+
+| Layer | Technologies Used | Purpose |
+| :--- | :--- | :--- |
+| **Backend Core** | Python 3.10–3.12, FastAPI, Uvicorn | High-performance asynchronous API gateway |
+| **LLM Inference** | Ollama, GGUF v3 Q4_K_M / Q3_K_L | 100% offline local model execution on GPU/CPU |
+| **Models** | DeepSeek V4 Pro (4B), Gemma 4 (E4B), Qwen2.5-VL (3B), Unlimited-OCR | Reasoning, code generation, multimodal vision, and OCR |
+| **Database** | MySQL / MariaDB (or PostgreSQL via Prisma) | Conversation history, user authentication, security audit logs |
+| **Frontend UI** | Next.js 14, React 18, Tailwind CSS, TypeScript, Zustand | Operator Chat UI & Admin Observatory dashboards |
+| **Document Engine** | Python-Docx, OpenPyXL, Python-PPTX, Univer Core | Air-gapped office document generation and spreadsheet canvas |
+| **Security & Auth** | PBKDF2 Password Hashing, HMAC-SHA256 JWT, Air-Gap Network Guard | Strict zero-egress enforcement and role-based access control |
 
 ---
 
@@ -336,8 +409,8 @@ ollama pull qwen2.5vl:3b
 ollama pull unlimited-ocr:latest
 ```
 
-### Step 6: Launch Applications
-You can start all services in separate terminals or use `start_services.bat`:
+### Step 6: Launch Applications (1-Click or Manual)
+You can double-click **`start_services.bat`** on Windows or run services manually in separate terminals:
 
 1. **Backend Gateway** (Port 8000):
    ```bash
@@ -371,14 +444,29 @@ You can start all services in separate terminals or use `start_services.bat`:
 
 ---
 
-## 🔐 Default Demo Accounts
+## 🔐 Default Demo Accounts & RBAC Matrix
 
-| Role | Username | Password | Access Level |
-| :--- | :--- | :--- | :--- |
-| **Lead Process Operator** | `operator` | `RefineryPass2026!` | Chat, Calculations, Document Creation |
-| **Maintenance Engineer** | `engineer` | `RefineryEng2026!` | Chat, Equipment Diagnostics, Verification |
-| **Chief Process Lead** | `lead` | `ProcessLead2026!` | Deliverable Verification & Channel Review |
-| **Super Administrator** | `admin` | `RefineryAdmin2026!` | Full Observatory Access, Security Audit Logs |
+| Role | Username | Password | Can Verify | Access Permissions |
+| :--- | :--- | :--- | :---: | :--- |
+| **Super Administrator** | `admin` | `RefineryAdmin2026!` |  | Full Observatory, RBAC management, audit ledger, security controls |
+| **Chief Process Lead** | `lead` | `ProcessLead2026!` |  | Unit approvals, deliverable sign-off, collaborative channels |
+| **Senior Reliability Engineer**| `engineer` | `RefineryEng2026!` |  | Mechanical diagnostics, code execution, deliverable verification |
+| **Lead Process Operator** | `operator` | `RefineryPass2026!` | ❌ | Operator chat, chemical lookup, report drafting, feedback submission |
+
+---
+
+## 📡 REST API & WebSocket Documentation
+
+| Method | Endpoint | Description | Auth Required |
+| :--- | :--- | :--- | :---: |
+| `POST` | `/api/v1/auth/login` | Authenticate operator and issue HMAC-SHA256 session token | Public |
+| `GET` | `/api/health` | Backend and Ollama connectivity status probe | Public |
+| `POST` | `/api/chat` | Main SSE streaming endpoint (Chat, Code, Docs, Excel, PPT) | Bearer Token |
+| `GET` | `/api/chat/history/{chat_id}` | Retrieve persistent chat session messages | Bearer Token |
+| `POST` | `/api/sandbox/run` | Execute Python script in isolated AST-guarded sandbox | Bearer Token |
+| `POST` | `/api/deliverables/verify` | 2-step verification review and sign-off for deliverables | Role Gated |
+| `GET` | `/api/v1/sovereignty/sockets` | Live socket inspection data for Air-Gap sentinel | Super Admin |
+| `POST` | `/api/v1/feedback` | Submit operator error reports and feature suggestions | Bearer Token |
 
 ---
 
@@ -427,7 +515,9 @@ AEGIS-AI/
 
 ---
 
-## ⚖️ License & Sovereignty Statement
+## ⚖️ Statutory Compliance & Sovereignty Statement
 
-Developed for **Smart India Hackathon (SIH 2026) — Problem Statement SIH26117**.  
-Designed to comply with **MoPNG, OISD, and ISO 27001** data sovereignty principles. 100% of telemetry and weights remain on-premise.
+- **Ministry of Petroleum & Natural Gas (MoPNG):** Formulated under the directives for Sovereign AI infrastructure in critical hydrocarbon assets.
+- **Oil Industry Safety Directorate (OISD):** Integrates OISD-STD-105 Work Permit System & chemical personal protective standards.
+- **ISO 27001 & ISO 13709 (API 610):** Strict data residency, zero WAN packet transmission, and mathematical compliance.
+- **Air-Gap Verification:** 100% of telemetry, neural weights, and conversation history reside entirely on-premise.
